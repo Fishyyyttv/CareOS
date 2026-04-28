@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//mnt/d/Users/mhetm/Downloads/CareOS_v9_full/**)",
+      "Bash(make clean *)",
+      "Bash(make)",
+      "Read(//mnt/**)",
+      "Bash(wsl.exe --list)",
+      "Bash(ls /mnt/)",
+      "Bash(mount)",
+      "Read(//proc/**)",
+      "Read(//usr/**)",
+      "Bash(apt list *)",
+      "Bash(wsl.exe *)",
+      "Bash(wslpath -u \"D:\\\\\\\\\")",
+      "Bash(wsl make *)",
+      "Bash(wslpath \"D:\\\\\\\\Users\\\\\\\\mhetm\\\\\\\\Downloads\\\\\\\\CareOS_v9_full\\\\\\\\CareOS_v9\")",
+      "Read(//c/Windows/System32/**)",
+      "Read(//c/Program Files/Git/usr/bin/**)",
+      "Read(//mingw64/bin/**)",
+      "Bash(wsl bash *)",
+      "Bash(wsl --list --running)",
+      "Bash(wsl ls *)",
+      "Bash(wsl *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' } | Select-Object -First 30)",
+      "Bash(where wsl *)"
+    ]
+  }
+}

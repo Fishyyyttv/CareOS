@@ -1,0 +1,10 @@
+CareOS v6 -- Desktop Release Build
+Build: March 2026
+
+Highlights:
+  [1] Proper GUI login gate (no auto-login)
+  [2] Login lockout after repeated failures
+  [3] Refined staged splash/loader screen
+  [4] Fixed launcher overlay rendering + input handling
+  [5] VFS hardening: duplicate-name prevention and recursive delete cleanup
+  [6] Safer VFS path generation with bounded writes
