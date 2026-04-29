@@ -24,8 +24,9 @@ static char g_resp[BROW_RESP_SZ];
 static char g_status[96] = "Ready";
 static int  g_redirect_depth = 0;   /* prevent infinite redirect loops */
 
-/* ── Forward declaration ─────────────────────────────────────────── */
+/* ── Forward declarations ────────────────────────────────────────── */
 static void app_browser_navigate(window_t *w, const char *url);
+static void browser_save_tab(window_t *w);
 
 /* ── String helpers ──────────────────────────────────────────────── */
 static const char *bs_strstr(const char *hay, const char *needle) {
