@@ -104,13 +104,50 @@ static void draw_boot_splash(int done, u32 tick) {
 static void draw_elite_wallpaper(void) {
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
-    /* Deep navy base, lighter at top, darker at bottom */
-    gfx_gradient_rect(0, 0, sw, sh, rgb(0x10,0x1c,0x3d), rgb(0x06,0x0b,0x1a));
-    /* Subtle blue radial glow offset right of center */
-    gfx_circle_fill(sw * 3/5, sh * 2/5, sw * 2/5, rgb(0x13,0x23,0x52));
-    gfx_circle_fill(sw * 3/5, sh * 2/5, sw * 2/5 - 40, rgb(0x0c,0x17,0x35));
-    /* Bottom vignette */
-    gfx_rect_blend(0, sh * 3/5, sw, sh * 2/5, rgb(0x02,0x04,0x0c), 100);
+    i32 cx = sw * 45 / 100;
+    i32 cy = sh * 42 / 100;
+    i32 r  = sw * 36 / 100;
+
+    /* Deeper navy-to-midnight gradient matching the reference */
+    gfx_gradient_rect(0, 0, sw, sh, rgb(0x09, 0x12, 0x2e), rgb(0x05, 0x07, 0x14));
+
+    /* Angular depth planes */
+    gfx_triangle_fill(sw / 4, 0, sw * 2 / 3, 0, sw / 7, sh, rgb(0x10, 0x24, 0x58));
+    gfx_triangle_fill(sw * 2 / 3, sh, sw, sh * 2 / 5, sw, sh, rgb(0x19, 0x0b, 0x38));
+    gfx_rect_blend(0, 0, sw, sh, rgb(0x04, 0x07, 0x12), 32);
+
+    /* Main crescent circle */
+    gfx_circle_fill(cx, cy, r, rgb(0x2a, 0x5e, 0xcc));
+    gfx_circle_fill(cx + r / 4, cy - r / 10, r - 52, rgb(0x0a, 0x13, 0x2c));
+    gfx_rect_blend(0, 0, sw, sh, rgb(0x06, 0x09, 0x18), 55);
+
+    /* Bottom triangle accent (purple) */
+    gfx_triangle_fill(sw / 5, sh, sw * 2 / 5, sh, sw * 3 / 10, sh * 3 / 4, rgb(0x50, 0x3e, 0xc0));
+    gfx_rect_blend(0, sh * 3/5, sw, sh * 2/5, rgb(0x02, 0x03, 0x0a), 90);
+}
+
+static void draw_status_wifi(i32 x, i32 y, bool up) {
+    u32 col = up ? COL_TEXT : COL_MUTED;
+    gfx_hline(x + 2, y + 8, 12, col);
+    gfx_line(x + 4, y + 5, x + 8, y + 1, col);
+    gfx_line(x + 8, y + 1, x + 12, y + 5, col);
+    gfx_line(x + 6, y + 6, x + 8, y + 4, col);
+    gfx_line(x + 8, y + 4, x + 10, y + 6, col);
+    gfx_circle_fill(x + 8, y + 10, 2, up ? COL_GREEN : COL_MUTED);
+}
+
+static void draw_status_speaker(i32 x, i32 y) {
+    gfx_rect(x, y + 5, 4, 6, COL_TEXT);
+    gfx_triangle_fill(x + 4, y + 5, x + 10, y + 1, x + 10, y + 15, COL_TEXT);
+    gfx_line(x + 13, y + 5, x + 15, y + 7, COL_DIM);
+    gfx_line(x + 15, y + 7, x + 15, y + 9, COL_DIM);
+    gfx_line(x + 15, y + 9, x + 13, y + 11, COL_DIM);
+}
+
+static void draw_status_battery(i32 x, i32 y) {
+    gfx_rect_rounded_outline(x, y + 4, 20, 10, 3, COL_DIM);
+    gfx_rect(x + 20, y + 7, 2, 4, COL_DIM);
+    gfx_rect_rounded(x + 2, y + 6, 14, 6, 2, COL_GREEN);
 }
 
 static void draw_top_bar(void) {
@@ -119,36 +156,58 @@ static void draw_top_bar(void) {
     i32 fw = (i32)(FONT_W * GFX_FONT_SCALE);
     i32 ty = (TOPBAR_H - (i32)(FONT_H * sc)) / 2;
 
-    u32 bg = g_theme->taskbar;
-    gfx_rect_blend(0, 0, sw, TOPBAR_H, bg, 180);
+    /* Solid semi-transparent band */
+    gfx_rect_blend(0, 0, sw, TOPBAR_H, g_theme->taskbar, 210);
     gfx_hline(0, TOPBAR_H - 1, sw, COL_BORDER);
 
-    /* Left: logo icon + menu labels, spaced by actual rendered width */
+    /* Left: logo badge + menu labels */
     i32 x = 8;
-    gfx_draw_icon(APP_NONE, x, (TOPBAR_H - 16) / 2, 16, COL_ACCENT);
-    x += 20;
+    /* Logo circle */
+    gfx_circle_fill(x + 10, TOPBAR_H / 2, 10, COL_PRIMARY);
+    gfx_circle_fill(x + 13, TOPBAR_H / 2,  7, g_theme->taskbar);
+    gfx_str(x + 6, ty, "C", COL_ACCENT, COL_TRANSPARENT);
+    x += 26;
     gfx_str(x, ty, "CareOS", COL_WHITE, COL_TRANSPARENT);
-    x += gfx_str_width("CareOS") + fw * 2;
+    x += gfx_str_width("CareOS") + fw * 3;
     gfx_str(x, ty, "Machine", COL_DIM, COL_TRANSPARENT);
-    x += gfx_str_width("Machine") + fw * 2;
+    x += gfx_str_width("Machine") + fw * 3;
     gfx_str(x, ty, "View", COL_DIM, COL_TRANSPARENT);
 
-    /* Right: date + time from RTC */
-    char clock_s[48];
+    /* Right: status icons + clock */
     rtc_time_t t; rtc_read(&t);
-    int h = (int)t.hour % 12;
-    if (h == 0) h = 12;
+    /* Adjust for UTC-7 (PDT) */
+    int hour = (int)t.hour - 7;
+    if (hour < 0) { hour += 24; if (t.day > 0) t.day--; }
+    
+    const careos_settings_t *cfg = settings_get();
+    bool h24 = cfg && cfg->clock_24h;
+
+    int h_disp = hour;
+    const char *ampm = "";
+    if (!h24) {
+        ampm = (hour >= 12) ? " PM" : " AM";
+        h_disp = hour % 12;
+        if (h_disp == 0) h_disp = 12;
+    }
+
     const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
                             "Jul","Aug","Sep","Oct","Nov","Dec"};
     const char *mon = (t.month >= 1 && t.month <= 12) ? months[t.month - 1] : "---";
-    ksprintf(clock_s, "%s %d, %02d:%02d %s",
-             mon, (int)t.day, h, (int)t.minute, (t.hour >= 12) ? "PM" : "AM");
+    char clock_s[64];
+    if (h24) {
+        ksprintf(clock_s, "%s %d, %02d:%02d", mon, (int)t.day, h_disp, (int)t.minute);
+    } else {
+        ksprintf(clock_s, "%s %d, %d:%02d%s", mon, (int)t.day, h_disp, (int)t.minute, ampm);
+    }
 
-    i32 tx = sw - gfx_str_width(clock_s) - fw;
+    i32 clk_w = gfx_str_width(clock_s);
+    i32 tx    = sw - clk_w - fw * 2;
     gfx_str(tx, ty, clock_s, COL_WHITE, COL_TRANSPARENT);
 
-    /* Net status dot */
-    gfx_circle_fill(tx - fw * 2, TOPBAR_H / 2, 3, net_is_up() ? COL_GREEN : COL_RED);
+    /* Status icons (wifi, speaker, battery) */
+    draw_status_wifi(tx - 84, (TOPBAR_H - 16) / 2, net_is_up());
+    draw_status_speaker(tx - 58, (TOPBAR_H - 16) / 2);
+    draw_status_battery(tx - 30, (TOPBAR_H - 16) / 2);
 }
 
 typedef enum {
@@ -196,20 +255,29 @@ static login_layout_t login_make_layout(const login_state_t *s) {
     login_layout_t l;
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
-    i32 pw = ui_clampi(sw * 40 / 100, 500, 700);
-    i32 ph = ui_clampi(sh * 60 / 100, 560, 720);
+    i32 pw = ui_clampi(sw * 32 / 100, 430, 560);
+    i32 ph = ui_clampi(sh * 52 / 100, 420, 520);
     i32 px = (sw - pw) / 2;
     i32 py = (sh - ph) / 2;
-    i32 btn_w = (pw - 80) / 2;
-    i32 sc = (i32)GFX_FONT_SCALE;
-    i32 v_space = 40 * sc;
+    i32 btn_gap = 12;
+    i32 btn_w = (pw - 84 - btn_gap) / 2;
+
+    if (sw < 520) {
+        pw = sw - 32;
+        px = 16;
+        btn_w = (pw - 84 - btn_gap) / 2;
+    }
+    if (sh < 560) {
+        ph = sh - 56;
+        py = 38;
+    }
 
     l.panel = rect_make(px, py, pw, ph);
-    l.avatar = rect_make(px + pw / 2 - 34, py + 26, 68, 68);
-    l.user_field = rect_make(px + 40, py + 140 + v_space, pw - 80, 22 + 12 * sc);
-    l.pass_field = rect_make(px + 40, py + 200 + v_space * 2, pw - 80, 22 + 12 * sc);
+    l.avatar = rect_make(px + pw / 2 - 30, py + 28, 60, 60);
+    l.user_field = rect_make(px + 42, py + 188, pw - 84, 38);
+    l.pass_field = rect_make(px + 42, py + 252, pw - 84, 38);
     l.primary_btn = (button_t){
-        .rect = rect_make(px + 40, py + ph - (60 + 20 * sc), btn_w, 24 + 8 * sc),
+        .rect = rect_make(px + 42, py + ph - 98, btn_w, 36),
         .hover = false,
         .pressed = false,
         .active = true,
@@ -217,7 +285,7 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         .fg = COL_WHITE,
     };
     l.secondary_btn = (button_t){
-        .rect = rect_make(px + 40 + btn_w + 10, py + ph - (60 + 20 * sc), btn_w, 24 + 8 * sc),
+        .rect = rect_make(px + 42 + btn_w + btn_gap, py + ph - 98, btn_w, 36),
         .hover = false,
         .pressed = false,
         .active = false,
@@ -226,7 +294,7 @@ static login_layout_t login_make_layout(const login_state_t *s) {
     };
     kstrcpy(l.primary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Sign In" : "Create Account");
     kstrcpy(l.secondary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Create Account" : "Back To Sign In");
-    l.status_bar = rect_make(px + 30, py + ph - 42, pw - 60, 24);
+    l.status_bar = rect_make(px + 42, py + ph - 50, pw - 84, 26);
     return l;
 }
 
@@ -241,34 +309,30 @@ static void draw_glass_panel(rect_t r, i32 radius) {
 static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
-    i32 sc = (i32)GFX_FONT_SCALE;
     login_layout_t l = login_make_layout(s);
     char pass_mask[64];
     char title[40];
     char subtitle[80];
 
-    /* Professional Mesh Background with Depth */
-    gfx_gradient_rect(0, 0, sw, sh, rgb(0x0a,0x0f,0x1a), rgb(0x1a,0x24,0x3a));
-    for (i32 i = 0; i < 40; i++) {
-        u32 color = g_theme->is_dark ? rgb(0x1e, 0x29, 0x3b) : rgb(0x33, 0x41, 0x55);
-        i32 rx = (i * 37) % sw, ry = (i * 13) % sh;
-        gfx_rect_blend(rx, ry, sw/4, 2, color, 12);
-        gfx_rect_blend(rx, ry, 2, sh/4, color, 12);
-    }
+    draw_elite_wallpaper();
+    gfx_rect_blend(0, 0, sw, sh, COL_BLACK, 96);
 
-    draw_glass_panel(l.panel, 24);
+    draw_glass_panel(l.panel, 18);
 
     /* Branding Header */
-    gfx_str_centered_ex(l.panel.x, l.panel.y + 30, l.panel.w, "CARE OS", COL_PRIMARY, COL_TRANSPARENT, FONT_H1);
-    gfx_rect(l.panel.x + l.panel.w/2 - 30, l.panel.y + 65, 60, 2, COL_ACCENT);
+    gfx_circle_fill(l.avatar.x + l.avatar.w / 2, l.avatar.y + l.avatar.h / 2, l.avatar.w / 2, COL_PRIMARY);
+    gfx_circle_fill(l.avatar.x + l.avatar.w / 2 + 4, l.avatar.y + l.avatar.h / 2,
+                    l.avatar.w / 2 - 12, COL_SURFACE);
+    gfx_str_centered_ex(l.avatar.x, l.avatar.y + 15, l.avatar.w, "C", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
+    gfx_str_centered_ex(l.panel.x, l.panel.y + 98, l.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
 
     kstrcpy(title, s->mode == LOGIN_MODE_SIGNIN ? "Welcome Back" : "Create Account");
     kstrcpy(subtitle, s->mode == LOGIN_MODE_SIGNIN
         ? "Please sign in to access your desktop"
         : "Set up a new secure local profile");
     
-    gfx_str_centered_ex(l.panel.x, l.panel.y + 110, l.panel.w, title, COL_TEXT, COL_TRANSPARENT, FONT_H2);
-    gfx_str_centered(l.panel.x, l.panel.y + 145, l.panel.w, subtitle, COL_DIM, COL_TRANSPARENT);
+    gfx_str_centered(l.panel.x, l.panel.y + 136, l.panel.w, title, COL_TEXT, COL_TRANSPARENT);
+    gfx_str_centered(l.panel.x, l.panel.y + 156, l.panel.w, subtitle, COL_DIM, COL_TRANSPARENT);
 
     /* Inputs */
     gfx_str(l.user_field.x, l.user_field.y - 20, "Username", COL_MUTED, COL_TRANSPARENT);
@@ -291,7 +355,7 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
         p_box.hover = rect_contains(l.pass_field, mouse->x, mouse->y);
         kstrcpy(p_box.buf, pass_mask);
         p_box.len = (u32)kstrlen(pass_mask); p_box.cursor = p_box.len;
-        kstrcpy(p_box.placeholder, "••••••••");
+        kstrcpy(p_box.placeholder, "Password");
 
         textinput_draw(&u_box);
         textinput_draw(&p_box);
@@ -306,7 +370,8 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     gfx_rect_rounded(l.status_bar.x, l.status_bar.y, l.status_bar.w, l.status_bar.h, 12, COL_SURFACE2);
     gfx_str_centered(l.status_bar.x, l.status_bar.y + 7, l.status_bar.w, s->status, s->status_color, COL_TRANSPARENT);
 
-    gfx_str_centered(l.panel.x, l.panel.y + l.panel.h - 30, l.panel.w, "© 2026 CareOS Core Team", rgb(0x40,0x40,0x40), COL_TRANSPARENT);
+    gfx_str_centered(l.panel.x, l.panel.y + l.panel.h - 20, l.panel.w,
+                     "CareOS v9 secure desktop", COL_MUTED, COL_TRANSPARENT);
 }
 
 static bool login_try(login_state_t *s) {
@@ -539,7 +604,27 @@ void gui_run(void) {
                 activity = true;
                 char c = keyboard_getchar();
                 char kl = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+                
+                /* Global Activity Trigger */
+                g_last_activity_tick = timer_get_ticks();
+
+                /* Global Hotkeys */
                 if (keyboard_alt_held() && c == '\t') { wm_cycle_focus(1); continue; }
+                if (keyboard_alt_held() && c == 0x1B) { /* Alt+F4 (handled as ESC scan in some drivers) */
+                     window_t *fw = wm_focused();
+                     if (fw) wm_close(fw);
+                     continue;
+                }
+                /* Alt+F4 detection if scan is mapped to F4 */
+                // if (keyboard_alt_held() && is_f4(c)) ...
+
+                /* Multi-desktop Switch: Ctrl + 1-4 */
+                if (keyboard_ctrl_held() && c >= '1' && c <= '4') {
+                    g_current_desktop = (u32)(c - '1');
+                    notify_push("Workspace", (c == '1' ? "Desktop 1" : (c == '2' ? "Desktop 2" : (c == '3' ? "Desktop 3" : "Desktop 4"))), COL_ACCENT);
+                    continue;
+                }
+
                 if (keyboard_alt_held() && keyboard_ctrl_held()) {
                     if (kl == 'h' || kl == 'a') { wm_snap_focused(SNAP_LEFT); continue; }
                     if (kl == 'l' || kl == 'd') { wm_snap_focused(SNAP_RIGHT); continue; }
@@ -552,11 +637,20 @@ void gui_run(void) {
             }
 
             mouse_update(&mouse);
-            if (mouse.x != lx || mouse.y != ly || mouse.left != lb || mouse.left_clicked) {
+            if (mouse.x != lx || mouse.y != ly || mouse.left != lb || mouse.left_clicked || mouse.right_clicked || mouse.scroll_delta != 0) {
                 activity = true; lx = mouse.x; ly = mouse.y; lb = mouse.left;
+                g_last_activity_tick = timer_get_ticks();
             }
 
+            /* Idle / Screensaver Check (10 minutes = 600,000 ms) */
             u32 now = timer_get_ticks();
+            if (now - g_last_activity_tick > 600000) {
+                /* For now, just re-lock the screen if idle */
+                serial_write("  [gui] auto-locking due to idle\n");
+                run_login_flow(&mouse);
+                g_last_activity_tick = timer_get_ticks();
+                needs_redraw = true;
+            }
             if (now - last_sysmon >= 20) {
                 window_t *sm = wm_find_app(APP_SYSMON);
                 window_t *nm = wm_find_app(APP_NETMON);

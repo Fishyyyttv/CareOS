@@ -261,6 +261,28 @@ void app_files_key(window_t *w, char c){
     case 'm': /* new folder */
         w->input_buf[0]='\0'; w->input_len=0;
         w->tab = FM_MODE_NEWFOLD; break;
+    case 0x03: /* Ctrl+C: Copy Path */
+        if (cnt > 0 && w->fm_sel < cnt) {
+            fs_node_t *ch = w->fm_dir->children[w->fm_sel];
+            vfs_get_path(ch, g_clipboard, CLIPBOARD_SIZE-1);
+            g_clipboard_len = kstrlen(g_clipboard);
+            notify_push("Files", "Path copied to clipboard", COL_ACCENT);
+        }
+        break;
+    case 0x16: /* Ctrl+V: Paste (Copy file here) */
+        if (g_clipboard_len > 0) {
+            fs_node_t *src = vfs_resolve_path(g_clipboard);
+            if (src) {
+                /* Get filename from path */
+                const char *fname = kstrrchr(g_clipboard, '/');
+                if (fname) fname++; else fname = g_clipboard;
+                vfs_copy(src, w->fm_dir, fname);
+                notify_push("Files", "File pasted", g_theme->success);
+            } else {
+                notify_push("Files", "Source file not found", g_theme->error);
+            }
+        }
+        break;
     default: break;
     }
 }

@@ -24,7 +24,8 @@ DISK_RESERVED_SECTORS := 104
 # -serial stdio         boot stage logs in your terminal
 QEMUBASE  := -m 256M -cdrom careos.iso -no-reboot -serial stdio -vga std \
              -machine pc,usb=off \
-             -drive file=$(DISK),format=raw,if=ide,index=0
+             -drive file=$(DISK),format=raw,if=ide,index=0 \
+             -netdev user,id=net0 -device e1000,netdev=net0
 
 ASM_SRC   := boot/boot.asm
 
@@ -48,6 +49,10 @@ C_SRC     := kernel/kernel.c       \
              drivers/storage/ata.c \
              drivers/net/e1000.c   \
              net/net.c             \
+             net/sha256.c          \
+             net/aes_gcm.c         \
+             net/x25519.c          \
+             net/tls.c             \
              shell/shell.c         \
              gui/gfx.c             \
              gui/theme.c           \
@@ -122,7 +127,8 @@ run-kvm: $(DISK) careos.iso
 run-nowindow: $(DISK) careos.iso
 	$(QEMU) -m 256M -cdrom careos.iso -nographic -no-reboot \
 	        -machine pc,usb=off \
-	        -drive file=$(DISK),format=raw,if=ide,index=0
+	        -drive file=$(DISK),format=raw,if=ide,index=0 \
+	        -netdev user,id=net0 -device e1000,netdev=net0
 
 debug: $(DISK) careos.iso
 	$(QEMU) $(QEMUBASE) -s -S &

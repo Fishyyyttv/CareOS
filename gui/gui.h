@@ -13,7 +13,7 @@ extern u32 SCREEN_W;
 extern u32 SCREEN_H;
 extern u32 SCREEN_PITCH;    /* bytes per row */
 extern u32 *FRAMEBUFFER;    /* linear framebuffer pointer */
-extern u32 GFX_FONT_SCALE;   /* 1 for <900px height, 2 for >=900px (set by gfx_init) */
+extern u32 GFX_FONT_SCALE;   /* Bitmap text scale; kept 1 at 1080p for crisp UI text */
 
 /* -- Geometry ------------------------------------------------------------- */
 typedef struct { i32 x, y; }         point_t;
@@ -114,12 +114,25 @@ extern theme_t *g_theme;
 #define COL_WHITE       rgb(0xff,0xff,0xff)
 #define COL_BLACK       rgb(0x00,0x00,0x00)
 
-#define TASKBAR_H       68
-#define TOPBAR_H        32
-#define SIDEBAR_W       160
-#define TITLEBAR_H      44
+/* -- Clipboard ------------------------------------------------------------ */
+#define CLIPBOARD_SIZE 4096
+extern char g_clipboard[CLIPBOARD_SIZE];
+extern u32  g_clipboard_len;
+
+/* -- Multi-desktop -------------------------------------------------------- */
+#define DESKTOP_COUNT 4
+extern u32 g_current_desktop;
+
+/* -- Idle / screensaver --------------------------------------------------- */
+extern u32 g_last_activity_tick;
+
+#define TASKBAR_H       72
+#define TOPBAR_H        34
+#define SIDEBAR_W       182
+#define TITLEBAR_H      48
 
 #define kabs(x) ((x) < 0 ? -(x) : (x))
+#define max(a,b) ((a) > (b) ? (a) : (b))
 
 #define COL_ORANGE      rgb(0xfb,0x92,0x3c)
 #define COL_CYAN        rgb(0x22,0xd3,0xee)
@@ -146,7 +159,7 @@ typedef enum {
 
 #define FONT_W       8
 #define FONT_H      13
-#define FONT_SPACING 2
+#define FONT_SPACING 3
 
 void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size);
 void gfx_str_centered_ex(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg, font_size_t size);
@@ -216,8 +229,11 @@ typedef struct window {
 
     /* Browser app */
     char  browser_url[256];
-    char  browser_content[2048];
+    char  browser_content[16384];
+    char  browser_title[128];
     bool  browser_loading;
+    bool  browser_url_active;
+    i32   browser_scroll;
     u32   browser_history_pos;
     char  browser_history[10][256];
     u32   browser_history_count;
@@ -260,6 +276,9 @@ typedef struct window {
     /* Snap layout flyout */
     u32    hover_start_tick;
     bool   showing_snap_layouts;
+
+    /* Multi-desktop */
+    u32    desktop;       /* 0-3; shown only when g_current_desktop matches */
 
     widget_t *root;
     gfx_buffer_t win_buffer;

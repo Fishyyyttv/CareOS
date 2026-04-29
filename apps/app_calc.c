@@ -47,12 +47,38 @@ static void calc_layout(window_t *w, i32 *d_h, i32 *bw, i32 *bh, i32 *pad, i32 *
 void app_calc_draw(window_t *w){
     rect_t cr = wm_client_rect(w);
     i32 sc = (i32)GFX_FONT_SCALE;
+    i32 d_h, bw, bh, pad, gap;
+    calc_layout(w, &d_h, &bw, &bh, &pad, &gap);
+
     gfx_rect(cr.x, cr.y, cr.w, cr.h, COL_SURFACE2);
-    
-    /* Main value — right-aligned (Dynamic text) */
+
+    gfx_rect_rounded(cr.x + pad, cr.y + pad, cr.w - 2 * pad, d_h, 12, COL_INPUT_BG);
+    gfx_rect_rounded_outline(cr.x + pad, cr.y + pad, cr.w - 2 * pad, d_h, 12, COL_BORDER);
     i32 dlen = gfx_str_width(w->calc_display);
-    gfx_str(cr.x + cr.w - 20 - dlen, cr.y + 40 * sc, 
+    gfx_str(cr.x + cr.w - pad - 14 - dlen,
+            cr.y + pad + d_h - (FONT_H * sc) - 14,
             w->calc_display, w->calc_error ? COL_RED : COL_TEXT, COL_TRANSPARENT);
+
+    const char *labels[] = {"C","+/-","%","/",
+                            "7","8","9","x",
+                            "4","5","6","-",
+                            "1","2","3","+",
+                            "0","0",".","="};
+    i32 grid_y = cr.y + pad + d_h + pad;
+    for (int i = 0; i < 20; i++) {
+        i32 col = i % 4, row = i / 4;
+        i32 bx = cr.x + pad + col * (bw + gap);
+        i32 by = grid_y + row * (bh + gap);
+        bool primary = (i == 19);
+        bool op = (col == 3 || i < 3);
+        u32 bg = primary ? COL_PRIMARY : (op ? g_theme->surface3 : COL_SURFACE);
+        u32 fg = primary ? COL_WHITE : (op ? COL_ACCENT : COL_TEXT);
+        gfx_rect_rounded(bx, by, bw, bh, 10, bg);
+        gfx_rect_blend(bx + 1, by + 1, bw - 2, bh / 3, COL_WHITE, 8);
+        gfx_rect_rounded_outline(bx, by, bw, bh, 10, COL_BORDER);
+        gfx_str_centered(bx, by + (bh - (i32)(FONT_H * sc)) / 2, bw,
+                         labels[i], fg, COL_TRANSPARENT);
+    }
 }
 
 void app_calc_click(window_t *w, i32 x, i32 y){
@@ -81,8 +107,29 @@ void app_calc_click(window_t *w, i32 x, i32 y){
     char key = btnkey[0];
     bool is_div = kstrcmp(btnkey,"div")==0;
     bool is_mul = kstrcmp(btnkey,"mul")==0;
+    char op_char = is_div ? '/' : (is_mul ? '*' : key);
 
     if (key=='C'){ app_calc_init(w); return; }
+    if (kstrcmp(btnkey, "+/-") == 0) {
+        char tmp[32];
+        if (w->calc_display[0] == '-') {
+            kstrcpy(tmp, w->calc_display + 1);
+            kstrcpy(w->calc_display, tmp);
+        } else if (kstrcmp(w->calc_display, "0") != 0 && kstrlen(w->calc_display) < 30) {
+            kstrcpy(tmp, "-");
+            kstrcat(tmp, w->calc_display);
+            kstrcpy(w->calc_display, tmp);
+        }
+        w->calc_val = (i32)katoi(w->calc_display);
+        return;
+    }
+    if (key=='%') {
+        char tmp[32];
+        w->calc_val = (i32)katoi(w->calc_display) / 100;
+        kitoa(w->calc_val, tmp, 10);
+        kstrcpy(w->calc_display, tmp);
+        return;
+    }
     if ((key>='0'&&key<='9')||key=='.'){
         if (w->calc_new_num||kstrcmp(w->calc_display,"0")==0){
             kstrcpy(w->calc_display,""); w->calc_new_num=false;
@@ -105,10 +152,10 @@ void app_calc_click(window_t *w, i32 x, i32 y){
             w->calc_prev=w->calc_val;
         }
         if(key!='='){
-            w->calc_op=is_div?'/':is_mul?'*':key;
+            w->calc_op=op_char;
             w->calc_new_num=true;
             char e[24]; kstrcpy(e,w->calc_display); kstrcat(e," ");
-            w->calc_display[0]=(char)key; w->calc_display[1]='\0';
+            w->calc_display[0]=op_char; w->calc_display[1]='\0';
             kstrcpy(w->calc_expr,e);
         } else {
             w->calc_op=0; w->calc_new_num=true;

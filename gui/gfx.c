@@ -95,7 +95,7 @@ void gfx_set_target(gfx_buffer_t *target) {
 void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch) {
     SCREEN_FB = fb; SCREEN_W_VAL = w; SCREEN_H_VAL = h; SCREEN_P = pitch;
     SCREEN_W = w; SCREEN_H = h; SCREEN_PITCH = pitch; FRAMEBUFFER = fb;
-    GFX_FONT_SCALE = (h >= 900) ? 2 : 1;
+    GFX_FONT_SCALE = (h >= 1800) ? 2 : 1;
     
     g_screen_buf.pixels = fb;
     g_screen_buf.w = w;
@@ -411,16 +411,21 @@ void gfx_char(i32 x, i32 y, char c, u32 fg, u32 bg) {
     gfx_dirty(x, y, 8 * sc, 12 * sc);
 }
 
+static i32 gfx_font_scale_for(font_size_t size) {
+    i32 sc = (i32)GFX_FONT_SCALE;
+    if (size == FONT_H1 || size == FONT_H2) sc *= 2;
+    return sc;
+}
+
 void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size) {
     i32 cx = x;
-    i32 sc = (i32)GFX_FONT_SCALE;
-    /* Improved scaling: H1 is 2x larger, Body is 1x. Tripling (3x) was too blocky. */
-    if      (size == FONT_H1) sc *= 2;
-    else if (size == FONT_H2) sc = (sc * 3) / 2; /* 1.5x scale approx */
+    i32 cy = y;
+    i32 start_x = x;
+    i32 start_y = y;
+    i32 sc = gfx_font_scale_for(size);
 
-    i32 start_x = cx;
     while (*s) {
-        if (*s == '\n') { cx = x; y += FONT_H * sc; s++; continue; }
+        if (*s == '\n') { cx = x; cy += FONT_H * sc; s++; continue; }
         if (*s >= 32 && *s <= 126) {
             const u8 *g = font_data[(u8)*s - 32];
             for (i32 row = 0; row < 12; row++) {
@@ -430,18 +435,18 @@ void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size) {
                     if (lit) {
                         for (i32 sy = 0; sy < sc; sy++)
                             for (i32 sx = 0; sx < sc; sx++)
-                                gfx_setpixel(cx + col*sc + sx, y + row*sc + sy, fg);
+                                gfx_setpixel(cx + col*sc + sx, cy + row*sc + sy, fg);
                     } else if (bg != COL_TRANSPARENT) {
                         for (i32 sy = 0; sy < sc; sy++)
                             for (i32 sx = 0; sx < sc; sx++)
-                                gfx_setpixel(cx + col*sc + sx, y + row*sc + sy, bg);
+                                gfx_setpixel(cx + col*sc + sx, cy + row*sc + sy, bg);
                     }
                 }
             }
         }
         cx += FONT_W * sc; s++;
     }
-    gfx_dirty(start_x, y, cx - start_x, 12 * sc);
+    gfx_dirty(start_x, start_y, cx - start_x, (cy - start_y) + 12 * sc);
 }
 
 void gfx_str(i32 x, i32 y, const char *s, u32 fg, u32 bg) {
@@ -449,8 +454,7 @@ void gfx_str(i32 x, i32 y, const char *s, u32 fg, u32 bg) {
 }
 
 void gfx_str_centered_ex(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg, font_size_t size) {
-    i32 sc = (i32)GFX_FONT_SCALE;
-    if (size == FONT_H1) sc *= 2;
+    i32 sc = gfx_font_scale_for(size);
     i32 len = (i32)kstrlen(s);
     gfx_str_ex(x + (w - len * FONT_W * sc) / 2, y, s, fg, bg, size);
 }
@@ -509,8 +513,30 @@ void gfx_gradient_rect(i32 x, i32 y, i32 w, i32 h, u32 top, u32 bot){
 }
 
 void gfx_rect_rounded_outline(i32 x, i32 y, i32 w, i32 h, i32 r, u32 c){
-    gfx_hline(x+r,y,w-2*r,c); gfx_hline(x+r,y+h-1,w-2*r,c);
-    gfx_vline(x,y+r,h-2*r,c); gfx_vline(x+w-1,y+r,h-2*r,c);
+    if (w <= 0 || h <= 0) return;
+    if (r <= 0) { gfx_rect_outline(x, y, w, h, c); return; }
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+
+    gfx_hline(x + r, y, w - 2 * r, c);
+    gfx_hline(x + r, y + h - 1, w - 2 * r, c);
+    gfx_vline(x, y + r, h - 2 * r, c);
+    gfx_vline(x + w - 1, y + r, h - 2 * r, c);
+
+    i32 cx1 = x + r,         cy1 = y + r;
+    i32 cx2 = x + w - r - 1, cy2 = y + r;
+    i32 cx3 = x + r,         cy3 = y + h - r - 1;
+    i32 cx4 = x + w - r - 1, cy4 = y + h - r - 1;
+    i32 px = r, py = 0, err = 0;
+    while (px >= py) {
+        gfx_setpixel(cx1 - px, cy1 - py, c); gfx_setpixel(cx1 - py, cy1 - px, c);
+        gfx_setpixel(cx2 + px, cy2 - py, c); gfx_setpixel(cx2 + py, cy2 - px, c);
+        gfx_setpixel(cx3 - px, cy3 + py, c); gfx_setpixel(cx3 - py, cy3 + px, c);
+        gfx_setpixel(cx4 + px, cy4 + py, c); gfx_setpixel(cx4 + py, cy4 + px, c);
+        if (err <= 0) { py++; err += 2 * py + 1; }
+        else { px--; err -= 2 * px + 1; }
+    }
+    gfx_dirty(x, y, w, h);
 }
 
 i32 gfx_str_width(const char *s){ return (i32)(kstrlen(s) * FONT_W * GFX_FONT_SCALE); }
@@ -700,5 +726,3 @@ void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy) {
         }
     }
 }
-
-

@@ -5,12 +5,25 @@
 
 void app_help_init(window_t *w){
     win_clear(w);
-    win_append(w, "KEYBOARD SHORTCUTS\n");
-    win_append(w, "  Terminal    Enter=run  Backspace=delete\n");
-    win_append(w, "  Notes       Type to edit, Tab to indent\n");
-    win_append(w, "  Editor      Type to edit, Tab=4 spaces\n");
-    win_append(w, "  Files       Click=select  Dbl-click=open\n");
-    win_append(w, "  Help        j/Space=down  k=up\n");
+    win_append(w, "SYSTEM SHORTCUTS\n");
+    win_append(w, "  Alt+Tab           Cycle windows\n");
+    win_append(w, "  Alt+F4            Close window\n");
+    win_append(w, "  Ctrl+1..4         Switch workspace\n");
+    win_append(w, "  Ctrl+Alt+WASD     Snap focused window\n");
+    win_append(w, "  Win/Super         Toggle launcher\n");
+    win_append(w, "  Right-Click       (Titlebar) Close\n");
+    win_append(w, "  Scroll Wheel      Scroll window content\n");
+    win_append(w, "\n");
+    win_append(w, "SHARED ACTIONS\n");
+    win_append(w, "  Ctrl+C            Copy selected/text\n");
+    win_append(w, "  Ctrl+V            Paste text/file\n");
+    win_append(w, "  Ctrl+S            Save file (Editor/Notes)\n");
+    win_append(w, "\n");
+    win_append(w, "APPLICATION TIPS\n");
+    win_append(w, "  Terminal    Ctrl+L=clear  Tab=complete\n");
+    win_append(w, "  Notes       Ctrl+S to save to notes.txt\n");
+    win_append(w, "  Editor      Ctrl+S to save code\n");
+    win_append(w, "  Files       Ctrl+C/V copy-paste files\n");
     win_append(w, "\n");
     win_append(w, "SHELL COMMANDS\n");
     win_append(w, "  ls [-l]        List directory contents\n");

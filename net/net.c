@@ -68,12 +68,33 @@ static socket_t sockets[MAX_SOCKETS];
 static u32 tcp_next_seq = 0xABCD1234;
 static u16 next_port = 49152;
 static u16 dns_next_id = 0x2300;
+static char net_error_buf[96] = "";
 
 /* Byte order and checksum helpers */
 static u32 htonl32(u32 v){ return ((v&0xff)<<24)|((v>>8&0xff)<<16)|((v>>16&0xff)<<8)|(v>>24); }
 static u16 htons16(u16 v){ return (u16)((v>>8)|(v<<8)); }
+static u32 ntohl32(u32 v){ return htonl32(v); }
+static u16 ntohs16(u16 v){ return htons16(v); }
 static u16 be16(const u8 *p){ return (u16)((p[0]<<8)|p[1]); }
 static void wr16(u8 *p, u16 v){ p[0] = (u8)(v >> 8); p[1] = (u8)(v & 0xff); }
+
+static void net_set_error(const char *prefix, const char *detail){
+    kstrncpy(net_error_buf, prefix ? prefix : "Network error", sizeof(net_error_buf) - 1);
+    net_error_buf[sizeof(net_error_buf) - 1] = '\0';
+    if (detail && detail[0]) {
+        u32 cur = (u32)kstrlen(net_error_buf);
+        u32 room = sizeof(net_error_buf) - 1 - cur;
+        if (room > 2) {
+            kstrcat(net_error_buf, ": ");
+            cur = (u32)kstrlen(net_error_buf);
+            room = sizeof(net_error_buf) - 1 - cur;
+            for (u32 i = 0; detail[i] && i < room; i++) {
+                net_error_buf[cur + i] = detail[i];
+                net_error_buf[cur + i + 1] = '\0';
+            }
+        }
+    }
+}
 
 static u16 ip_csum(const void *buf, u32 len){
     const u16 *p = (const u16*)buf;
@@ -86,8 +107,8 @@ static u16 ip_csum(const void *buf, u32 len){
 
 static u16 pseudo_csum(u32 sip, u32 dip, u8 proto, const void *data, u16 dlen){
     struct { u32 s, d; u8 z, p; u16 l; } ph;
-    ph.s = sip;
-    ph.d = dip;
+    ph.s = htonl32(sip);
+    ph.d = htonl32(dip);
     ph.z = 0;
     ph.p = proto;
     ph.l = htons16(dlen);
@@ -218,14 +239,15 @@ void arp_request(u32 tgt){
     a->proto_size = 4;
     a->opcode = htons16(1);
     kmemcpy(a->sender_mac, nic_mac, 6);
-    a->sender_ip = nic_ip;
+    a->sender_ip = htonl32(nic_ip);
     kmemset(a->target_mac, 0, 6);
-    a->target_ip = tgt;
+    a->target_ip = htonl32(tgt);
 
     net_send_frame(f, 14 + sizeof(arp_packet_t));
 }
 
 static void arp_reply(const arp_packet_t *req){
+    u32 sender_ip = ntohl32(req->sender_ip);
     u8 *f = tx_frame;
     kmemcpy(f, (void*)req->sender_mac, 6);
     kmemcpy(f + 6, nic_mac, 6);
@@ -239,9 +261,9 @@ static void arp_reply(const arp_packet_t *req){
     a->proto_size = 4;
     a->opcode = htons16(2);
     kmemcpy(a->sender_mac, nic_mac, 6);
-    a->sender_ip = nic_ip;
+    a->sender_ip = htonl32(nic_ip);
     kmemcpy(a->target_mac, (void*)req->sender_mac, 6);
-    a->target_ip = req->sender_ip;
+    a->target_ip = htonl32(sender_ip);
 
     net_send_frame(f, 14 + sizeof(arp_packet_t));
 }
@@ -276,8 +298,8 @@ void ip_send(u32 dst, u8 proto, const u8 *data, u32 dlen){
     h->ttl = 64;
     h->protocol = proto;
     h->checksum = 0;
-    h->src_ip = nic_ip;
-    h->dst_ip = dst;
+    h->src_ip = htonl32(nic_ip);
+    h->dst_ip = htonl32(dst);
     h->checksum = ip_csum(h, 20);
 
     kmemcpy(f + 34, data, dlen);
@@ -419,7 +441,13 @@ int sock_recv(int fd, u8 *buf, u32 maxlen){
         if (s->rx_len > 0) {
             u32 n = s->rx_len < maxlen ? s->rx_len : maxlen;
             kmemcpy(buf, s->rx_buf, n);
-            s->rx_len = 0;
+            if (n < s->rx_len) {
+                u32 remain = s->rx_len - n;
+                for (u32 i = 0; i < remain; i++) s->rx_buf[i] = s->rx_buf[n + i];
+                s->rx_len = remain;
+            } else {
+                s->rx_len = 0;
+            }
             return (int)n;
         }
         timer_wait(10);
@@ -441,9 +469,11 @@ void net_handle_frame(const u8 *frame, u32 len){
 
     if (et == 0x0806 && len >= 14 + sizeof(arp_packet_t)) {
         const arp_packet_t *a = (const arp_packet_t*)(frame + 14);
-        u16 op = (u16)((a->opcode >> 8) | (a->opcode << 8));
-        arp_set(a->sender_ip, a->sender_mac);
-        if (op == 1 && a->target_ip == nic_ip) arp_reply(a);
+        u16 op = ntohs16(a->opcode);
+        u32 sender_ip = ntohl32(a->sender_ip);
+        u32 target_ip = ntohl32(a->target_ip);
+        arp_set(sender_ip, a->sender_mac);
+        if (op == 1 && target_ip == nic_ip) arp_reply(a);
         return;
     }
 
@@ -452,11 +482,15 @@ void net_handle_frame(const u8 *frame, u32 len){
     const ip_header_t *iph = (const ip_header_t*)(frame + 14);
     u32 ihl = (iph->version_ihl & 0x0f) * 4;
     const u8 *pl = (const u8*)iph + ihl;
-    u32 plen = htons16(iph->total_len) - ihl;
+    u32 total_len = ntohs16(iph->total_len);
+    u32 dst_ip = ntohl32(iph->dst_ip);
+    if (ihl < 20 || total_len < ihl || len < 14 + total_len) return;
+    if (dst_ip != nic_ip && dst_ip != 0xffffffffu) return;
+    u32 plen = total_len - ihl;
 
     if (iph->protocol == IP_PROTO_UDP && plen >= 8) {
         const udp_header_t *u = (const udp_header_t*)pl;
-        u16 dp = htons16(u->dst_port);
+        u16 dp = ntohs16(u->dst_port);
         for (int i = 0; i < MAX_SOCKETS; i++) {
             if (sockets[i].type == SOCK_UDP && sockets[i].local_port == dp) {
                 u32 n = plen - 8;
@@ -470,7 +504,7 @@ void net_handle_frame(const u8 *frame, u32 len){
 
     if (iph->protocol == IP_PROTO_TCP && plen >= 20) {
         const tcp_header_t *t = (const tcp_header_t*)pl;
-        u16 sp = htons16(t->src_port);
+        u16 sp = ntohs16(t->src_port);
         for (int i = 0; i < MAX_SOCKETS; i++) {
             socket_t *s = &sockets[i];
             if (s->type != SOCK_TCP || s->remote_port != sp) continue;
@@ -645,6 +679,7 @@ int dns_resolve(const char *host, u32 *out){
         {"localhost", 0x7f000001u},
         {"example.com", (93u<<24)|(184u<<16)|(216u<<8)|34u},
         {"google.com",  (142u<<24)|(250u<<16)|(72u<<8)|14u},
+        {"www.google.com",  (142u<<24)|(250u<<16)|(72u<<8)|4u},
         {"careos.dev",  (192u<<24)|(168u<<16)|(1u<<8)|1u},
         {NULL, 0}
     };
@@ -661,21 +696,29 @@ int dns_resolve(const char *host, u32 *out){
 /* HTTP GET */
 int http_get(const char *host, u16 port, const char *path, char *resp, u32 maxlen){
     u32 ip;
-    if (dns_resolve(host, &ip) != 0) return -1;
-
-    int sock = sock_create(SOCK_TCP);
-    if (sock < 0) return -1;
-    if (sock_connect(sock, ip, port) != 0) {
-        sock_close(sock);
+    net_error_buf[0] = '\0';
+    if (dns_resolve(host, &ip) != 0) {
+        net_set_error("DNS lookup failed", host);
         return -1;
     }
 
-    char req[256];
+    int sock = sock_create(SOCK_TCP);
+    if (sock < 0) {
+        net_set_error("No sockets available", host);
+        return -1;
+    }
+    if (sock_connect(sock, ip, port) != 0) {
+        sock_close(sock);
+        net_set_error("TCP connect failed", host);
+        return -1;
+    }
+
+    char req[1024];
     kstrcpy(req, "GET ");
     kstrcat(req, path);
     kstrcat(req, " HTTP/1.0\r\nHost: ");
     kstrcat(req, host);
-    kstrcat(req, "\r\nUser-Agent: CareOS/9\r\n\r\n");
+    kstrcat(req, "\r\nUser-Agent: CareOS/9\r\nAccept: text/html,*/*\r\nConnection: close\r\n\r\n");
 
     sock_send(sock, (const u8*)req, (u32)kstrlen(req));
 
@@ -690,9 +733,11 @@ int http_get(const char *host, u16 port, const char *path, char *resp, u32 maxle
     }
     resp[got] = '\0';
     sock_close(sock);
+    if (got == 0) net_set_error("No response body", host);
     return (int)got;
 }
 
 /* Accessors expected by shell.c / apps.c / wm.c */
 bool net_is_up(void){ return nic_up; }
 u32 net_get_ip(void){ return nic_ip; }
+const char *net_last_error(void){ return net_error_buf; }

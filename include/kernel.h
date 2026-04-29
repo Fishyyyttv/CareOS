@@ -468,9 +468,27 @@ int  dns_resolve(const char *host, u32 *out);
 int  net_dhcp_renew(void);
 void net_set_dns_server(u32 ip);
 u32  net_get_dns_server(void);
+const char *net_last_error(void);
 int  http_get(const char *host, u16 port, const char *path,
               char *resp, u32 maxlen);
 void icmp_ping(u32 dst, u32 seq);
+
+/* -- HTTPS/TLS (net/tls.c) ------------------------------------------------- */
+int  https_get(const char *hostname, const char *path,
+               char *resp_buf, u32 maxlen);
+
+/* -- Crypto (net/sha256.c, net/aes_gcm.c, net/x25519.c) -------------------- */
+void sha256(const u8 *data, u32 len, u8 *out);
+void hmac_sha256(const u8 *key, u32 klen, const u8 *msg, u32 mlen, u8 *out);
+void hkdf_extract(const u8 *salt, u32 slen, const u8 *ikm, u32 ikm_len, u8 *prk);
+void hkdf_expand(const u8 *prk, const u8 *info, u32 info_len, u8 *out, u32 olen);
+void x25519(u8 *out, const u8 *scalar, const u8 *point);
+/* aes128_ctx_t is an opaque 176-byte struct; callers allocate u8[256] and cast */
+void aes128_init(void *ctx, const u8 *key);
+void aes128_gcm_encrypt(const void *ctx, const u8 *iv, const u8 *aad, u32 aad_len,
+                        const u8 *plain, u32 plen, u8 *cipher, u8 *tag);
+int  aes128_gcm_decrypt(const void *ctx, const u8 *iv, const u8 *aad, u32 aad_len,
+                        const u8 *cipher, u32 clen, u8 *plain, const u8 *tag);
 
 /* -- ext2 filesystem driver ----------------------------------------------- */
 int  ext2_mount(void);

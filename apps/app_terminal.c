@@ -289,27 +289,71 @@ void app_terminal_init(window_t *w){
 }
 void app_terminal_draw(window_t *w){
     rect_t cr=wm_client_rect(w);
-    gfx_rect(cr.x,cr.y,cr.w,cr.h,COL_SURFACE2);
+    /* Dark background */
+    gfx_rect(cr.x,cr.y,cr.w,cr.h,COL_SURFACE);
 
     i32 sc = (i32)GFX_FONT_SCALE;
-    i32 input_h = FONT_H * sc + 16;
-    i32 text_area_h = cr.h - input_h;
+    i32 lh = FONT_H * sc + 3;
+    i32 input_h = lh + 16;
+    i32 text_h  = cr.h - input_h;
 
-    /* Scrollable text area */
-    rect_t text_area = rect_make(cr.x, cr.y, cr.w, text_area_h);
-    draw_scrollable_text(w, text_area);
+    /* ---- Scrollable output ---- */
+    {
+        /* Count total lines */
+        u32 total = 1;
+        for(u32 i=0;i<w->text_len;i++) if(w->text_buf[i]=='\n') total++;
+        u32 vis = (u32)text_h / (u32)lh;
+        
+        /* Clamp scroll if it goes out of bounds */
+        if (w->scroll > total) w->scroll = total;
+        if (total > vis && w->scroll > total - vis) w->scroll = total - vis;
 
-    /* Input line */
-    i32 iy = cr.y + text_area_h;
-    gfx_rect(cr.x, iy, cr.w, input_h, COL_INPUT_BG);
+        /* Find start */
+        u32 line = 0;
+        const char *p = w->text_buf;
+        while (line < w->scroll && *p) { if(*p=='\n') line++; p++; }
+
+        /* Draw each visible line with prompt colouring */
+        i32 y = cr.y + 6;
+        u32 drawn = 0;
+        gfx_set_clip(cr.x, cr.y, cr.w, text_h);
+        while (*p && drawn < vis) {
+            const char *end = p;
+            while (*end && *end != '\n') end++;
+            u32 len = (u32)(end - p);
+            char tmp[160]; if(len>159) len=159;
+            kmemcpy(tmp, p, len); tmp[len]='\0';
+
+            /* Colour the prompt portion green like the reference */
+            u32 col = COL_TEXT;
+            /* Lines starting with a known username pattern get special colour */
+            if (tmp[0] && (kstrncmp(tmp,"user@",5)==0 || kstrncmp(tmp,"root@",5)==0))
+                col = g_theme->success;
+            else if (tmp[0] == '$')
+                col = g_theme->success;
+
+            gfx_str_clipped(cr.x + 12, y, cr.w - 20, tmp, col, COL_TRANSPARENT);
+            y += lh;
+            drawn++;
+            if(*end=='\n') p=end+1; else break;
+        }
+        gfx_clear_clip();
+    }
+
+    /* ---- Input bar ---- */
+    i32 iy = cr.y + text_h;
+    gfx_rect(cr.x, iy, cr.w, input_h, g_theme->input_bg);
     gfx_hline(cr.x, iy, cr.w, COL_BORDER);
+
+    /* Prompt symbol */
     i32 ty = iy + (input_h - FONT_H * sc) / 2;
-    /* Prompt indicator */
-    gfx_str(cr.x + 8, ty, "$", g_theme->success, COL_TRANSPARENT);
-    gfx_str(cr.x + 8 + (FONT_W + 2) * sc, ty, w->input_buf, g_theme->success, COL_TRANSPARENT);
-    /* Cursor blink */
+    gfx_str(cr.x + 12, ty, "$", g_theme->success, COL_TRANSPARENT);
+    i32 input_x = cr.x + 12 + (FONT_W + 2) * sc;
+    gfx_str_clipped(input_x, ty, cr.w - 28, w->input_buf, g_theme->success, COL_TRANSPARENT);
+
+    /* Blinking cursor */
     if((timer_get_ticks()/40)%2==0){
-        i32 cx=cr.x + 8 + (FONT_W + 2) * sc + (i32)w->input_len * FONT_W * sc;
+        i32 cx = input_x + (i32)w->input_len * FONT_W * sc;
         gfx_vline(cx, iy + 4, input_h - 8, g_theme->success);
     }
 }
@@ -330,7 +374,27 @@ void app_terminal_key(window_t *w,char c){
         w->scroll=(total>vis)?total-vis:0;
     } else if(c=='\b'){
         if(w->input_len>0){w->input_len--;w->input_buf[w->input_len]='\0';}
-    } else if(c>=32&&c<127&&w->input_len<WIN_TEXT_BUF-1){
+    } else if(c==0x0C){ /* Ctrl+L: Clear */
+        win_clear(w);
+        term_prompt(w);
+    } else if(c==0x03){ /* Ctrl+C: Copy */
+        if (w->input_len > 0) {
+            kstrncpy(g_clipboard, w->input_buf, CLIPBOARD_SIZE-1);
+            g_clipboard_len = w->input_len;
+        } else {
+            kstrncpy(g_clipboard, w->text_buf, CLIPBOARD_SIZE-1);
+            g_clipboard_len = w->text_len;
+        }
+        notify_push("Clipboard", "Copied terminal text", COL_ACCENT);
+    } else if(c==0x16){ /* Ctrl+V: Paste */
+        for (u32 i=0; i<g_clipboard_len; i++) {
+            char cc = g_clipboard[i];
+            if (cc >= 32 && cc < 127 && w->input_len < 255) {
+                w->input_buf[w->input_len++] = cc;
+                w->input_buf[w->input_len] = '\0';
+            }
+        }
+    } else if(c>=32&&c<127&&w->input_len<255){
         w->input_buf[w->input_len++]=c; w->input_buf[w->input_len]='\0';
     } else if(c=='\x1B'){ /* scroll up/down could go here */ }
 }

@@ -24,7 +24,8 @@
       "Bash(wsl *)",
       "PowerShell(Get-Command *)",
       "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' } | Select-Object -First 30)",
-      "Bash(where wsl *)"
+      "Bash(where wsl *)",
+      "Bash(ls *)"
     ]
   }
 }
