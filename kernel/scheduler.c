@@ -65,6 +65,9 @@ typedef struct tcb {
 
     int  exit_code;
     int  session_id;
+
+    u32  pending_signals;
+    bool task_killed;
 } tcb_t;
 
 static tcb_t  tasks[MAX_TASKS];
@@ -106,12 +109,32 @@ static void __attribute__((noinline)) switch_context(
     );
 }
 
+void signal_send(u32 task_id, u32 sig) {
+    for (u32 i = 0; i < task_count; i++) {
+        if (tasks[i].id == task_id) {
+            tasks[i].pending_signals |= (1u << sig);
+            return;
+        }
+    }
+}
+
 void scheduler_tick(registers_t *r) {
     timer_tick_advance();
     if (!sched_ready || task_count == 0) return;
 
     tcb_t *cur = &tasks[current_task];
     cur->total_ticks++;
+
+    /* Deliver pending signals */
+    if (cur->pending_signals & (1u << SIGKILL)) {
+        cur->task_killed     = true;
+        cur->pending_signals = 0;
+        cur->state           = TASK_DEAD;
+    }
+    if (cur->pending_signals & (1u << SIGINT)) {
+        cur->pending_signals &= ~(1u << SIGINT);
+        kb_push_char(0x03);  /* ETX → shell sees Ctrl+C */
+    }
 
     if (cur->ticks_remaining > 0) {
         cur->ticks_remaining--;

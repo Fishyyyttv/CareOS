@@ -74,12 +74,43 @@ void gfx_dirty(i32 x, i32 y, i32 w, i32 h) {
 #ifdef __SSE2__
 #include <immintrin.h>
 static void gfx_flip_sse2(void) {
-    __m128i *src = (__m128i*)BACKBUFFER;
-    __m128i *dst = (__m128i*)FRAMEBUFFER;
-    size_t n = (SCREEN_W * SCREEN_H * 4) / 16;
-    for (size_t i = 0; i < n; i++) _mm_storeu_si128(dst + i, _mm_loadu_si128(src + i));
+    if (dirty_full || dirty_count == 0) {
+        __m128i *src = (__m128i*)BACKBUFFER;
+        __m128i *dst = (__m128i*)FRAMEBUFFER;
+        size_t n = (SCREEN_W * SCREEN_H * 4) / 16;
+        for (size_t i = 0; i < n; i++) _mm_storeu_si128(dst + i, _mm_loadu_si128(src + i));
+    } else {
+        for (u32 i = 0; i < dirty_count; i++) {
+            dirty_rect_t *d = &dirty_rects[i];
+            for (i32 y = d->y; y < d->y + d->h; y++) {
+                __m128i *src = (__m128i*)&BACKBUFFER[y * SCREEN_W + d->x];
+                __m128i *dst = (__m128i*)&FRAMEBUFFER[y * SCREEN_W + d->x];
+                i32 nw = d->w / 4;
+                for (i32 x = 0; x < nw; x++) _mm_storeu_si128(dst + x, _mm_loadu_si128(src + x));
+            }
+        }
+    }
 }
 #endif
+
+void gfx_flip(void) {
+    if (!FRAMEBUFFER || !BACKBUFFER) return;
+#ifdef __SSE2__
+    gfx_flip_sse2();
+#else
+    if (dirty_full || dirty_count == 0) {
+        kmemcpy(FRAMEBUFFER, BACKBUFFER, SCREEN_W * SCREEN_H * 4);
+    } else {
+        for (u32 i = 0; i < dirty_count; i++) {
+            dirty_rect_t *d = &dirty_rects[i];
+            for (i32 y = d->y; y < d->y + d->h; y++) {
+                kmemcpy(&FRAMEBUFFER[y * SCREEN_W + d->x], &BACKBUFFER[y * SCREEN_W + d->x], d->w * 4);
+            }
+        }
+    }
+#endif
+    dirty_reset();
+}
 
 static u32 *SCREEN_FB;
 static u32  SCREEN_W_VAL, SCREEN_H_VAL, SCREEN_P;
@@ -121,42 +152,6 @@ void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch) {
     gfx_flip();
 }
 
-void gfx_flip(void) {
-    if (!FRAMEBUFFER || !BACKBUFFER) return;
-    if (gfx_direct_mode) { dirty_reset(); return; }
-    if (FB_BPP == 32) {
-#ifdef __SSE2__
-        if (!dirty_full && dirty_count == 0) { dirty_reset(); return; }
-        if (dirty_full) { gfx_flip_sse2(); } else {
-            for (u32 d = 0; d < dirty_count; d++) {
-                dirty_rect_t *dr = &dirty_rects[d];
-                for (i32 row = 0; row < dr->h; row++) {
-                    u32 *src = BACKBUFFER  + ((u32)(dr->y + row)) * SCREEN_W + (u32)dr->x;
-                    u8  *dst = (u8*)FRAMEBUFFER + ((u32)(dr->y + row)) * SCREEN_PITCH + (u32)dr->x * 4;
-                    kmemcpy(dst, src, (size_t)dr->w * 4);
-                }
-            }
-        }
-#else
-        if (dirty_full) { kmemcpy(FRAMEBUFFER, BACKBUFFER, (size_t)(SCREEN_W * SCREEN_H * sizeof(u32))); } else {
-            for (u32 d = 0; d < dirty_count; d++) {
-                dirty_rect_t *dr = &dirty_rects[d];
-                for (i32 row = 0; row < dr->h; row++) {
-                    u32 *src = BACKBUFFER  + ((u32)(dr->y + row)) * SCREEN_W + (u32)dr->x;
-                    u8  *dst = (u8*)FRAMEBUFFER + ((u32)(dr->y + row)) * SCREEN_PITCH + (u32)dr->x * 4;
-                    kmemcpy(dst, src, (size_t)dr->w * 4);
-                }
-            }
-        }
-#endif
-        dirty_reset(); return;
-    }
-    for (u32 y = 0; y < SCREEN_H; y++) {
-        u32 *src = BACKBUFFER + y * SCREEN_W;
-        for (u32 x = 0; x < SCREEN_W; x++) fb_write_pixel(x, y, src[x]);
-    }
-    dirty_reset();
-}
 
 void gfx_clear(u32 color) {
     if (!BACKBUFFER) return;
@@ -255,9 +250,21 @@ void gfx_rect_blend(i32 x, i32 y, i32 w, i32 h, u32 color, u8 alpha) {
     gfx_dirty(x, y, w, h);
 }
 
+void gfx_rect_alpha(i32 x, i32 y, i32 w, i32 h, u32 color, u8 alpha) {
+    gfx_rect_blend(x, y, w, h, color, alpha);
+}
+
 void gfx_rect_outline(i32 x, i32 y, i32 w, i32 h, u32 color) {
     gfx_hline(x, y, w, color); gfx_hline(x, y+h-1, w, color);
     gfx_vline(x, y, h, color); gfx_vline(x+w-1, y, h, color);
+}
+
+void gfx_shadow(i32 x, i32 y, i32 w, i32 h) {
+    gfx_rect_blend(x + 4, y + 4, w, h, 0, 40);
+}
+
+void gfx_shadow_ext(i32 x, i32 y, i32 w, i32 h, u32 alpha) {
+    gfx_rect_blend(x, y, w, h, 0, (u8)alpha);
 }
 
 void gfx_rect_rounded(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color) {
@@ -270,6 +277,7 @@ void gfx_rect_rounded(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color) {
     gfx_circle_fill(x+r, y+h-r-1, r, color);
     gfx_circle_fill(x+w-r-1, y+h-r-1, r, color);
 }
+
 
 void gfx_circle(i32 cx, i32 cy, i32 r, u32 color) {
     i32 x=r,y=0,err=0;
@@ -700,15 +708,6 @@ bool notify_handle_mouse(mouse_t *m) {
     return false;
 }
 
-void gfx_shadow_ext(i32 x, i32 y, i32 w, i32 h, i32 depth) {
-    for (i32 i = 0; i < depth; i++) {
-        gfx_rect_blend(x + 2 + i, y + 2 + i, w, h, COL_BLACK, (u8)(20 - i * 2));
-    }
-}
-
-void gfx_shadow(i32 x, i32 y, i32 w, i32 h) {
-    gfx_shadow_ext(x, y, w, h, 5);
-}
 
 void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy) {
     if (!src || !src->pixels || !g_target) return;

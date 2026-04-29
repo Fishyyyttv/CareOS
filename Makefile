@@ -41,11 +41,14 @@ C_SRC     := kernel/kernel.c       \
              kernel/carepkg.c      \
              kernel/elf.c          \
              kernel/ext2.c         \
+             kernel/pipe.c         \
              drivers/vga.c         \
              drivers/timer.c       \
              drivers/keyboard.c    \
              drivers/rtc.c         \
              drivers/pci.c         \
+             drivers/vesa.c        \
+             drivers/speaker.c     \
              drivers/storage/ata.c \
              drivers/net/e1000.c   \
              net/net.c             \

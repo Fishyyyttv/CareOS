@@ -49,12 +49,17 @@ typedef struct {
     char  icon[32];
     char  category[32];
     char  permissions[128];
+    char  deps[128];           /* comma-separated dependency names */
     u32   install_tick;
     char  install_path[FS_PATH_MAX];  /* /apps/<name> */
 } care_pkg_t;
 
 static care_pkg_t registry[MAX_PACKAGES];
 static u32        pkg_count = 0;
+
+/* Forward declarations */
+static void carepkg_db_save(void);
+static void carepkg_db_load(void);
 
 /* ── Helpers ────────────────────────────────────────────────────────────────── */
 static care_pkg_t *find_pkg(const char *name) {
@@ -125,6 +130,23 @@ static int pkg_install_node(fs_node_t *node) {
                         terminal_writeln(tmp.name);
                         return -1;
                     }
+                    /* Check dependencies */
+                    if (tmp.deps[0]) {
+                        char dep_copy[128];
+                        kstrncpy(dep_copy, tmp.deps, sizeof(dep_copy) - 1);
+                        char *d = dep_copy;
+                        while (*d) {
+                            char dep_name[32]; u32 dn = 0;
+                            while (*d && *d != ',' && dn < 31) dep_name[dn++] = *d++;
+                            dep_name[dn] = '\0';
+                            if (*d == ',') d++;
+                            if (dep_name[0] && !find_pkg(dep_name)) {
+                                terminal_write("carepkg: missing dependency: ");
+                                terminal_writeln(dep_name);
+                                return -1;
+                            }
+                        }
+                    }
                     app_dir = ensure_app_dir(tmp.name);
                     kstrcpy(tmp.install_path, "/apps/");
                     kstrcat(tmp.install_path, tmp.name);
@@ -140,6 +162,7 @@ static int pkg_install_node(fs_node_t *node) {
                     kv(line,"icon",       tmp.icon,       sizeof(tmp.icon));
                     kv(line,"category",   tmp.category,   sizeof(tmp.category));
                     kv(line,"permissions",tmp.permissions,sizeof(tmp.permissions));
+                    kv(line,"deps",       tmp.deps,       sizeof(tmp.deps));
                 }
             } else if (state == 2) {
                 if (kstrncmp(line,"FILE ",5)==0) {
@@ -203,6 +226,7 @@ static int pkg_install_node(fs_node_t *node) {
     terminal_write(tmp.name);
     terminal_write(" v");
     terminal_writeln(tmp.version);
+    carepkg_db_save();
     return 0;
 }
 
@@ -227,6 +251,7 @@ static int pkg_remove(const char *name) {
     if (node) vfs_delete(node);
     e->installed = false;
     terminal_write("[care] Removed: "); terminal_writeln(name);
+    carepkg_db_save();
     return 0;
 }
 
@@ -263,6 +288,7 @@ static void pkg_info(const char *name) {
     terminal_write("Installed:   "); terminal_writeln(e->install_path);
     terminal_write("Exec:        "); terminal_writeln(e->exec);
     terminal_write("Permissions: "); terminal_writeln(e->permissions);
+    terminal_write("Deps:        "); terminal_writeln(e->deps[0] ? e->deps : "(none)");
 }
 
 /* ── Create a .care file template ────────────────────────────────────────── */
@@ -296,6 +322,91 @@ static void pkg_create(const char *name, const char *version) {
     terminal_writeln(fname);
 }
 
+/* ── Persistent DB: /var/pkg/installed.db ──────────────────────────────────
+ * Format (one line per package, pipe-delimited):
+ *   name|version|description|author|exec|icon|category|permissions|deps|install_path
+ */
+#define DB_PATH "/var/pkg/installed.db"
+
+static void carepkg_db_save(void) {
+    fs_node_t *pkg_dir = vfs_resolve_path("/var/pkg");
+    if (!pkg_dir) {
+        fs_node_t *var = vfs_find(vfs_root(), "var");
+        if (!var) var = vfs_mkdir(vfs_root(), "var");
+        if (var) pkg_dir = vfs_find(var, "pkg");
+        if (!pkg_dir && var) pkg_dir = vfs_mkdir(var, "pkg");
+    }
+    if (!pkg_dir) return;
+
+    fs_node_t *db = vfs_find(pkg_dir, "installed.db");
+    if (!db) db = vfs_mkfile(pkg_dir, "installed.db");
+    if (!db) return;
+
+    char buf[FS_FILE_DATA_MAX];
+    u32  pos = 0;
+    kstrncpy(buf, "# CareOS package database v1\n", FS_FILE_DATA_MAX - 1);
+    pos = (u32)kstrlen(buf);
+
+    for (u32 i = 0; i < pkg_count && pos < FS_FILE_DATA_MAX - 256; i++) {
+        if (!registry[i].installed) continue;
+        care_pkg_t *e = &registry[i];
+        /* Append: name|version|desc|author|exec|icon|category|perms|deps|path\n */
+        const char *fields[] = { e->name, e->version, e->description, e->author,
+                                  e->exec, e->icon, e->category, e->permissions,
+                                  e->deps, e->install_path };
+        for (int f = 0; f < 10 && pos < FS_FILE_DATA_MAX - 64; f++) {
+            kstrncpy(buf + pos, fields[f], 127);
+            pos += kstrlen(buf + pos);
+            buf[pos++] = (f < 9) ? '|' : '\n';
+        }
+    }
+    buf[pos] = '\0';
+    vfs_write(db, buf, pos);
+}
+
+static void carepkg_db_load(void) {
+    fs_node_t *db = vfs_resolve_path(DB_PATH);
+    if (!db || db->type != FS_FILE || db->size == 0) return;
+
+    const char *p = db->data;
+    u32 len = db->size;
+    char line[512];
+    u32 li = 0;
+
+    for (u32 i = 0; i <= len; i++) {
+        char c = (i < len) ? p[i] : '\n';
+        if (c == '\r') continue;
+        if (c == '\n') {
+            line[li] = '\0'; li = 0;
+            if (line[0] == '#' || line[0] == '\0') continue;
+            if (pkg_count >= MAX_PACKAGES) break;
+
+            care_pkg_t e; kmemset(&e, 0, sizeof(e));
+            e.installed = true;
+            /* Split by '|' into 10 fields */
+            char *fields[10] = { e.name, e.version, e.description, e.author,
+                                  e.exec, e.icon, e.category, e.permissions,
+                                  e.deps, e.install_path };
+            u32 sizes[10]    = { 32, 16, 128, 48, FS_PATH_MAX, 32, 32, 128, 128, FS_PATH_MAX };
+            char *cur = line;
+            for (int f = 0; f < 10; f++) {
+                char *pipe = cur;
+                while (*pipe && *pipe != '|') pipe++;
+                u32 flen = (u32)(pipe - cur);
+                if (flen >= sizes[f]) flen = sizes[f] - 1;
+                kmemcpy(fields[f], cur, flen);
+                fields[f][flen] = '\0';
+                cur = *pipe ? pipe + 1 : pipe;
+            }
+            if (e.name[0] && !find_pkg(e.name))
+                registry[pkg_count++] = e;
+        } else if (li < 511) {
+            line[li++] = c;
+        }
+    }
+    serial_write("[carepkg] DB loaded\n");
+}
+
 /* ── Init: register /apps dir, install demo packages ─────────────────────── */
 void carepkg_init(void) {
     kmemset(registry, 0, sizeof(registry));
@@ -304,6 +415,9 @@ void carepkg_init(void) {
     /* Ensure /apps directory exists */
     if (!vfs_find(vfs_root(), "apps"))
         vfs_mkdir(vfs_root(), "apps");
+
+    /* Load persisted package list */
+    carepkg_db_load();
 
     /* Create and auto-install a demo "hello" .care package */
     fs_node_t *tmp = vfs_find(vfs_root(), "tmp");

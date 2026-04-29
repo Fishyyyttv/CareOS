@@ -1,4 +1,4 @@
-﻿/* =============================================================================
+/* =============================================================================
  * CareOS v6 â€” shell/shell.c
  * Interactive shell: history, tab-complete, built-in commands, networking
  * ============================================================================= */
@@ -91,7 +91,58 @@ static int parse_ipv4(const char *s, u32 *out){
     *out=(nums[0]<<24)|(nums[1]<<16)|(nums[2]<<8)|nums[3];
     return 0;
 }
+/* Pipe support: output capture buffer for left side of pipe */
+static char   g_pipe_stdin[PIPE_BUF_SIZE];
+static bool   g_pipe_stdin_active = false;
+static char   g_pipe_out[PIPE_BUF_SIZE];
+static u32    g_pipe_out_len = 0;
+static bool   g_pipe_capture = false;
+
+/* Wrapper: write to pipe capture buffer or terminal */
+static void shout(const char *s) {
+    if (g_pipe_capture) {
+        u32 l = (u32)kstrlen(s);
+        if (g_pipe_out_len + l < PIPE_BUF_SIZE - 1) {
+            kmemcpy(g_pipe_out + g_pipe_out_len, s, l);
+            g_pipe_out_len += l;
+            g_pipe_out[g_pipe_out_len] = '\0';
+        }
+    } else {
+        terminal_write(s);
+    }
+}
+
+static void exec_cmd(char *line);   /* forward */
+
 static void exec_line(char *line){
+     /* Pipe detection: split on first | */
+     char *pipe_pos = NULL;
+     for (u32 pi = 0; line[pi]; pi++) {
+         if (line[pi]=='|') { pipe_pos = &line[pi]; break; }
+     }
+     if (pipe_pos) {
+         *pipe_pos = '\0';
+         char right[MAX_LINE];
+         kstrncpy(right, pipe_pos+1, MAX_LINE-1);
+         /* trim leading spaces from right */
+         char *rp = right; while(*rp==' ') rp++;
+
+         /* Run left command, capture output */
+         g_pipe_out[0]='\0'; g_pipe_out_len=0; g_pipe_capture=true;
+         exec_cmd(line);
+         g_pipe_capture=false;
+
+         /* Feed captured output as stdin for right command */
+         kmemcpy(g_pipe_stdin, g_pipe_out, g_pipe_out_len+1);
+         g_pipe_stdin_active=true;
+         exec_cmd(rp);
+         g_pipe_stdin_active=false;
+         return;
+     }
+     exec_cmd(line);
+}
+
+static void exec_cmd(char *line){
      char *argv[MAX_ARGS]; int argc=0; char *p=line;
      while(*p){ while(*p==' ')p++; if(!*p)break; argv[argc++]=p; if(argc>=MAX_ARGS)break; while(*p&&*p!=' ')p++; if(*p)*p++='\0'; }
      if(!argc) return;
@@ -243,14 +294,18 @@ static void exec_line(char *line){
          return;
      }
      if(!kstrcmp(cmd,"write")||!kstrcmp(cmd,"echo>")){ /* write file */
-         if(argc<3){terminal_write("usage: write <file> <content>\n");return;}
-         fs_node_t *f=vfs_find(cwd,argv[1]);
-         if(!f) f=vfs_mkfile(cwd,argv[1]);
-         if(f){ vfs_write(f,argv[2],kstrlen(argv[2])); }
-         return;
-     }
+        if(argc<3){terminal_write("usage: write <file> <content>\n");return;}
+        fs_node_t *f=vfs_find(cwd,argv[1]);
+        if(!f) f=vfs_mkfile(cwd,argv[1]);
+        if(f){ vfs_write(f,argv[2],kstrlen(argv[2])); }
+        return;
+    }
+    if(!kstrcmp(cmd,"lspci")){
+        pci_list();
+        return;
+    }
  
-     /* â”€â”€ Process â”€â”€ */
+     /* ── Process ── */
      if(!kstrcmp(cmd,"ps")){
          terminal_write("  PID  PRI   STATE     NAME\n");
          for(u32 i=0;i<MAX_TASKS;i++){
@@ -586,6 +641,57 @@ static void exec_line(char *line){
          return;
      }
  
+     if(!kstrcmp(cmd,"kill")){
+         if(argc<2){terminal_write("kill: usage: kill <pid>\n");return;}
+         u32 pid=(u32)katoi(argv[1]);
+         signal_send(pid,SIGKILL);
+         char msg[48]; ksprintf(msg,"kill: sent SIGKILL to %u\n",pid);
+         terminal_write(msg); return;
+     }
+     if(!kstrcmp(cmd,"grep")){
+         if(argc<2){terminal_write("grep: usage: grep <pattern> [file]\n");return;}
+         const char *pattern=argv[1];
+         u32 pl=(u32)kstrlen(pattern);
+         const char *src=NULL;
+         char fbuf[2048];
+         if(g_pipe_stdin_active){
+             src=g_pipe_stdin;
+         } else if(argc>=3){
+             fs_node_t *f=(argv[2][0]=='/')?vfs_resolve_path(argv[2]):vfs_find(cwd,argv[2]);
+             if(f&&f->type==FS_FILE){
+                 vfs_read(f,fbuf,sizeof(fbuf)-1); fbuf[sizeof(fbuf)-1]='\0'; src=fbuf;
+             }
+         }
+         if(!src){terminal_write("grep: no input\n");return;}
+         const char *pp=src;
+         while(*pp){
+             const char *ls=pp;
+             while(*pp&&*pp!='\n') pp++;
+             u32 ll=(u32)(pp-ls);
+             char tmp[256]; if(ll>255)ll=255;
+             kmemcpy(tmp,ls,ll); tmp[ll]='\0';
+             bool found=false;
+             for(u32 ci=0;ci+pl<=ll;ci++){
+                 if(kstrncmp(tmp+ci,pattern,pl)==0){found=true;break;}
+             }
+             if(found){ shout(tmp); shout("\n"); }
+             if(*pp=='\n') pp++;
+         }
+         return;
+     }
+     if(!kstrcmp(cmd,"wc")){
+         const char *src=g_pipe_stdin_active?g_pipe_stdin:"";
+         u32 lines=0,words=0,bytes=(u32)kstrlen(src);
+         bool in_word=false;
+         for(const char *q=src;*q;q++){
+             if(*q=='\n') lines++;
+             if(*q==' '||*q=='\n'||*q=='\t'){ in_word=false; }
+             else { if(!in_word){words++;in_word=true;} }
+         }
+         char out[64]; ksprintf(out,"%u %u %u\n",lines,words,bytes);
+         shout(out); return;
+     }
+
      /* Not found */
      terminal_write_colored(cmd,VGA_ENTRY_COLOR(VGA_LIGHT_RED,VGA_BLACK));
      terminal_write(": command not found. Type 'help' for commands.\n");
@@ -640,6 +746,11 @@ static void exec_line(char *line){
  
          while(1){
              char c=keyboard_getchar();
+             if(c==0x03){ /* Ctrl+C / SIGINT */
+                 terminal_write("^C\n");
+                 line_buf[0]='\0'; line_len=0;
+                 break;
+             }
              if(c=='\n'){ terminal_putchar('\n'); break; }
              else if(c=='\b'){
                  if(line_len>0){ terminal_putchar('\b'); line_len--; line_buf[line_len]='\0'; }

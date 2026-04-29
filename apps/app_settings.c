@@ -176,6 +176,27 @@ void app_settings_draw(window_t *w){
         kutoa(cfg->mouse_sensitivity, buf, 10);
         gfx_str(cx + 256, cy + 86, buf, COL_ACCENT, COL_TRANSPARENT);
         gfx_str(cx + 286, cy + 86, "%", COL_ACCENT, COL_TRANSPARENT);
+
+        cy += 110;
+        gfx_str(cx, cy, "Screen Resolution", COL_TEXT, COL_TRANSPARENT);
+        gfx_str(cx + 180, cy, "(BGA — applies immediately)", COL_MUTED, COL_TRANSPARENT);
+        {
+            u32 mc = vesa_mode_count();
+            u16 cur_w = vesa_current_w(), cur_h = vesa_current_h();
+            i32 mw = (cw - 12) / 2;
+            for (u32 i = 0; i < mc; i++) {
+                vesa_mode_t vm = vesa_mode_get(i);
+                bool is_cur = (vm.w == cur_w && vm.h == cur_h);
+                i32 col_idx = (i32)(i % 2);
+                i32 row_idx = (i32)(i / 2);
+                button_t mb = settings_button(
+                    rect_make(cx + col_idx * (mw + 12), cy + 22 + row_idx * 42, mw, 34),
+                    vm.label, is_cur,
+                    is_cur ? COL_PRIMARY : COL_SURFACE3,
+                    is_cur ? COL_WHITE : COL_TEXT);
+                button_draw(&mb);
+            }
+        }
         break;
     }
 
@@ -332,13 +353,41 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
         break;
     }
 
-    case 1:
-        if (rect_contains(rect_make(cx + 168, cy + 78, 34, 30), x, y))
+    case 1: {
+        bool display_acted = false;
+        if (rect_contains(rect_make(cx + 168, cy + 78, 34, 30), x, y)) {
             settings_set_mouse_sensitivity(cfg->mouse_sensitivity > 40 ? cfg->mouse_sensitivity - 10 : 40);
-        if (rect_contains(rect_make(cx + 210, cy + 78, 34, 30), x, y))
+            display_acted = true;
+        }
+        if (rect_contains(rect_make(cx + 210, cy + 78, 34, 30), x, y)) {
             settings_set_mouse_sensitivity(cfg->mouse_sensitivity < 200 ? cfg->mouse_sensitivity + 10 : 200);
-        settings_set_status(w, "Display metrics are read from the live framebuffer", COL_DIM);
+            display_acted = true;
+        }
+        {
+            /* BGA mode list: cy_draw = cy_start+148+110 = cy+258 */
+            i32 modes_cy = cy + 258;
+            u32 mc = vesa_mode_count();
+            i32 mw = (cw - 12) / 2;
+            for (u32 i = 0; i < mc; i++) {
+                vesa_mode_t vm = vesa_mode_get(i);
+                i32 col_idx = (i32)(i % 2);
+                i32 row_idx = (i32)(i / 2);
+                rect_t r = rect_make(cx + col_idx * (mw + 12), modes_cy + 22 + row_idx * 42, mw, 34);
+                if (rect_contains(r, x, y)) {
+                    display_acted = true;
+                    if (vesa_set_mode(vm.w, vm.h) == 0) {
+                        settings_set_vesa_mode((u32)vm.w, (u32)vm.h);
+                        settings_set_status(w, "Resolution changed", COL_GREEN);
+                    } else {
+                        settings_set_status(w, "BGA not available — GRUB resolution in use", COL_YELLOW);
+                    }
+                }
+            }
+        }
+        if (!display_acted)
+            settings_set_status(w, "Display metrics are read from the live framebuffer", COL_DIM);
         break;
+    }
 
     case 2:
         if (rect_contains(rect_make(cx, cy + 22, 120, 34), x, y)) {

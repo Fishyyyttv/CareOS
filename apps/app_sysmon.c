@@ -37,7 +37,7 @@ void app_sysmon_draw(window_t *w){
     gfx_rect(cr.x, cr.y, cr.w, cr.h, COL_SURFACE2);
 
     /* Tabs */
-    const char *tabs[] = {"Overview", "Processes", "Memory", "Network"};
+    const char *tabs[] = {"Stats", "Apps", "Memory", "Hardware"};
     i32 tab_count = 4;
     i32 tab_h = 18 + 8 * sc;
     i32 tab_w = cr.w / tab_count;
@@ -142,6 +142,31 @@ void app_sysmon_draw(window_t *w){
         cy += FONT_H * sc + 6;
         gfx_str(bx, cy, "Free:", COL_MUTED, COL_TRANSPARENT);
         gfx_str(bx + gfx_str_width("Free:  "), cy, free_s, g_theme->success, COL_TRANSPARENT);
+    } else if (w->tab == 3) {
+        /* Hardware (PCI) */
+        i32 lh = FONT_H * sc + 6;
+        gfx_str(bx, cy, "PCI Devices Detected:", COL_ACCENT, COL_TRANSPARENT);
+        cy += lh + 6;
+        
+        u32 dev_count = pci_device_count();
+        if (dev_count == 0) {
+            gfx_str(bx, cy, "Scanning bus... (none found)", COL_DIM, COL_TRANSPARENT);
+        } else {
+            for (u32 i = 0; i < dev_count && cy < cr.y + cr.h - lh; i++) {
+                pci_device_t *d = pci_device_get(i);
+                char line[64]; char tmp[8];
+                kutoa(d->bus, tmp, 10); kstrcpy(line, tmp); kstrcat(line, ":");
+                kutoa(d->device, tmp, 10); kstrcat(line, tmp); kstrcat(line, "  ");
+                
+                /* Show Vendor + Device Name */
+                const char *vn = pci_vendor_name(d->vendor_id);
+                const char *dn = pci_device_name(d->vendor_id, d->device_id);
+                kstrcat(line, vn); kstrcat(line, " "); kstrcat(line, dn);
+                
+                gfx_str(bx, cy, line, COL_TEXT, COL_TRANSPARENT);
+                cy += lh + 2;
+            }
+        }
     }
 }
 

@@ -75,6 +75,7 @@ void app_files_draw(window_t *w){
 
     /* -- Toolbar -- */
     i32 tx = cr.x+FM_SB;
+    i32 list_rw = (cr.w - FM_SB) * 62 / 100;   /* file list width; rest is preview pane */
     gfx_rect(tx,cr.y,cr.w-FM_SB,FM_TB,COL_SURFACE3);
     gfx_hline(tx,cr.y+FM_TB,cr.w-FM_SB,COL_BORDER);
 
@@ -134,7 +135,7 @@ void app_files_draw(window_t *w){
     i32 list_y = cr.y + FM_TB;
     gfx_rect(tx,list_y,cr.w-FM_SB,16,COL_SURFACE3);
     gfx_str(tx+24,list_y+3,"Name",COL_DIM,COL_SURFACE3);
-    gfx_str_right(tx,list_y+3,cr.w-FM_SB-8,"Size",COL_DIM,COL_SURFACE3);
+    gfx_str_right(tx,list_y+3,list_rw-8,"Size",COL_DIM,COL_SURFACE3);
     gfx_hline(tx,list_y+16,cr.w-FM_SB,COL_BORDER);
     list_y += 16;
 
@@ -146,27 +147,94 @@ void app_files_draw(window_t *w){
         fs_node_t *child = w->fm_dir->children[i];
         bool sel = (i == w->fm_sel);
         u32 bg = sel ? COL_SELECTION : (i%2==0?COL_SURFACE:COL_SURFACE2);
+        /* Dim cut file */
+        char child_path[64]; vfs_get_path(child, child_path, sizeof(child_path));
+        bool is_cut = (g_clipboard_is_cut && g_clipboard_len > 0 && kstrcmp(child_path, g_clipboard) == 0);
 
-        gfx_rect(tx+1,fy,cr.w-FM_SB-2,FM_ROW,bg);
+        gfx_rect(tx+1,fy,list_rw-2,FM_ROW,bg);
         if(sel) gfx_rect(tx+1,fy,3,FM_ROW,COL_PRIMARY);
 
         bool is_dir = child->type==FS_DIR;
-        u32 icol = is_dir ? COL_PRIMARY : COL_TEXT;
+        u32 icol = is_cut ? COL_MUTED : (is_dir ? COL_PRIMARY : COL_TEXT);
         fm_draw_icon(tx+6,fy+4,is_dir,icol);
 
-        gfx_str_clipped(tx+20,fy+4,cr.w-FM_SB-90,child->name,icol,bg);
+        gfx_str_clipped(tx+20,fy+4,list_rw-90,child->name,icol,bg);
 
         if(child->type==FS_FILE){
             char sz[16];
             if(child->size>=1024){ kutoa(child->size/1024,sz,10); kstrcat(sz,"K"); }
             else { kutoa(child->size,sz,10); kstrcat(sz,"B"); }
-            gfx_str_right(tx,fy+4,cr.w-FM_SB-8,sz,COL_DIM,bg);
+            gfx_str_right(tx,fy+4,list_rw-8,sz,COL_DIM,bg);
         } else {
-            gfx_str_right(tx,fy+4,cr.w-FM_SB-8,"DIR",COL_PRIMARY,bg);
+            gfx_str_right(tx,fy+4,list_rw-8,"DIR",COL_PRIMARY,bg);
         }
 
         fy += FM_ROW;
         visible++;
+    }
+
+    /* -- Preview pane -- */
+    {
+        i32 px = tx + list_rw;
+        i32 pw = cr.w - FM_SB - list_rw;
+        i32 pane_y = cr.y + FM_TB + 16;
+        i32 pane_h = cr.h - FM_TB - 16 - 20;
+        gfx_vline(px, pane_y, pane_h, COL_BORDER);
+        px++;
+        pw--;
+        gfx_rect(px, pane_y, pw, pane_h, COL_SURFACE2);
+        if (w->fm_dir && w->fm_sel < w->fm_dir->child_count) {
+            fs_node_t *sel_node = w->fm_dir->children[w->fm_sel];
+            bool is_dir = sel_node->type == FS_DIR;
+            fm_draw_icon(px + 10, pane_y + 12, is_dir, is_dir ? COL_PRIMARY : COL_ACCENT);
+            gfx_set_clip(px + 28, pane_y + 8, pw - 36, 22);
+            gfx_str(px + 28, pane_y + 12, sel_node->name, COL_TEXT, COL_SURFACE2);
+            gfx_clear_clip();
+            if (is_dir) {
+                char dcnt[16];
+                kutoa(sel_node->child_count, dcnt, 10);
+                kstrcat(dcnt, " item");
+                if (sel_node->child_count != 1) kstrcat(dcnt, "s");
+                gfx_str_clipped(px + 8, pane_y + 36, pw - 16, dcnt, COL_DIM, COL_SURFACE2);
+            } else {
+                char sz[20];
+                if (sel_node->size >= 1024) { kutoa(sel_node->size/1024, sz, 10); kstrcat(sz, " KB"); }
+                else { kutoa(sel_node->size, sz, 10); kstrcat(sz, " B"); }
+                gfx_str_clipped(px + 8, pane_y + 36, pw - 16, sz, COL_DIM, COL_SURFACE2);
+                gfx_hline(px + 4, pane_y + 56, pw - 8, COL_BORDER);
+                if (sel_node->size > 0) {
+                    gfx_set_clip(px + 4, pane_y + 62, pw - 8, pane_h - 68);
+                    char preview[256];
+                    u32 plen = sel_node->size < 255u ? sel_node->size : 255u;
+                    kmemcpy(preview, sel_node->data, plen);
+                    preview[plen] = '\0';
+                    const char *pp = preview;
+                    i32 line_y = pane_y + 64;
+                    i32 line_h = (i32)(FONT_H * GFX_FONT_SCALE) + 2;
+                    i32 max_chars = (pw - 8) / (FONT_W * (i32)GFX_FONT_SCALE);
+                    if (max_chars < 1) max_chars = 1;
+                    while (*pp && line_y < pane_y + pane_h - 4) {
+                        const char *end = pp;
+                        i32 nc = 0;
+                        while (*end && *end != '\n' && nc < max_chars) { end++; nc++; }
+                        char line[64];
+                        if (nc > 63) nc = 63;
+                        kmemcpy(line, pp, (u32)nc); line[nc] = '\0';
+                        gfx_str(px + 4, line_y, line, COL_MUTED, COL_SURFACE2);
+                        line_y += line_h;
+                        if (*end == '\n') pp = end + 1;
+                        else if (*end) { pp = end; break; }
+                        else break;
+                    }
+                    gfx_clear_clip();
+                } else {
+                    gfx_str(px + 8, pane_y + 64, "(empty)", COL_MUTED, COL_SURFACE2);
+                }
+            }
+        } else {
+            gfx_str(px + 8, pane_y + 20, "Select a file", COL_MUTED, COL_SURFACE2);
+            gfx_str(px + 8, pane_y + 36, "to preview", COL_MUTED, COL_SURFACE2);
+        }
     }
 
     /* Empty folder message */
@@ -189,7 +257,7 @@ void app_files_draw(window_t *w){
     gfx_clear_clip();
     /* Hint */
     gfx_set_clip(tx + (cr.w-FM_SB)/2, sb_y, (cr.w-FM_SB)/2 - 4, 20);
-    gfx_str_right(tx,sb_y+4,cr.w-FM_SB-4,"Dbl-click=open  Del=delete  F2=rename",COL_MUTED,COL_SURFACE3);
+    gfx_str_right(tx,sb_y+4,cr.w-FM_SB-4,"^C=copy  ^X=cut  ^V=paste  Del=delete  r=rename",COL_MUTED,COL_SURFACE3);
     gfx_clear_clip();
 }
 
@@ -261,25 +329,44 @@ void app_files_key(window_t *w, char c){
     case 'm': /* new folder */
         w->input_buf[0]='\0'; w->input_len=0;
         w->tab = FM_MODE_NEWFOLD; break;
-    case 0x03: /* Ctrl+C: Copy Path */
+    case 0x03: /* Ctrl+C: Copy file */
         if (cnt > 0 && w->fm_sel < cnt) {
             fs_node_t *ch = w->fm_dir->children[w->fm_sel];
             vfs_get_path(ch, g_clipboard, CLIPBOARD_SIZE-1);
+            g_clipboard[CLIPBOARD_SIZE-1] = '\0';
             g_clipboard_len = kstrlen(g_clipboard);
-            notify_push("Files", "Path copied to clipboard", COL_ACCENT);
+            g_clipboard_is_cut = false;
+            notify_push("Files", "Copied", COL_ACCENT);
         }
         break;
-    case 0x16: /* Ctrl+V: Paste (Copy file here) */
+    case 0x18: /* Ctrl+X: Cut file */
+        if (cnt > 0 && w->fm_sel < cnt) {
+            fs_node_t *ch = w->fm_dir->children[w->fm_sel];
+            vfs_get_path(ch, g_clipboard, CLIPBOARD_SIZE-1);
+            g_clipboard[CLIPBOARD_SIZE-1] = '\0';
+            g_clipboard_len = kstrlen(g_clipboard);
+            g_clipboard_is_cut = true;
+            notify_push("Files", "Cut (^V to move)", COL_YELLOW);
+        }
+        break;
+    case 0x16: /* Ctrl+V: Paste */
         if (g_clipboard_len > 0) {
             fs_node_t *src = vfs_resolve_path(g_clipboard);
             if (src) {
-                /* Get filename from path */
                 const char *fname = kstrrchr(g_clipboard, '/');
                 if (fname) fname++; else fname = g_clipboard;
-                vfs_copy(src, w->fm_dir, fname);
-                notify_push("Files", "File pasted", g_theme->success);
+                if (vfs_copy(src, w->fm_dir, fname) == 0) {
+                    if (g_clipboard_is_cut) {
+                        vfs_delete(src);
+                        g_clipboard_len = 0;
+                        g_clipboard_is_cut = false;
+                    }
+                    notify_push("Files", "Pasted", g_theme->success);
+                } else {
+                    notify_push("Files", "Paste failed", g_theme->error);
+                }
             } else {
-                notify_push("Files", "Source file not found", g_theme->error);
+                notify_push("Files", "Source not found", g_theme->error);
             }
         }
         break;
@@ -350,8 +437,9 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
     }
 
     /* -- File list -- */
+    i32 list_rw_c = (cr.w - FM_SB) * 62 / 100;
     i32 list_top = cr.y + FM_TB + 16; /* toolbar + column headers (absolute) */
-    if(y >= list_top){
+    if(y >= list_top && x < cr.x + FM_SB + list_rw_c){
         u32 row = (u32)(y - list_top) / FM_ROW;
         if(w->fm_dir && row < w->fm_dir->child_count){
             if(w->fm_sel == row){

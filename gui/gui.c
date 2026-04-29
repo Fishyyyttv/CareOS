@@ -585,6 +585,7 @@ void gui_run(void) {
 
     wm_open(APP_TERMINAL, "Terminal", (sw - tw) / 2, (sh - th) / 2 - 24, tw, th);
     notify_push("CareOS", "Desktop ready.", COL_PRIMARY);
+    speaker_startup(); /* Audible startup melody */
     desktop_fade_in(&mouse);
 
     serial_write("  [gui_run] entering main loop\n");

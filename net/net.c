@@ -741,3 +741,31 @@ int http_get(const char *host, u16 port, const char *path, char *resp, u32 maxle
 bool net_is_up(void){ return nic_up; }
 u32 net_get_ip(void){ return nic_ip; }
 const char *net_last_error(void){ return net_error_buf; }
+
+void http_decode_chunked(char *buf, u32 len, u32 *out_len) {
+    char *src = buf, *dst = buf;
+    char *end = buf + len;
+    *out_len = 0;
+    while (src < end) {
+        while (src < end && (*src == '\r' || *src == '\n')) src++;
+        u32 chunk_size = 0;
+        while (src < end && *src != '\r' && *src != '\n') {
+            char h = *src++;
+            u32 v = 0;
+            if (h>='0'&&h<='9') v=(u32)(h-'0');
+            else if (h>='a'&&h<='f') v=(u32)(h-'a'+10);
+            else if (h>='A'&&h<='F') v=(u32)(h-'A'+10);
+            else break;
+            chunk_size = chunk_size * 16 + v;
+        }
+        while (src < end && (*src == '\r' || *src == '\n')) src++;
+        if (chunk_size == 0) break;
+        u32 avail = (u32)(end - src);
+        u32 to_copy = avail < chunk_size ? avail : chunk_size;
+        if (dst != src) kmemcpy(dst, src, to_copy);
+        dst += to_copy; src += chunk_size;
+        *out_len += to_copy;
+        while (src < end && (*src == '\r' || *src == '\n')) src++;
+    }
+    *dst = '\0';
+}

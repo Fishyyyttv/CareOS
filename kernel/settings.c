@@ -1,7 +1,7 @@
 #include "kernel.h"
 
 #define SETTINGS_MAGIC    0x43535447u /* CSTG */
-#define SETTINGS_VERSION  2u
+#define SETTINGS_VERSION  3u
 
 typedef struct __attribute__((packed)) {
     u32 magic;
@@ -31,6 +31,23 @@ typedef struct __attribute__((packed)) {
     char wifi_ssid[32];
     char wifi_pass[64];
 } settings_blob_v2_t;
+
+typedef struct __attribute__((packed)) {
+    u32 magic;
+    u32 version;
+    u32 checksum;
+    u32 theme;
+    u32 mouse_sensitivity;
+    u32 boot_fast;
+    u32 clock_24h;
+    u32 wallpaper;
+    u32 taskbar_centered;
+    u32 vesa_w;
+    u32 vesa_h;
+    u8  wifi_connected;
+    char wifi_ssid[32];
+    char wifi_pass[64];
+} settings_blob_v3_t;
 
 static careos_settings_t g_settings;
 static u8 settings_io[CAREOS_DISK_SETTINGS_SECTORS * 512u];
@@ -81,7 +98,7 @@ static void settings_save(void) {
 
     kmemset(settings_io, 0, sizeof(settings_io));
 
-    settings_blob_v2_t *b = (settings_blob_v2_t*)settings_io;
+    settings_blob_v3_t *b = (settings_blob_v3_t*)settings_io;
     b->magic = SETTINGS_MAGIC;
     b->version = SETTINGS_VERSION;
     b->theme = g_settings.theme;
@@ -90,6 +107,8 @@ static void settings_save(void) {
     b->clock_24h = g_settings.clock_24h;
     b->wallpaper = g_settings.wallpaper;
     b->taskbar_centered = g_settings.taskbar_centered;
+    b->vesa_w = g_settings.vesa_w;
+    b->vesa_h = g_settings.vesa_h;
     b->wifi_connected = g_settings.wifi_connected ? 1 : 0;
     kstrncpy(b->wifi_ssid, g_settings.wifi_ssid, sizeof(b->wifi_ssid) - 1);
     b->wifi_ssid[sizeof(b->wifi_ssid) - 1] = '\0';
@@ -117,6 +136,30 @@ static bool settings_load_v2(const settings_blob_v2_t *b) {
     g_settings.clock_24h = b->clock_24h ? 1u : 0u;
     g_settings.wallpaper = b->wallpaper;
     g_settings.taskbar_centered = b->taskbar_centered ? 1u : 0u;
+    g_settings.wifi_connected = b->wifi_connected ? true : false;
+    kstrncpy(g_settings.wifi_ssid, b->wifi_ssid, sizeof(g_settings.wifi_ssid) - 1);
+    g_settings.wifi_ssid[sizeof(g_settings.wifi_ssid) - 1] = '\0';
+    kstrncpy(g_settings.wifi_pass, b->wifi_pass, sizeof(g_settings.wifi_pass) - 1);
+    g_settings.wifi_pass[sizeof(g_settings.wifi_pass) - 1] = '\0';
+    settings_clamp();
+    return true;
+}
+
+static bool settings_load_v3(const settings_blob_v3_t *b) {
+    u32 expect = b->checksum;
+    settings_blob_v3_t temp;
+    kmemcpy(&temp, b, sizeof(temp));
+    temp.checksum = 0;
+    if (fnv1a32((const u8*)&temp, sizeof(temp)) != expect) return false;
+
+    g_settings.theme = b->theme;
+    g_settings.mouse_sensitivity = b->mouse_sensitivity;
+    g_settings.boot_fast = b->boot_fast ? 1u : 0u;
+    g_settings.clock_24h = b->clock_24h ? 1u : 0u;
+    g_settings.wallpaper = b->wallpaper;
+    g_settings.taskbar_centered = b->taskbar_centered ? 1u : 0u;
+    g_settings.vesa_w = b->vesa_w;
+    g_settings.vesa_h = b->vesa_h;
     g_settings.wifi_connected = b->wifi_connected ? true : false;
     kstrncpy(g_settings.wifi_ssid, b->wifi_ssid, sizeof(g_settings.wifi_ssid) - 1);
     g_settings.wifi_ssid[sizeof(g_settings.wifi_ssid) - 1] = '\0';
@@ -174,13 +217,19 @@ void settings_init(void) {
         return;
     }
 
-    if (version == SETTINGS_VERSION && settings_load_v2((const settings_blob_v2_t*)settings_io)) {
-        serial_write("[settings] loaded v2 settings from disk\n");
+    if (version == SETTINGS_VERSION && settings_load_v3((const settings_blob_v3_t*)settings_io)) {
+        serial_write("[settings] loaded v3 settings from disk\n");
+        return;
+    }
+
+    if (version == 2u && settings_load_v2((const settings_blob_v2_t*)settings_io)) {
+        serial_write("[settings] migrated v2 settings to v3\n");
+        settings_save();
         return;
     }
 
     if (version == 1u && settings_load_v1((const settings_blob_v1_t*)settings_io)) {
-        serial_write("[settings] migrated v1 settings to v2\n");
+        serial_write("[settings] migrated v1 settings to v3\n");
         settings_save();
         return;
     }
@@ -235,5 +284,11 @@ void settings_set_wifi_profile(const char *ssid, const char *pass, bool connecte
     kstrncpy(g_settings.wifi_pass, pass, sizeof(g_settings.wifi_pass) - 1);
     g_settings.wifi_pass[sizeof(g_settings.wifi_pass) - 1] = '\0';
     g_settings.wifi_connected = connected;
+    settings_save();
+}
+
+void settings_set_vesa_mode(u32 w, u32 h) {
+    g_settings.vesa_w = w;
+    g_settings.vesa_h = h;
     settings_save();
 }

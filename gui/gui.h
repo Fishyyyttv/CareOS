@@ -118,6 +118,7 @@ extern theme_t *g_theme;
 #define CLIPBOARD_SIZE 4096
 extern char g_clipboard[CLIPBOARD_SIZE];
 extern u32  g_clipboard_len;
+extern bool g_clipboard_is_cut;
 
 /* -- Multi-desktop -------------------------------------------------------- */
 #define DESKTOP_COUNT 4
@@ -237,6 +238,24 @@ typedef struct window {
     u32   browser_history_pos;
     char  browser_history[10][256];
     u32   browser_history_count;
+    /* Browser tabs */
+    u32   browser_tab_count;
+    u32   browser_tab_sel;
+    char  browser_tab_url[4][256];
+    char  browser_tab_title[4][48];
+    i32   browser_tab_scroll[4];
+    /* Browser bookmarks */
+    u32   browser_bm_count;
+    char  browser_bm_url[8][128];
+    char  browser_bm_title[8][32];
+    bool  browser_bm_open;       /* bookmarks dropdown visible */
+    /* Browser find / source */
+    char  browser_find_buf[64];
+    u32   browser_find_len;
+    bool  browser_find_active;
+    bool  browser_source_view;
+    u32   browser_find_count;
+    u32   browser_find_cur;
 
     /* Editor app */
     char  editor_path[FS_PATH_MAX];
@@ -262,6 +281,7 @@ typedef struct window {
     /* Package manager */
     u32   pkgmgr_sel;
     char  pkgmgr_status[128];
+    bool  pkgmgr_installing;
 
     /* WM: maximize/restore */
     bool   maximized;
@@ -375,10 +395,15 @@ void gfx_clear(u32 color);
 void gfx_setpixel(i32 x, i32 y, u32 color);
 void gfx_hline(i32 x, i32 y, i32 len, u32 color);
 void gfx_vline(i32 x, i32 y, i32 len, u32 color);
+/* -- Graphics Primitives -------------------------------------------------- */
 void gfx_rect(i32 x, i32 y, i32 w, i32 h, u32 color);
 void gfx_rect_outline(i32 x, i32 y, i32 w, i32 h, u32 color);
+void gfx_rect_alpha(i32 x, i32 y, i32 w, i32 h, u32 color, u8 alpha);
 void gfx_rect_rounded(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color);
+void gfx_rect_rounded_outline(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color);
+void gfx_rect_blend(i32 x, i32 y, i32 w, i32 h, u32 color, u8 alpha);
 void gfx_shadow(i32 x, i32 y, i32 w, i32 h);
+void gfx_shadow_ext(i32 x, i32 y, i32 w, i32 h, u32 alpha);
 void gfx_circle(i32 cx, i32 cy, i32 r, u32 color);
 void gfx_circle_fill(i32 cx, i32 cy, i32 r, u32 color);
 
@@ -471,7 +496,6 @@ void notify_tick(void);
 bool notify_handle_mouse(mouse_t *m);
 
 /* -- Additional GFX helpers ----------------------------------------------- */
-void gfx_rect_rounded_outline(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color);
 void gfx_gradient_rect(i32 x, i32 y, i32 w, i32 h, u32 c1, u32 c2);
 void gfx_str_clipped(i32 x, i32 y, i32 max_w, const char *s, u32 fg, u32 bg);
 void gfx_set_clip(i32 x, i32 y, i32 w, i32 h);
@@ -481,7 +505,6 @@ void gfx_str_right(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg);
 void gfx_bar(i32 x, i32 y, i32 w, i32 h, u32 bg, u32 fg, u32 pct);
 void gfx_line(i32 x0, i32 y0, i32 x1, i32 y1, u32 color);
 void gfx_triangle_fill(i32 x0, i32 y0, i32 x1, i32 y1, i32 x2, i32 y2, u32 c);
-void gfx_shadow_ext(i32 x, i32 y, i32 w, i32 h, i32 depth);
 void gfx_str_bold(i32 x, i32 y, const char *s, u32 fg, u32 bg);
 
 /* -- WM helpers ----------------------------------------------------------- */
@@ -526,8 +549,16 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m);
 void app_calc_click(window_t *w, i32 x, i32 y);
 void app_sysmon_click(window_t *w, i32 x, i32 y);
 void app_browser_click(window_t *w, i32 x, i32 y);
+void app_browser_scroll(window_t *w, i32 delta);
 void app_pkgmgr_click(window_t *w, i32 x, i32 y);
 void app_paint_click(window_t *w, i32 x, i32 y, mouse_t *m);
 void app_users_click(window_t *w, i32 x, i32 y);
+
+/* -- System Sounds --------------------------------------------------------- */
+void speaker_play(u32 freq);
+void speaker_stop(void);
+void speaker_beep(u32 freq, u32 ms);
+void speaker_startup(void);
+void speaker_error(void);
 
 #endif /* GUI_H */

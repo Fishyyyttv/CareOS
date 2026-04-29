@@ -39,7 +39,7 @@ static const char sc_shifted[128] = {
     '7','8','9','-','4','5','6','+','1','2','3','0','.', 0,0,0,0,0
 };
 
-static void kb_push(char c) {
+void kb_push_char(char c) {
     u32 next = (kb_head + 1) % KB_BUF_SIZE;
     if (next != kb_tail) {
         kb_buf[kb_head] = c;
@@ -64,7 +64,12 @@ static void keyboard_irq(registers_t *r) {
     if (key < 128) {
         bool use_upper = shift_down ^ caps_lock;
         char c = use_upper ? sc_shifted[key] : sc_normal[key];
-        if (c) kb_push(c);
+        if (ctrl_down && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+            char lc = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+            kb_push_char(lc & 0x1F);
+            return;
+        }
+        if (c) kb_push_char(c);
     }
 }
 

@@ -29,6 +29,7 @@ static u32      open_count    = 0;   /* for cascade offset */
 /* -- Global clipboard ----------------------------------------------------- */
 char g_clipboard[CLIPBOARD_SIZE] = {0};
 u32  g_clipboard_len = 0;
+bool g_clipboard_is_cut = false;
 
 /* -- Multi-desktop -------------------------------------------------------- */
 u32  g_current_desktop = 0;
@@ -809,10 +810,14 @@ void wm_handle_mouse(mouse_t *m) {
         if (fw && !fw->minimized) {
             rect_t scr = wm_client_rect(fw);
             if (rect_contains(scr, m->x, m->y)) {
-                if (fw->scroll + m->scroll_delta >= 0)
-                    fw->scroll = (u32)((i32)fw->scroll + m->scroll_delta);
-                else
-                    fw->scroll = 0;
+                if (fw->app == APP_BROWSER) {
+                    app_browser_scroll(fw, m->scroll_delta);
+                } else {
+                    if (fw->scroll + m->scroll_delta >= 0)
+                        fw->scroll = (u32)((i32)fw->scroll + m->scroll_delta);
+                    else
+                        fw->scroll = 0;
+                }
             }
         }
     }

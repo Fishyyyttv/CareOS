@@ -411,6 +411,8 @@ pci_device_t *pci_find_class(u8 cls, u8 sub);
 pci_device_t *pci_find_device(u16 vendor, u16 device);
 u32           pci_device_count(void);
 pci_device_t *pci_device_get(u32 idx);
+const char   *pci_vendor_name(u16 vid);
+const char   *pci_device_name(u16 vid, u16 did);
 
 /* -- ATA / Storage driver ------------------------------------------------- */
 void        ata_init(void);
@@ -532,6 +534,8 @@ typedef struct {
     bool wifi_connected;
     char wifi_ssid[32];
     char wifi_pass[64];
+    u32  vesa_w;
+    u32  vesa_h;
 } careos_settings_t;
 
 void settings_init(void);
@@ -543,6 +547,45 @@ void settings_set_clock_24h(bool enabled);
 void settings_set_wallpaper(u32 wallpaper);
 void settings_set_taskbar_centered(bool centered);
 void settings_set_wifi_profile(const char *ssid, const char *pass, bool connected);
+void settings_set_vesa_mode(u32 w, u32 h);
+
+/* -- Pipes ---------------------------------------------------------------- */
+#define PIPE_BUF_SIZE 4096
+
+typedef struct {
+    char buf[PIPE_BUF_SIZE];
+    u32  len;
+    bool closed;
+} pipe_t;
+
+pipe_t *pipe_create(void);
+int     pipe_write(pipe_t *p, const char *data, u32 len);
+int     pipe_read(pipe_t *p, char *out, u32 maxlen);
+void    pipe_close(pipe_t *p);
+void    pipe_reset(pipe_t *p);
+
+/* -- Signals -------------------------------------------------------------- */
+#define SIGINT  2
+#define SIGKILL 9
+
+void signal_send(u32 task_id, u32 sig);
+void kb_push_char(char c);
+
+/* -- BGA / VESA mode switching -------------------------------------------- */
+typedef struct {
+    u16         w, h;
+    const char *label;
+} vesa_mode_t;
+
+void        vesa_init(void);
+int         vesa_set_mode(u16 w, u16 h);
+u32         vesa_mode_count(void);
+vesa_mode_t vesa_mode_get(u32 idx);
+u16         vesa_current_w(void);
+u16         vesa_current_h(void);
+
+/* -- Chunked HTTP --------------------------------------------------------- */
+void http_decode_chunked(char *buf, u32 len, u32 *out_len);
 
 /* GDT / GDT pointer -- exposed so scheduler.c can install the TSS */
 extern u64         gdt[8];

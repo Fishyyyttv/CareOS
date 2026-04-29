@@ -46,6 +46,39 @@ void pci_write32(u8 bus, u8 dev, u8 func, u8 offset, u32 val) {
 }
 
 /* ── PCI class/subclass names (abbreviated) ────────────────────────────────── */
+/* ── PCI Vendor/Device names lookup ────────────────────────────────────────── */
+const char *pci_vendor_name(u16 vid) {
+    switch (vid) {
+    case 0x8086: return "Intel";
+    case 0x10EC: return "Realtek";
+    case 0x1AF4: return "VirtIO";
+    case 0x1234: return "QEMU";
+    case 0x1022: return "AMD";
+    case 0x10DE: return "NVIDIA";
+    default:     return "Unknown";
+    }
+}
+
+const char *pci_device_name(u16 vid, u16 did) {
+    if (vid == 0x8086) {
+        switch (did) {
+        case 0x1237: return "440FX Chipset";
+        case 0x7000: return "PIIX3 ISA Bridge";
+        case 0x7010: return "PIIX3 IDE Controller";
+        case 0x7113: return "PIIX4 Power Mgmt";
+        case 0x100E: return "82540EM (e1000)";
+        case 0x10D3: return "82574L (e1000e)";
+        case 0x2415: return "AC'97 Audio";
+        default:     break;
+        }
+    } else if (vid == 0x1234) {
+        if (did == 0x1111) return "Std VGA Adapter";
+    } else if (vid == 0x1AF4) {
+        if (did >= 0x1000 && did <= 0x103F) return "VirtIO Device";
+    }
+    return "Generic Peripheral";
+}
+
 static const char *pci_class_name(u8 cls, u8 sub) {
     switch (cls) {
     case 0x00: return "Legacy";
@@ -197,12 +230,11 @@ void pci_list(void) {
         char did[6]; kutoa(d->device_id, did, 16);
         kstrcat(buf, did); kstrcat(buf, "  ");
 
-        const char *cls = pci_class_name(d->class_code, d->subclass);
-        kstrcat(buf, cls); kstrcat(buf, "    ");
-
-        char irq[4]; kutoa(d->irq, irq, 10);
-        kstrcat(buf, irq);
-
+        /* Show vendor + device name */
+        const char *vname = pci_vendor_name(d->vendor_id);
+        const char *dname = pci_device_name(d->vendor_id, d->device_id);
+        kstrcat(buf, vname); kstrcat(buf, " "); kstrcat(buf, dname);
+        
         terminal_writeln(buf);
     }
 }

@@ -1,6 +1,7 @@
 /* =============================================================================
- * CareOS - kernel/kernel.c
- * Multiboot2 boot path, staged initialization, framebuffer probe, GUI launch.
+ * CareOS v9 -- kernel/kernel.c
+ * Licensed under the GNU General Public License v3 (GPLv3).
+ * Copyright (C) 2026 [Your Name]
  * ============================================================================= */
 #include "kernel.h"
 #include "gui.h"
@@ -82,6 +83,16 @@ void kernel_main(u64 magic, u64 mbi_addr){
     timer_init(PIT_HZ);  slog_ok("PIT timer");
     keyboard_init();     slog_ok("PS/2 keyboard");
     vfs_init();          slog_ok("VFS");
+
+    /* Ensure standard VFS directories exist */
+    {
+        fs_node_t *usr = vfs_find(vfs_root(), "usr");
+        if (!usr) usr = vfs_mkdir(vfs_root(), "usr");
+        if (usr) { fs_node_t *b = vfs_find(usr, "bin"); if (!b) vfs_mkdir(usr, "bin"); }
+        fs_node_t *var = vfs_find(vfs_root(), "var");
+        if (!var) var = vfs_mkdir(vfs_root(), "var");
+        if (var) { fs_node_t *pkg = vfs_find(var, "pkg"); if (!pkg) vfs_mkdir(var, "pkg"); }
+    }
     paging_init();       slog_ok("Paging");
     syscall_init();      slog_ok("Syscalls");
 
@@ -269,6 +280,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
     serial_write("  Calling gui_init...\n");
     gui_init((u32*)fb_addr, fb_w, fb_h, fb_pitch);
     serial_write("  gui_init complete\n");
+    vesa_init();          slog_ok("VESA/BGA");
 
     serial_write("  Calling gui_run (enters main loop)...\n");
     gui_run();

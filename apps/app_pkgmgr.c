@@ -209,8 +209,14 @@ void app_pkgmgr_draw(window_t *w){
     i32 sb_y = cr.y + cr.h - PKG_SB_H;
     gfx_rect(cr.x, sb_y, cr.w, PKG_SB_H, g_theme->surface3);
     gfx_hline(cr.x, sb_y, cr.w, COL_BORDER);
-    char status[64]; kstrcpy(status, "Status: "); kstrcat(status, w->pkgmgr_status);
-    gfx_str(cr.x + 12, sb_y + (PKG_SB_H - FONT_H) / 2, status, g_theme->dim, g_theme->surface3);
+    if (w->pkgmgr_installing) {
+        static const char *dot_frames[] = { "Installing", "Installing.", "Installing..", "Installing..." };
+        const char *msg = dot_frames[(timer_get_ticks() / 20) % 4];
+        gfx_str(cr.x + 12, sb_y + (PKG_SB_H - FONT_H) / 2, msg, COL_ACCENT, g_theme->surface3);
+    } else {
+        char status[64]; kstrcpy(status, "Status: "); kstrcat(status, w->pkgmgr_status);
+        gfx_str(cr.x + 12, sb_y + (PKG_SB_H - FONT_H) / 2, status, g_theme->dim, g_theme->surface3);
+    }
     char cnt_s[32]; kstrcpy(cnt_s, "Installed: ");
     char cnt[8]; kutoa(carepkg_count(), cnt, 10); kstrcat(cnt_s, cnt);
     gfx_str_right(cr.x, sb_y + (PKG_SB_H - FONT_H) / 2, cr.w - 12, cnt_s,
@@ -261,7 +267,9 @@ void app_pkgmgr_click(window_t *w, i32 x, i32 y){
                 if (!carepkg_get_info(i, name, ver, desc, cat, &installed)) continue;
                 if (!installed) continue;
                 if (shown == row) {
+                    w->pkgmgr_installing = true;
                     carepkg_remove(name);
+                    w->pkgmgr_installing = false;
                     kstrcpy(w->pkgmgr_status, "Removed: "); kstrcat(w->pkgmgr_status, name);
                     break;
                 }
@@ -284,7 +292,9 @@ void app_pkgmgr_click(window_t *w, i32 x, i32 y){
                     if (!is_care) continue;
                     if (shown == row) {
                         char path[FS_PATH_MAX]; kstrcpy(path, "/tmp/"); kstrcat(path, f->name);
+                        w->pkgmgr_installing = true;
                         int r = carepkg_install(path);
+                        w->pkgmgr_installing = false;
                         kstrcpy(w->pkgmgr_status, r == 0 ? "Installed: " : "Failed: ");
                         kstrcat(w->pkgmgr_status, f->name);
                         break;
