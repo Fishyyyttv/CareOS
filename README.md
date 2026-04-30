@@ -1,4 +1,4 @@
-<h1 align="center">🖥️ CareOS v9</h1>
+<h1 align="center">🖥️ CareOS v1</h1>
 
 <p align="center">
   <b>A high-performance, minimalist 64-bit operating system built from scratch.</b><br>
@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v9.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/version-v1-blue?style=for-the-badge">
   <img src="https://img.shields.io/badge/license-GPLv3-green?style=for-the-badge">
   <img src="https://img.shields.io/badge/platform-x86__64-orange?style=for-the-badge">
 </p>
