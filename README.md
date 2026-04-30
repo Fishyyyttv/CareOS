@@ -31,7 +31,7 @@ Built for:
 - 64-bit x86_64 architecture  
 - Preemptive multitasking  
 - Virtual memory + paging  
-- Modular design for scalability  
+- Modular and extensible design  
 
 ---
 
@@ -40,34 +40,34 @@ Built for:
 - Glassmorphic UI (blur, transparency, shadows)  
 - Smooth animations  
 - 32-bpp framebuffer rendering  
-- SSE2 optimizations  
+- SSE2-optimized graphics routines  
 
 ---
 
 ### 🌐 Networking
 - Intel **e1000** Ethernet driver  
-- IPv4 support  
-- Experimental:
+- IPv4 networking stack  
+- Experimental support:
   - TLS 1.3  
-  - HTTPS  
+  - HTTPS requests  
 
 ---
 
-### 💻 Shell & Tools
-- Interactive shell  
+### 💻 Shell & System Tools
+- Interactive command shell  
 - File system navigation  
 - Hardware inspection (`lspci`)  
-- Built-in system utilities  
+- Core system utilities  
 
 ---
 
-### 🛠️ Applications
+### 🛠️ Built-in Applications
 
 | App | Description |
 |-----|------------|
-| 🌍 Browser | Lightweight HTML/CSS rendering |
-| 📊 System Monitor | Real-time CPU & memory stats |
-| 📝 Editor | Persistent notes with clipboard |
+| 🌍 Browser | Lightweight HTML/CSS rendering engine |
+| 📊 System Monitor | Real-time CPU, memory, and hardware stats |
+| 📝 Editor | Persistent notes and file editing |
 | 📁 Files | Visual file manager |
 
 ---
@@ -78,7 +78,7 @@ Built for:
 |------|----------|
 | Kernel | C, x86_64 Assembly |
 | Bootloader | GRUB (Multiboot2) |
-| Build | GNU Make, GCC, NASM |
+| Build System | GNU Make, GCC, NASM |
 | Virtualization | QEMU |
 | Graphics | 32-bpp Linear Framebuffer |
 
@@ -88,7 +88,9 @@ Built for:
 
 ### 📦 Requirements
 
-- `gcc` (x86_64-elf recommended)  
+Make sure you have:
+
+- `gcc` (x86_64-elf cross-compiler recommended)  
 - `nasm`  
 - `make`  
 - `qemu-system-x86_64`  
