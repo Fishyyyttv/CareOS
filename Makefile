@@ -42,6 +42,7 @@ C_SRC     := kernel/kernel.c       \
              kernel/elf.c          \
              kernel/ext2.c         \
              kernel/pipe.c         \
+             kernel/care_lang.c    \
              drivers/vga.c         \
              drivers/timer.c       \
              drivers/keyboard.c    \

@@ -638,6 +638,7 @@ static void exec_cmd(char *line){
          terminal_write("  Pkgs:    carepkg [install|remove|update|search|list] <pkg>\n");
          terminal_write("  Config:  settings show | settings set <key> <value>\n");
          terminal_write("  Shell:   history  clear  env  alias  exit  reboot  halt\n");
+         terminal_write("  Script:  care <file.cl>  -- run a Care language script\n");
          return;
      }
  
@@ -690,6 +691,15 @@ static void exec_cmd(char *line){
          }
          char out[64]; ksprintf(out,"%u %u %u\n",lines,words,bytes);
          shout(out); return;
+     }
+
+     /* care <file.cl> -- run a Care language script */
+     if (!kstrcmp(cmd,"care")) {
+         if (argc<2) { terminal_write("usage: care <file.cl>\n"); return; }
+         fs_node_t *f=(argv[1][0]=='/')?vfs_resolve_path(argv[1]):vfs_find(cwd,argv[1]);
+         if (!f||f->type!=FS_FILE) { terminal_write("care: file not found\n"); return; }
+         if (care_lang_exec(f->data,f->size)!=0) terminal_write("care: script error\n");
+         return;
      }
 
      /* Not found */

@@ -25,7 +25,16 @@
       "PowerShell(Get-Command *)",
       "PowerShell($env:PATH -split ';' | Where-Object { $_ -ne '' } | Select-Object -First 30)",
       "Bash(where wsl *)",
-      "Bash(ls *)"
+      "Bash(ls *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Read(//c/msys64/usr/bin/**)",
+      "Read(//c/msys64/mingw64/bin/**)",
+      "Bash(command -v wsl)",
+      "Bash(command -v make)",
+      "Bash(command -v i686-w64-mingw32-gcc)",
+      "PowerShell(Test-Path *)",
+      "Bash(git commit -m 'fix: add forward declaration for browser_save_tab to resolve implicit-declaration error *)"
     ]
   }
 }

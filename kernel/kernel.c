@@ -92,6 +92,79 @@ void kernel_main(u64 magic, u64 mbi_addr){
         fs_node_t *var = vfs_find(vfs_root(), "var");
         if (!var) var = vfs_mkdir(vfs_root(), "var");
         if (var) { fs_node_t *pkg = vfs_find(var, "pkg"); if (!pkg) vfs_mkdir(var, "pkg"); }
+
+        /* /System directory with info and Care language samples */
+        fs_node_t *sys = vfs_find(vfs_root(), "System");
+        if (!sys) sys = vfs_mkdir(vfs_root(), "System");
+        if (sys) {
+            fs_node_t *ver = vfs_mkfile(sys, "version");
+            if (ver) {
+                const char *s = "CareOS v9\nBuild: 2026\nKernel: 9.0.0\nArch: x86-64\n";
+                vfs_write(ver, s, (u32)kstrlen(s));
+            }
+            fs_node_t *inf = vfs_mkfile(sys, "info");
+            if (inf) {
+                const char *s =
+                    "CareOS is a lightweight custom operating system.\n"
+                    "Built from scratch in C and x86-64 assembly.\n"
+                    "Features: GUI, networking, VFS, package manager.\n"
+                    "Care Language (.cl) is the native scripting language.\n";
+                vfs_write(inf, s, (u32)kstrlen(s));
+            }
+            fs_node_t *samp = vfs_mkdir(sys, "samples");
+            if (samp) {
+                fs_node_t *h = vfs_mkfile(samp, "hello.cl");
+                if (h) {
+                    const char *s =
+                        "# Hello World in Care language\n"
+                        "var name = \"CareOS\";\n"
+                        "print \"Hello from \" + name + \"!\";\n"
+                        "var x = 42;\n"
+                        "print \"The answer is \" + x;\n";
+                    vfs_write(h, s, (u32)kstrlen(s));
+                }
+                fs_node_t *ct = vfs_mkfile(samp, "counter.cl");
+                if (ct) {
+                    const char *s =
+                        "# Counter example\n"
+                        "var i = 1;\n"
+                        "while (i <= 5) {\n"
+                        "    print i;\n"
+                        "    i = i + 1;\n"
+                        "}\n"
+                        "print \"Done!\";\n";
+                    vfs_write(ct, s, (u32)kstrlen(s));
+                }
+                fs_node_t *fb = vfs_mkfile(samp, "grades.cl");
+                if (fb) {
+                    const char *s =
+                        "# Grade checker and sum calculator\n"
+                        "var score = 85;\n"
+                        "print \"Score: \" + score;\n"
+                        "if (score >= 90) {\n"
+                        "    print \"Grade: A\";\n"
+                        "} else {\n"
+                        "    if (score >= 80) {\n"
+                        "        print \"Grade: B\";\n"
+                        "    } else {\n"
+                        "        if (score >= 70) {\n"
+                        "            print \"Grade: C\";\n"
+                        "        } else {\n"
+                        "            print \"Grade: F\";\n"
+                        "        }\n"
+                        "    }\n"
+                        "}\n"
+                        "var i = 1;\n"
+                        "var sum = 0;\n"
+                        "while (i <= 10) {\n"
+                        "    sum = sum + i;\n"
+                        "    i = i + 1;\n"
+                        "}\n"
+                        "print \"Sum 1..10 = \" + sum;\n";
+                    vfs_write(fb, s, (u32)kstrlen(s));
+                }
+            }
+        }
     }
     paging_init();       slog_ok("Paging");
     syscall_init();      slog_ok("Syscalls");

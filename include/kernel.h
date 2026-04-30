@@ -294,6 +294,10 @@ void carepkg_run(const char *cmd, const char *pkg);
 /* -- System info ---------------------------------------------------------- */
 void sysinfo_print(void);
 
+/* -- Care Language interpreter -------------------------------------------- */
+int care_lang_exec(const char *src, u32 len);
+int care_lang_exec_buf(const char *src, u32 len, char *out, u32 out_max);
+
 /* -- Kernel main ---------------------------------------------------------- */
 void kernel_main(u64 magic, u64 mbi_addr);
 

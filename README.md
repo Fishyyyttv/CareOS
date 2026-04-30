@@ -1,70 +1,130 @@
-# CareOS v9
+CareOS v9
 
-CareOS is a high-performance, minimalist 64-bit operating system built from scratch. It features a modern window manager, a robust networking stack, and a custom graphics engine designed for fluid, responsive user experiences.
+CareOS is a high-performance, minimalist 64-bit operating system built entirely from scratch. Designed with both responsiveness and extensibility in mind, it combines a modern graphical environment with low-level system control, offering a clean foundation for experimentation, learning, and future expansion.
 
-![CareOS Logo](https://img.shields.io/badge/CareOS-v9.0-blue?style=for-the-badge)
-![License](https://img.shields.io/badge/License-GPLv3-green?style=for-the-badge)
-![Platform](https://img.shields.io/badge/Platform-x86__64-orange?style=for-the-badge)
+<p align="center"> <img src="https://img.shields.io/badge/CareOS-v9.0-blue?style=for-the-badge"> <img src="https://img.shields.io/badge/License-GPLv3-green?style=for-the-badge"> <img src="https://img.shields.io/badge/Platform-x86__64-orange?style=for-the-badge"> </p>
+✨ Overview
 
-## ✨ Features
+CareOS is built to explore what a modern, lightweight operating system can look like when performance, simplicity, and visual polish are prioritized together.
 
-- **🚀 64-Bit Kernel**: Fully preemptive multitasking, paging, and memory management.
-- **🎨 Glassmorphic GUI**: A modern desktop environment with alpha blending, window shadows, and smooth animations.
-- **🌐 Networking Stack**: Built-in Ethernet driver (e1000) with support for IPv4 and experimental TLS 1.3/HTTPS.
-- **💻 Interactive Shell**: A feature-rich terminal with support for VFS navigation, hardware inventory (`lspci`), and file manipulation.
-- **🛠️ Integrated Apps**: 
-  - **Browser**: Modern web rendering with CSS/HTML support.
-  - **System Monitor**: Real-time CPU, Memory, and Hardware tracking.
-  - **Editor/Notes**: Persistent file editing with clipboard support.
-  - **Files**: Visual file management.
+It includes a custom kernel, window manager, networking stack, and userland applications, all designed to work cohesively without unnecessary abstraction layers.
 
-## 🛠️ Tech Stack
+🚀 Core Features
+🧠 Kernel Architecture
+Fully 64-bit kernel targeting x86_64
+Preemptive multitasking with process scheduling
+Paging + virtual memory management
+Modular structure for future scalability
+🎨 Graphical Environment
+Custom window manager
+Glassmorphic UI design
+Alpha transparency
+Window shadows
+Smooth animations
+GPU-independent rendering via:
+32-bpp linear framebuffer
+SSE2 optimizations for performance
+🌐 Networking Stack
+Native Ethernet support (Intel e1000)
+IPv4 networking implementation
+Experimental:
+TLS 1.3
+Basic HTTPS support
+💻 Shell & System Tools
+Interactive command-line interface
+Built-in utilities:
+lspci for hardware inspection
+File system navigation
+File manipulation tools
+Designed to integrate tightly with the OS internals
+🛠️ Built-in Applications
+🌍 Browser
+Lightweight rendering engine
+Basic HTML/CSS support
+Networking integration with OS stack
+📊 System Monitor
+Real-time tracking of:
+CPU usage
+Memory usage
+Hardware activity
+📝 Editor / Notes
+Persistent file editing
+Clipboard support
+Minimal and fast interface
+📁 File Manager
+Visual file navigation
+Directory management
+Integrated with system storage layer
+🧱 Tech Stack
+Component	Technology
+Kernel	C, x86_64 Assembly
+Bootloader	GRUB (Multiboot2)
+Build System	GNU Make, GCC, NASM
+Virtualization	QEMU
+Graphics	Linear Framebuffer (32-bpp)
+🚀 Getting Started
+📦 Prerequisites
 
-- **Kernel**: C, x86_64 Assembly
-- **Bootloader**: GRUB / Multiboot2
-- **Build System**: GNU Make, GCC, NASM
-- **Graphics**: 32-bpp Linear Framebuffer with SSE2 optimizations
+Make sure you have the following installed:
 
-## 🚀 Getting Started
-
-### Prerequisites
-
-You will need the following tools installed on your system:
-- `gcc` (cross-compiler for x86_64-elf recommended, but local gcc works on Linux)
-- `nasm`
-- `make`
-- `qemu-system-x86_64`
-- `grub-mkrescue` (for ISO generation)
-
-### Build and Run
-
-To compile the OS and launch it in QEMU:
-
-```bash
+gcc (x86_64-elf cross-compiler recommended)
+nasm
+make
+qemu-system-x86_64
+grub-mkrescue
+🔧 Build & Run
 make clean
 make run
-```
 
-### Shortcuts
+This will:
 
-- **Alt + Tab**: Cycle through windows.
-- **Alt + F4**: Close the active window.
-- **Ctrl + 1-4**: Switch between virtual desktops.
-- **Super (Win)**: Open the App Launcher.
+Compile the kernel and modules
+Build a bootable ISO
+Launch CareOS in QEMU
+⌨️ Keyboard Shortcuts
+Shortcut	Action
+Alt + Tab	Switch windows
+Alt + F4	Close active window
+Ctrl + 1–4	Switch virtual desktops
+Super (Win)	Open app launcher
+🤝 Contributing
 
-## 🤝 Contributing
+CareOS is designed to grow through community contributions while maintaining a consistent vision and architecture.
 
-We welcome contributions! To ensure CareOS remains free and open for everyone, this project is licensed under the **GPLv3**. 
+How it works:
+All contributions go through pull requests
+Changes are reviewed before being merged into the main OS
+The main branch remains the official, curated version
+Steps to contribute:
+Fork the repository
 
-1. Fork the project.
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`).
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`).
-4. Push to the branch (`git push origin feature/AmazingFeature`).
-5. Open a Pull Request.
+Create a branch
 
-## 📄 License
+git checkout -b feature/YourFeature
+Commit your changes
+Push your branch
+Open a Pull Request
+Contribution Goals
+Improve performance
+Expand hardware support
+Enhance UI/UX
+Add system tools and applications
+Strengthen networking capabilities
+📄 License
 
-Distributed under the GNU General Public License v3. See `LICENSE` for more information.
+CareOS is licensed under the GNU General Public License v3 (GPLv3).
 
----
-*CareOS - A New Standard for Minimalist Computing.*
+This ensures:
+
+The project remains free and open
+All derivatives must also remain open source
+Proper credit is preserved
+
+See the LICENSE file for full details.
+
+🌱 Vision
+
+CareOS aims to evolve from a single-developer system into a collaborative platform driven by experimentation, creativity, and technical curiosity.
+
+The goal isn’t just to build an OS —
+it’s to build something people actually want to explore, modify, and improve.

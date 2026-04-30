@@ -252,6 +252,15 @@ static void term_exec(window_t *w,char *line){
         }
         win_append(w,"wifi: unknown action\n");
     }
+    else if(!kstrcmp(cmd,"care")){
+        if(argc<2){win_append(w,"usage: care <file.cl>\n");return;}
+        struct fs_node *f=argv[1][0]=='/'?vfs_resolve_path(argv[1]):vfs_find(term_cwd,argv[1]);
+        if(!f||f->type!=FS_FILE){win_append(w,"care: file not found\n");return;}
+        char outbuf[2048];
+        if(care_lang_exec_buf(f->data,f->size,outbuf,sizeof(outbuf))!=0)
+            win_append(w,"care: script error\n");
+        else if(outbuf[0]) win_append(w,outbuf);
+    }
     else if(!kstrcmp(cmd,"help")){
         win_append(w,"Available commands:\n");
         win_append(w,"- ls, cd, pwd, cat, mkdir, rm, touch\n");
@@ -261,6 +270,7 @@ static void term_exec(window_t *w,char *line){
         win_append(w,"- carepkg, dmesg, settings\n");
         win_append(w,"- sysinfo (--version, --cpu, --mem)\n");
         win_append(w,"- network (--status, --ip)\n");
+        win_append(w,"- care <file.cl>  run a Care language script\n");
     }
     else if(!kstrcmp(cmd,"ping")){
         if(argc<2){win_append(w,"usage: ping <host>\n");return;}

@@ -1,19 +1,69 @@
-/* CareOS v9 -- apps/app_editor.c -- Code Editor */
+/* CareOS v9 -- apps/app_editor.c -- Code Editor
+ * w->tab: 0=normal, 1=find, 2=replace, 3=open/save-dialog
+ * w->input_buf[0..127]: find string (tab=1/2) or path (tab=3); w->input_len = length
+ * w->input_buf[128..255]: replace string (tab=2, null-terminated)
+ * w->cursor_pos: in tab=2: 0=find field, 1=replace field
+ *                in tab=3: 0=Open mode, 1=Save mode */
 #include "apps_common.h"
 
-/* w->tab: 0=normal, 1=find, 2=replace, 3=open-dialog
- * w->input_buf[0..127]: find string (w->input_len = its length)
- * w->input_buf[128..255]: replace string (null-terminated)
- * w->cursor_pos: active field in replace mode (0=find, 1=replace) */
+/* split "/a/b/c" → dir="/a/b" name="c"  (handles root and no-slash cases) */
+static void editor_split_path(const char *path, char *dir, u32 dmax, char *name, u32 nmax) {
+    const char *slash = kstrrchr(path, '/');
+    if (!slash) { dir[0]='\0'; kstrncpy(name,path,nmax-1); name[nmax-1]='\0'; return; }
+    u32 dlen = (u32)(slash-path);
+    if (dlen==0) { dir[0]='/'; dir[1]='\0'; }
+    else { u32 c=dlen<dmax-1?dlen:dmax-1; kmemcpy(dir,path,c); dir[c]='\0'; }
+    kstrncpy(name,slash+1,nmax-1); name[nmax-1]='\0';
+}
+
+/* Save w->text_buf to path, creating intermediate file if needed.
+ * If path is a directory, appends /untitled.cl.
+ * Updates w->editor_path, clears modified flag, closes dialog. */
+static void editor_save_to_path(window_t *w, const char *path) {
+    if (!path[0]) { notify_push("Editor","No path",g_theme->error); return; }
+
+    char sp[FS_PATH_MAX];
+    kstrncpy(sp,path,FS_PATH_MAX-1); sp[FS_PATH_MAX-1]='\0';
+
+    fs_node_t *target = vfs_resolve_path(sp);
+
+    if (target && target->type==FS_DIR) {
+        kstrcat(sp,"/untitled.cl");
+        target = vfs_resolve_path(sp);
+    }
+
+    if (!target) {
+        char dir_p[FS_PATH_MAX], name_p[FS_NAME_MAX];
+        editor_split_path(sp, dir_p, sizeof(dir_p), name_p, sizeof(name_p));
+        if (!name_p[0]) { notify_push("Editor","Invalid path",g_theme->error); return; }
+        fs_node_t *parent = dir_p[0] ? vfs_resolve_path(dir_p) : vfs_root();
+        if (!parent || parent->type!=FS_DIR) {
+            notify_push("Editor","Directory not found",g_theme->error); return;
+        }
+        target = vfs_mkfile(parent, name_p);
+    }
+
+    if (!target) { notify_push("Editor","Cannot create file",g_theme->error); return; }
+
+    vfs_write(target, w->text_buf, w->text_len);
+    kstrncpy(w->editor_path,sp,FS_PATH_MAX-1); w->editor_path[FS_PATH_MAX-1]='\0';
+    w->editor_modified = false;
+    w->tab = 0;
+    w->cursor_pos = 0;
+    notify_push("Editor","File saved",g_theme->success);
+}
 
 void app_editor_init(window_t *w){
     win_clear(w);
-    win_append(w,"/* CareOS v9 Code Editor */\n\n");
-    win_append(w,"#include <syscall.h>\n\n");
-    win_append(w,"int main(void) {\n");
-    win_append(w,"    sys_write(1, \"Hello!\\n\", 7);\n");
-    win_append(w,"    sys_exit(0);\n");
-    win_append(w,"    return 0;\n}\n");
+    win_append(w,"# CareOS Care Language script\n\n");
+    win_append(w,"var greeting = \"Hello, World!\";\n");
+    win_append(w,"print greeting;\n\n");
+    win_append(w,"var x = 5;\n");
+    win_append(w,"while (x > 0) {\n");
+    win_append(w,"    print x;\n");
+    win_append(w,"    x = x - 1;\n");
+    win_append(w,"}\n");
+    win_append(w,"print \"Done!\";\n");
     w->tab = 0;
     w->input_buf[0] = '\0';
     w->input_len = 0;
@@ -140,7 +190,7 @@ void app_editor_draw(window_t *w){
             }
         } else if (w->tab == 3) {
             i32 lbl_w = 5 * FONT_W * sc + 8;
-            gfx_str(cr.x + 8, ty, "Open:", g_theme->dim, COL_TRANSPARENT);
+            gfx_str(cr.x + 8, ty, w->cursor_pos==1 ? "Save:" : "Open:", g_theme->dim, COL_TRANSPARENT);
             i32 ff_x = cr.x + 8 + lbl_w;
             i32 ff_w = cr.w - 8 - lbl_w - 76;
             if (ff_w < 20) ff_w = 20;
@@ -178,11 +228,25 @@ void app_editor_draw(window_t *w){
         char tmp[140]; if (len > 139) len = 139;
         kmemcpy(tmp, p, len); tmp[len] = '\0';
 
+        /* trim leading whitespace for keyword matching */
+        const char *tr = tmp;
+        while (*tr==' '||*tr=='\t') tr++;
+
         u32 fc = COL_TEXT;
-        if (kstrncmp(tmp,"#include",8)==0 || kstrncmp(tmp,"#define",7)==0) fc = COL_PURPLE;
-        else if (kstrncmp(tmp,"    /",5)==0 || kstrncmp(tmp,"/*",2)==0 || kstrncmp(tmp,"//",2)==0) fc = g_theme->muted;
-        else if (kstrncmp(tmp,"int ",4)==0 || kstrncmp(tmp,"void ",5)==0 || kstrncmp(tmp,"char ",5)==0 || kstrncmp(tmp,"    return",10)==0) fc = COL_CYAN;
-        else if (kstrncmp(tmp,"    sys_",8)==0) fc = g_theme->success;
+        /* comments */
+        if (*tr=='#' || kstrncmp(tr,"//",2)==0 || kstrncmp(tr,"/*",2)==0) fc = g_theme->muted;
+        /* Care keywords */
+        else if (kstrncmp(tr,"var ",4)==0)    fc = COL_CYAN;
+        else if (kstrncmp(tr,"print ",6)==0 || kstrncmp(tr,"print;",6)==0) fc = g_theme->success;
+        else if (kstrncmp(tr,"if ",3)==0   || kstrncmp(tr,"if(",3)==0)   fc = COL_PURPLE;
+        else if (kstrncmp(tr,"else",4)==0)    fc = COL_PURPLE;
+        else if (kstrncmp(tr,"while ",6)==0 || kstrncmp(tr,"while(",6)==0) fc = COL_PURPLE;
+        else if (kstrncmp(tr,"return",6)==0)  fc = COL_PURPLE;
+        else if (kstrncmp(tr,"func ",5)==0)   fc = COL_CYAN;
+        /* C keywords (for editing C files too) */
+        else if (kstrncmp(tr,"#include",8)==0||kstrncmp(tr,"#define",7)==0) fc = COL_PURPLE;
+        else if (kstrncmp(tr,"int ",4)==0||kstrncmp(tr,"void ",5)==0||kstrncmp(tr,"char ",5)==0) fc = COL_CYAN;
+        else if (kstrncmp(tr,"sys_",4)==0) fc = g_theme->success;
 
         gfx_str(cr.x + lnw + 6, y, tmp, fc, COL_TRANSPARENT);
 
@@ -211,6 +275,7 @@ void app_editor_key(window_t *w, char c){
     }
     if (c == 0x0F) { /* Ctrl+O: Open */
         w->tab = 3;
+        w->cursor_pos = 0; /* open mode */
         kstrncpy(w->input_buf, w->editor_path, 127);
         w->input_buf[127] = '\0';
         w->input_len = (u32)kstrlen(w->input_buf);
@@ -261,26 +326,32 @@ void app_editor_key(window_t *w, char c){
         return;
     }
 
-    /* Open dialog */
+    /* Open / Save dialog */
     if (w->tab == 3) {
-        if (c == 0x1B) { w->tab = 0; return; }
+        if (c == 0x1B) { w->tab = 0; w->cursor_pos = 0; return; }
         if (c == '\n') {
             w->input_buf[w->input_len] = '\0';
-            fs_node_t *f = vfs_resolve_path(w->input_buf);
-            if (f && f->type == FS_FILE) {
-                kstrncpy(w->editor_path, w->input_buf, FS_PATH_MAX - 1);
-                win_clear(w);
-                if (f->size > 0) {
-                    u32 load_len = f->size < WIN_TEXT_BUF - 1 ? f->size : WIN_TEXT_BUF - 1;
-                    kmemcpy(w->text_buf, f->data, load_len);
-                    w->text_len = load_len;
-                    w->text_buf[load_len] = '\0';
-                }
-                w->editor_modified = false;
-                w->tab = 0;
-                notify_push("Editor", "File opened", g_theme->success);
+            if (w->cursor_pos == 1) {
+                /* Save mode */
+                editor_save_to_path(w, w->input_buf);
             } else {
-                notify_push("Editor", "File not found", g_theme->error);
+                /* Open mode */
+                fs_node_t *f = vfs_resolve_path(w->input_buf);
+                if (f && f->type == FS_FILE) {
+                    kstrncpy(w->editor_path, w->input_buf, FS_PATH_MAX - 1);
+                    win_clear(w);
+                    if (f->size > 0) {
+                        u32 load_len = f->size < WIN_TEXT_BUF - 1 ? f->size : WIN_TEXT_BUF - 1;
+                        kmemcpy(w->text_buf, f->data, load_len);
+                        w->text_len = load_len;
+                        w->text_buf[load_len] = '\0';
+                    }
+                    w->editor_modified = false;
+                    w->tab = 0;
+                    notify_push("Editor", "File opened", g_theme->success);
+                } else {
+                    notify_push("Editor", "File not found", g_theme->error);
+                }
             }
             return;
         }
@@ -304,19 +375,13 @@ void app_editor_key(window_t *w, char c){
         }
     } else if (c == 0x13) { /* Ctrl+S: Save */
         if (w->editor_path[0]) {
-            struct fs_node *f = vfs_resolve_path(w->editor_path);
-            if (!f) f = vfs_mkfile(vfs_root(), w->editor_path);
-            if (f) {
-                vfs_write(f, w->text_buf, w->text_len);
-                w->editor_modified = false;
-                notify_push("Editor", "File saved", g_theme->success);
-            }
+            editor_save_to_path(w, w->editor_path);
         } else {
-            /* No path: activate open dialog to set one */
             w->tab = 3;
+            w->cursor_pos = 1; /* save mode */
             w->input_buf[0] = '\0';
             w->input_len = 0;
-            notify_push("Editor", "Enter a path to save", g_theme->warning);
+            notify_push("Editor", "Enter path to save", g_theme->warning);
         }
     } else if (c == 0x03) { /* Ctrl+C: Copy all */
         kstrncpy(g_clipboard, w->text_buf, CLIPBOARD_SIZE - 1);
