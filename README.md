@@ -156,4 +156,4 @@ CareOS is evolving from a solo-built system into a collaborative platform.
 
 The goal:
 
-Build an OS people don’t just use — but understand, modify, and improve. ```
+Build an OS people don’t just use — but understand, modify, and improve. 
