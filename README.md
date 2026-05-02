@@ -1,6 +1,6 @@
 # 🖥️ CareOS
 
-A custom 64-bit operating system built from scratch — featuring a graphical environment, custom apps, and even DOOM running natively inside it.
+A custom 64-bit operating system built from scratch — featuring a graphical environment, custom apps, and even DOOM running natively inside it. (No it will actually crash but oh well.)
 
 ---
 
