@@ -129,8 +129,8 @@ typedef void (*isr_handler_t)(registers_t*);
 
 /* -- Memory --------------------------------------------------------------- */
 #define KERNEL_HEAP_START   0x400000    /* 4 MB */
-#define KERNEL_HEAP_SIZE    (16*1024*1024) /* 16 MB heap for 1080p backbuffer + UI state */
-#define KERNEL_RESERVED_BYTES (32*1024*1024) /* keep kernel static data out of PMM free pool */
+#define KERNEL_HEAP_SIZE    (192*1024*1024) /* 192 MB heap */
+#define KERNEL_RESERVED_BYTES (256*1024*1024) /* 256 MB reserved for kernel + VFS pool */
 #define PAGE_SIZE           4096
 
 /* -- Serial (debug) ------------------------------------------------------- */
@@ -148,6 +148,7 @@ void terminal_scroll(void);
 void terminal_write_colored(const char *str, u8 color);
 void kprintf(const char *fmt, ...);
 int  ksprintf(char *buf, const char *fmt, ...);
+int  kvsnprintf(char *out, size_t max, const char *fmt, va_list ap);
 
 /* -- GDT / IDT ------------------------------------------------------------ */
 void gdt_init(void);
@@ -178,8 +179,20 @@ bool keyboard_shift_held(void);
 
 /* -- Memory --------------------------------------------------------------- */
 void  pmm_init(void);
-void *kmalloc(size_t size);
-void  kfree(void *ptr);
+/* -- Memory / Heap -------------------------------------------------------- */
+typedef struct block_hdr {
+    u64              magic;
+    u64              size;
+    bool             free;
+    u8               reserved[15];
+    struct block_hdr *next;
+    struct block_hdr *prev;
+} block_hdr_t;
+
+#define HEAP_MAGIC  0xC4E05AFE
+
+void  *kmalloc(size_t size);
+void   kfree(void *ptr);
 void *kmemset(void *dst, int c, size_t n);
 void *kmemcpy(void *dst, const void *src, size_t n);
 int   kmemcmp(const void *a, const void *b, size_t n);
@@ -206,11 +219,11 @@ void serial_log_clear(void);
 __attribute__((noreturn)) void kernel_panic(u32 code, const char *msg);
 
 /* -- VFS / Filesystem ----------------------------------------------------- */
-#define FS_MAX_FILES    256
+#define FS_MAX_FILES    64
 #define FS_MAX_DIRS     64
 #define FS_NAME_MAX     64
 #define FS_PATH_MAX     256
-#define FS_FILE_DATA_MAX 8192
+#define FS_FILE_DATA_MAX (5*1024*1024)
 
 typedef enum { FS_FILE, FS_DIR } fs_node_type_t;
 
@@ -219,6 +232,7 @@ typedef struct fs_node {
     fs_node_type_t  type;
     u32             size;
     char            data[FS_FILE_DATA_MAX];
+    void           *raw_data; /* if non-NULL, file content lives here (not in data[]) */
     struct fs_node *parent;
     struct fs_node *children[32];
     u32             child_count;
@@ -261,7 +275,7 @@ typedef u64 pte_t;
 #define PTE_PCD     0x010
 
 /* -- Process / Task (cooperative) ----------------------------------------- */
-#define MAX_TASKS 16
+#define MAX_TASKS 32
 typedef void (*task_func_t)(void);
 
 typedef enum { TASK_READY, TASK_RUNNING, TASK_BLOCKED, TASK_DEAD } task_state_t;

@@ -115,8 +115,8 @@ void gfx_flip(void) {
 static u32 *SCREEN_FB;
 static u32  SCREEN_W_VAL, SCREEN_H_VAL, SCREEN_P;
 
-static gfx_buffer_t g_screen_buf;
-static gfx_buffer_t *g_target = &g_screen_buf;
+gfx_buffer_t g_screen_buf;
+gfx_buffer_t *g_target = &g_screen_buf;
 
 void gfx_set_target(gfx_buffer_t *target) {
     if (!target) g_target = &g_screen_buf;

@@ -102,7 +102,8 @@ static int pkg_install_node(fs_node_t *node) {
     /* Simple state machine: 0=pre-header, 1=header, 2=file-body */
     int state = 0;
     char cur_fname[64] = "";
-    char file_content[FS_FILE_DATA_MAX];
+    char *file_content = (char*)kmalloc(FS_FILE_DATA_MAX);
+    if (!file_content) return -1;
     u32  fc_len = 0;
     fs_node_t *app_dir = NULL;
 
@@ -111,6 +112,7 @@ static int pkg_install_node(fs_node_t *node) {
     const char *buf = node->data;
     u32 len = node->size;
 
+    int rc = 0;
     for (u32 i = 0; i <= len; i++) {
         char c = (i < len) ? buf[i] : '\n';
         if (c == '\r') continue;
@@ -124,11 +126,11 @@ static int pkg_install_node(fs_node_t *node) {
             } else if (state == 1) {
                 if (kstrcmp(line,"---FILES---")==0) {
                     /* Validate header before proceeding */
-                    if (tmp.name[0]=='\0') return -1;
+                    if (tmp.name[0]=='\0') { rc = -1; goto _out; }
                     if (find_pkg(tmp.name)) {
                         terminal_write("carepkg: already installed: ");
                         terminal_writeln(tmp.name);
-                        return -1;
+                        rc = -1; goto _out;
                     }
                     /* Check dependencies */
                     if (tmp.deps[0]) {
@@ -143,7 +145,7 @@ static int pkg_install_node(fs_node_t *node) {
                             if (dep_name[0] && !find_pkg(dep_name)) {
                                 terminal_write("carepkg: missing dependency: ");
                                 terminal_writeln(dep_name);
-                                return -1;
+                                rc = -1; goto _out;
                             }
                         }
                     }
@@ -197,7 +199,7 @@ static int pkg_install_node(fs_node_t *node) {
                     /* Accumulate file content */
                     if (fc_len + li + 2 < FS_FILE_DATA_MAX) {
                         if (fc_len > 0) file_content[fc_len++] = '\n';
-                        kstrncpy(file_content + fc_len, line, kstrlen(line));
+                        kmemcpy(file_content + fc_len, line, kstrlen(line));
                         fc_len += kstrlen(line);
                         file_content[fc_len] = '\0';
                     }
@@ -208,7 +210,7 @@ static int pkg_install_node(fs_node_t *node) {
         }
     }
 
-    if (tmp.name[0] == '\0') return -1;
+    if (tmp.name[0] == '\0') { rc = -1; goto _out; }
 
     /* Write manifest file */
     if (app_dir) {
@@ -227,7 +229,10 @@ static int pkg_install_node(fs_node_t *node) {
     terminal_write(" v");
     terminal_writeln(tmp.version);
     carepkg_db_save();
-    return 0;
+
+_out:
+    kfree(file_content);
+    return rc;
 }
 
 static int pkg_install(const char *path) {
@@ -342,7 +347,8 @@ static void carepkg_db_save(void) {
     if (!db) db = vfs_mkfile(pkg_dir, "installed.db");
     if (!db) return;
 
-    char buf[FS_FILE_DATA_MAX];
+    char *buf = (char*)kmalloc(FS_FILE_DATA_MAX);
+    if (!buf) return;
     u32  pos = 0;
     kstrncpy(buf, "# CareOS package database v1\n", FS_FILE_DATA_MAX - 1);
     pos = (u32)kstrlen(buf);
@@ -362,6 +368,7 @@ static void carepkg_db_save(void) {
     }
     buf[pos] = '\0';
     vfs_write(db, buf, pos);
+    kfree(buf);
 }
 
 static void carepkg_db_load(void) {

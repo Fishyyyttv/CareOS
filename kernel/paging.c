@@ -5,7 +5,7 @@
 #include "kernel.h"
 
 /* ── Physical frame allocator ──────────────────────────────────────────────── */
-#define PHYS_MEM_BYTES  (128UL * 1024 * 1024)
+#define PHYS_MEM_BYTES  (4096UL * 1024 * 1024)
 #define FRAME_COUNT     (PHYS_MEM_BYTES / PAGE_SIZE)
 #define BITMAP_WORDS    (FRAME_COUNT / 32)
 
@@ -105,6 +105,7 @@ static int paging_map_internal(pml4e_t *pml4, u64 virt, u64 phys, u32 flags) {
     pte_t *pt = (pte_t*)(pd[pd_i] & ~0xFFFULL);
 
     pt[pt_i] = (phys & ~0xFFFULL) | flags | PDE_PRESENT;
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
     return 0;
 }
 
@@ -122,12 +123,17 @@ void paging_init(void) {
     kmemset(kernel_pdpt, 0, sizeof(kernel_pdpt));
     kmemset(kernel_pd,   0, sizeof(kernel_pd));
 
-    /* Identity map first 1GB using 2MB pages (Huge pages) */
+    /* Identity map first 2GB using 2MB pages (Huge pages) */
     kernel_pml4[0] = (u64)kernel_pdpt | PDE_PRESENT | PDE_RW;
     kernel_pdpt[0] = (u64)kernel_pd   | PDE_PRESENT | PDE_RW;
+    
+    /* Allocate a second PD for the second GB */
+    static pde_t kernel_pd2[512] __attribute__((aligned(4096)));
+    kernel_pdpt[1] = (u64)kernel_pd2 | PDE_PRESENT | PDE_RW;
 
     for (int i = 0; i < 512; i++) {
-        kernel_pd[i] = ((u64)i * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
+        kernel_pd[i]  = ((u64)i * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
+        kernel_pd2[i] = ((u64)(i + 512) * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
     }
 
     register_interrupt_handler(14, page_fault_handler);

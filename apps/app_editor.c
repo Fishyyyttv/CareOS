@@ -68,6 +68,10 @@ void app_editor_init(window_t *w){
     w->input_buf[0] = '\0';
     w->input_len = 0;
     w->cursor_pos = 0;
+    w->editor_show_sidebar = true;
+    w->editor_sidebar_tab = 1; /* Docs by default */
+    w->fm_dir = vfs_resolve_path("/home/user");
+    if (!w->fm_dir) w->fm_dir = vfs_root();
 }
 
 static void editor_find(window_t *w) {
@@ -131,8 +135,73 @@ void app_editor_draw(window_t *w){
     u32 gutter_bg = rgb(0x0b, 0x0f, 0x1a);
     i32 sb_h  = 20 + 4 * sc;
     i32 bar_h = (w->tab != 0) ? 32 : 0;
-    i32 content_h = cr.h - sb_h - bar_h;
+    
+    i32 sidebar_w = 0;
+    if (w->editor_show_sidebar) {
+        sidebar_w = 200 * sc;
+        gfx_rect(cr.x, cr.y, sidebar_w, cr.h, g_theme->surface2);
+        gfx_vline(cr.x + sidebar_w, cr.y, cr.h, COL_BORDER);
+        
+        gfx_rect(cr.x, cr.y, sidebar_w, 24 * sc, g_theme->surface3);
+        gfx_hline(cr.x, cr.y + 24 * sc, sidebar_w, COL_BORDER);
+        gfx_str(cr.x + 8, cr.y + 6 * sc, "Explorer", w->editor_sidebar_tab == 0 ? COL_PRIMARY : COL_DIM, COL_TRANSPARENT);
+        gfx_str(cr.x + 90 * sc, cr.y + 6 * sc, "Docs", w->editor_sidebar_tab == 1 ? COL_PRIMARY : COL_DIM, COL_TRANSPARENT);
+        
+        i32 sy = cr.y + 24 * sc + 4;
+        if (w->editor_sidebar_tab == 0) {
+            if (w->fm_dir) {
+                /* Parent dir link */
+                if (w->fm_dir->parent) {
+                    if (w->fm_sel == 0xFFFFFFFF) gfx_rect(cr.x + 2, sy, sidebar_w - 4, 16 * sc, COL_SELECTION);
+                    gfx_str_clipped(cr.x + 8, sy + 2, sidebar_w - 12, "..", COL_PRIMARY, COL_TRANSPARENT);
+                    sy += 16 * sc;
+                }
+                for (u32 i = 0; i < w->fm_dir->child_count && sy < cr.y + cr.h - 20; i++) {
+                    fs_node_t *ch = w->fm_dir->children[i];
+                    u32 c_col = ch->type == FS_DIR ? COL_PRIMARY : COL_TEXT;
+                    if (i == w->fm_sel) gfx_rect(cr.x + 2, sy, sidebar_w - 4, 16 * sc, COL_SELECTION);
+                    gfx_str_clipped(cr.x + 8, sy + 2, sidebar_w - 12, ch->name, c_col, COL_TRANSPARENT);
+                    sy += 16 * sc;
+                }
+            }
+        } else {
+            static const char *CL_DOCS[] = {
+                "Care Language (CL)", "",
+                "1. Basics",
+                "var x = 10;",
+                "var n = \"Bob\";",
+                "print x;", "",
+                "2. Functions",
+                "func add(a,b) {",
+                "  return a+b;",
+                "}", "",
+                "3. Control Flow",
+                "if (x>5) {",
+                "  print \"Big\";",
+                "} else {",
+                "  print \"Small\";",
+                "}",
+                "while (x>0) {",
+                "  x = x-1;",
+                "}", "",
+                "4. Operators",
+                "+ - * / == !=",
+                "< > <= >=", NULL
+            };
+            for (int i=0; CL_DOCS[i] != NULL && sy < cr.y + cr.h - 16; i++) {
+                u32 tc = COL_DIM;
+                if (CL_DOCS[i][0] >= '1' && CL_DOCS[i][0] <= '9') tc = COL_PRIMARY;
+                else if (kstrncmp(CL_DOCS[i], "Care", 4) == 0) tc = COL_ACCENT;
+                else if (kstrncmp(CL_DOCS[i], "func", 4) == 0 || kstrncmp(CL_DOCS[i], "var", 3) == 0) tc = COL_TEXT;
+                gfx_str_clipped(cr.x + 8, sy, sidebar_w - 12, CL_DOCS[i], tc, COL_TRANSPARENT);
+                sy += 14 * sc;
+            }
+        }
+        cr.x += sidebar_w + 1;
+        cr.w -= sidebar_w + 1;
+    }
 
+    i32 content_h = cr.h - sb_h - bar_h;
     gfx_rect(cr.x, cr.y, cr.w, cr.h, editor_bg);
 
     /* Status bar */
@@ -247,6 +316,7 @@ void app_editor_draw(window_t *w){
         else if (kstrncmp(tr,"#include",8)==0||kstrncmp(tr,"#define",7)==0) fc = COL_PURPLE;
         else if (kstrncmp(tr,"int ",4)==0||kstrncmp(tr,"void ",5)==0||kstrncmp(tr,"char ",5)==0) fc = COL_CYAN;
         else if (kstrncmp(tr,"sys_",4)==0) fc = g_theme->success;
+        else if (*tr == '}' || *tr == '{') fc = COL_DIM;
 
         gfx_str(cr.x + lnw + 6, y, tmp, fc, COL_TRANSPARENT);
 
@@ -262,6 +332,10 @@ void app_editor_draw(window_t *w){
 
 void app_editor_key(window_t *w, char c){
     /* Mode-activation shortcuts (always available) */
+    if (c == 0x02) { /* Ctrl+B: Toggle Sidebar */
+        w->editor_show_sidebar = !w->editor_show_sidebar;
+        return;
+    }
     if (c == 0x06) { /* Ctrl+F: Find */
         w->tab = 1; w->cursor_pos = 0;
         w->input_buf[0] = '\0'; w->input_len = 0;
@@ -396,13 +470,105 @@ void app_editor_key(window_t *w, char c){
             w->editor_modified = true;
         }
     } else if (c >= 32 || c == '\n' || c == '\t') {
-        char ins[5]; ins[0] = c; ins[1] = '\0';
-        if (c == '\t') { kstrcpy(ins, "    "); }
-        u32 l = kstrlen(ins);
+        char ins[128]; 
+        ins[0] = '\0';
+        if (c == '\n') {
+            ins[0] = '\n'; ins[1] = '\0';
+            if (w->text_len > 0) {
+                i32 line_start = w->text_len;
+                while (line_start > 0 && w->text_buf[line_start - 1] != '\n') line_start--;
+                
+                u32 indent = 0;
+                while (line_start + indent < w->text_len && w->text_buf[line_start + indent] == ' ') indent++;
+                
+                bool ends_brace = false;
+                i32 scan = w->text_len - 1;
+                while (scan >= line_start && w->text_buf[scan] == ' ') scan--;
+                if (scan >= line_start && w->text_buf[scan] == '{') ends_brace = true;
+                
+                if (ends_brace) indent += 4;
+                
+                u32 len = 1;
+                for (u32 i = 0; i < indent && len < 127; i++) ins[len++] = ' ';
+                ins[len] = '\0';
+            }
+        } else if (c == '\t') { 
+            kstrcpy(ins, "    "); 
+        } else if (c == '}') {
+            i32 line_start = w->text_len;
+            while (line_start > 0 && w->text_buf[line_start - 1] != '\n') line_start--;
+            bool only_spaces = true;
+            u32 spaces = 0;
+            for (i32 i = line_start; i < (i32)w->text_len; i++) {
+                if (w->text_buf[i] != ' ') { only_spaces = false; break; }
+                spaces++;
+            }
+            if (only_spaces && spaces >= 4) {
+                w->text_len -= 4;
+                w->text_buf[w->text_len] = '\0';
+            }
+            ins[0] = '}'; ins[1] = '\0';
+        } else {
+            ins[0] = c; ins[1] = '\0';
+        }
+        
+        u32 l = (u32)kstrlen(ins);
         if (w->text_len + l < WIN_TEXT_BUF - 1) {
             kstrcpy(w->text_buf + w->text_len, ins);
             w->text_len += l;
             w->editor_modified = true;
         }
+    }
+}
+
+void app_editor_click(window_t *w, i32 x, i32 y, mouse_t *m) {
+    (void)m;
+    rect_t cr = wm_client_rect(w);
+    i32 sc = (i32)GFX_FONT_SCALE;
+    i32 sidebar_w = 200 * sc;
+    
+    if (w->editor_show_sidebar && x >= cr.x && x < cr.x + sidebar_w) {
+        if (y < cr.y + 24 * sc) {
+            /* Clicked tabs */
+            if (x < cr.x + 80 * sc) w->editor_sidebar_tab = 0;
+            else w->editor_sidebar_tab = 1;
+        } else if (w->editor_sidebar_tab == 0 && w->fm_dir) {
+            /* Clicked Explorer item */
+            i32 sy = cr.y + 24 * sc + 4;
+            i32 idx_off = 0;
+            
+            if (w->fm_dir->parent) {
+                if (y >= sy && y < sy + 16 * sc) {
+                    w->fm_dir = w->fm_dir->parent;
+                    w->fm_sel = 0;
+                    return;
+                }
+                sy += 16 * sc;
+            }
+            
+            i32 idx = (y - sy) / (16 * sc);
+            if (idx >= 0 && idx < (i32)w->fm_dir->child_count) {
+                if (w->fm_sel == (u32)idx) {
+                    /* Double click approx */
+                    fs_node_t *ch = w->fm_dir->children[idx];
+                    if (ch->type == FS_DIR) {
+                        w->fm_dir = ch;
+                        w->fm_sel = 0;
+                    } else if (ch->type == FS_FILE) {
+                        /* Open file */
+                        kstrncpy(w->editor_path, ch->name, FS_PATH_MAX - 1);
+                        u32 load_len = ch->size < WIN_TEXT_BUF - 1 ? ch->size : WIN_TEXT_BUF - 1;
+                        kmemcpy(w->text_buf, ch->data, load_len);
+                        w->text_len = load_len;
+                        w->text_buf[load_len] = '\0';
+                        w->editor_modified = false;
+                        notify_push("Editor", "Opened file", g_theme->success);
+                    }
+                } else {
+                    w->fm_sel = (u32)idx;
+                }
+            }
+        }
+        return;
     }
 }

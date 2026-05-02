@@ -42,7 +42,7 @@ static void tss_set_kernel_stack(u64 rsp0) {
 }
 
 /* ── Task control blocks ────────────────────────────────────────────────────── */
-#define TASK_STACK_PAGES 4
+#define TASK_STACK_PAGES 512
 #define TASK_STACK_SIZE  (TASK_STACK_PAGES * PAGE_SIZE)
 #define TIMESLICE_DEFAULT 5
 
@@ -68,9 +68,11 @@ typedef struct tcb {
 
     u32  pending_signals;
     bool task_killed;
+
+    u8   sse_state[512] __attribute__((aligned(16)));
 } tcb_t;
 
-static tcb_t  tasks[MAX_TASKS];
+static tcb_t  tasks[MAX_TASKS] __attribute__((aligned(16)));
 static u32    task_count   = 0;
 static u32    current_task = 0;
 static bool   sched_ready  = false;
@@ -85,26 +87,32 @@ u32 task_current_cr3(void) {
 
 /* ── Context switch (x86_64) ──────────────────────────────────────────────── */
 static void __attribute__((noinline)) switch_context(
-        u64 *old_rsp, u64 new_rsp, u64 new_cr3) {
+        u64 *old_rsp, u64 new_rsp, u64 new_cr3, void *old_sse, void *new_sse) {
     __asm__ volatile (
         "pushfq\n"
         "push %%rax; push %%rbx; push %%rcx; push %%rdx\n"
         "push %%rsi; push %%rdi; push %%rbp; push %%r8\n"
         "push %%r9;  push %%r10; push %%r11; push %%r12\n"
         "push %%r13; push %%r14; push %%r15\n"
+        
+        "fxsave (%3)\n"
+        
         "movq %%rsp, (%0)\n"
         "movq %1, %%rsp\n"
         "test %2, %2\n"
         "jz 1f\n"
         "movq %2, %%cr3\n"
         "1:\n"
+        
+        "fxrstor (%4)\n"
+        
         "pop %%r15; pop %%r14; pop %%r13; pop %%r12\n"
         "pop %%r11; pop %%r10; pop %%r9;  pop %%r8\n"
         "pop %%rbp; pop %%rdi; pop %%rsi; pop %%rdx\n"
         "pop %%rcx; pop %%rbx; pop %%rax\n"
         "popfq\n"
         :
-        : "r"(old_rsp), "r"(new_rsp), "r"(new_cr3)
+        : "r"(old_rsp), "r"(new_rsp), "r"(new_cr3), "r"(old_sse), "r"(new_sse)
         : "memory"
     );
 }
@@ -163,7 +171,7 @@ void scheduler_tick(registers_t *r) {
     tss_set_kernel_stack((u64)(nxt->kstack + TASK_STACK_SIZE));
 
     current_task = next;
-    switch_context(&cur->rsp, nxt->rsp, nxt->cr3);
+    switch_context(&cur->rsp, nxt->rsp, nxt->cr3, cur->sse_state, nxt->sse_state);
 }
 
 static void __attribute__((noinline)) task_trampoline(void) {
@@ -224,6 +232,7 @@ int task_create(const char *name, task_func_t fn) {
     *--sp = 0x202; /* RFLAGS */
     for (int i = 0; i < 15; i++) *--sp = 0; /* 15 registers */
     t->rsp = (u64)sp;
+    __asm__ volatile ("fninit; fxsaveq %0" : "=m"(t->sse_state));
 
     task_count++;
     return (int)(task_count - 1);
@@ -252,6 +261,7 @@ int task_create_user(const char *name, u64 entry, pde_t *page_dir, int session) 
     *--sp = 0x202;
     for (int i = 0; i < 15; i++) *--sp = 0;
     t->rsp = (u64)sp;
+    __asm__ volatile ("fninit; fxsaveq %0" : "=m"(t->sse_state));
 
     task_count++;
     return (int)(task_count - 1);
@@ -281,6 +291,7 @@ void scheduler_init(void) {
 
     task_create("idle", idle_task);
     tasks[0].state = TASK_RUNNING;
+    __asm__ volatile ("fninit; fxsave %0" : "=m"(tasks[0].sse_state));
 
     register_interrupt_handler(IRQ0, (isr_handler_t)scheduler_tick);
     sched_ready = true;

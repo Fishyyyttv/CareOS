@@ -33,6 +33,15 @@ static bool ext2_home_ready = false;
 
 /* -- Node allocation -------------------------------------------------------- */
 static fs_node_t *alloc_node(void) {
+    /* Recycle slots zeroed by vfs_wipe_subtree (name[0]=='\0' means freed) */
+    for (u32 i = 0; i < node_count; i++) {
+        if (node_pool[i].name[0] == '\0') {
+            fs_node_t *n = &node_pool[i];
+            kmemset(n, 0, sizeof(fs_node_t));
+            n->permissions = 0755;
+            return n;
+        }
+    }
     if (node_count >= FS_MAX_FILES + FS_MAX_DIRS) return NULL;
     fs_node_t *n = &node_pool[node_count++];
     kmemset(n, 0, sizeof(fs_node_t));
@@ -513,7 +522,7 @@ int vfs_read(fs_node_t *f, char *buf, u32 len) {
         return n;
     }
     u32 n = f->size < len ? f->size : len;
-    kmemcpy(buf, f->data, n);
+    kmemcpy(buf, f->raw_data ? f->raw_data : (void *)f->data, n);
     return (int)n;
 }
 

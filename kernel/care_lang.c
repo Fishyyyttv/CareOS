@@ -3,6 +3,7 @@
  * Comments: // or #   Strings: "..."   Numbers: integers
  * Operators: + - * /  Comparisons: == != < > <= >= */
 #include "kernel.h"
+#include "../gui/gui.h"
 
 /* ── Tokens ──────────────────────────────────────────────────────────────── */
 typedef enum {
@@ -138,31 +139,57 @@ static cl_val_t vstr(const char *s) {
 
 /* ── Environment ─────────────────────────────────────────────────────────── */
 #define CL_MAX_VARS 32
+#define CL_MAX_FUNCS 16
+#define CL_MAX_ARGS 4
 typedef struct { char name[32]; bool is_str; i32 num; char str[64]; } cl_var_t;
-typedef struct {
+typedef struct { 
+    char name[32]; 
+    bool is_native;
+    cl_val_t (*native_fn)(cl_val_t *args, u32 nargs);
+    u32 body_pos; 
+    char args[CL_MAX_ARGS][32]; 
+    u32 nargs; 
+} cl_func_t;
+typedef struct cl_env_s {
     cl_var_t vars[CL_MAX_VARS];
     u32 nvars;
+    cl_func_t funcs[CL_MAX_FUNCS];
+    u32 nfuncs;
     bool had_error, ret_called;
     i32 ret_num;
+    bool ret_is_str;
+    char ret_str[64];
+    struct cl_env_s *parent;
 } cl_env_t;
 
 static cl_var_t *cl_find(cl_env_t *e, const char *name) {
     for (u32 i=0; i<e->nvars; i++)
         if (kstrcmp(e->vars[i].name,name)==0) return &e->vars[i];
-    return NULL;
+    return e->parent ? cl_find(e->parent, name) : NULL;
 }
-static cl_var_t *cl_make(cl_env_t *e, const char *name) {
-    cl_var_t *v = cl_find(e,name);
-    if (v) return v;
+static cl_var_t *cl_make_local(cl_env_t *e, const char *name) {
+    for (u32 i=0; i<e->nvars; i++)
+        if (kstrcmp(e->vars[i].name,name)==0) return &e->vars[i];
     if (e->nvars >= CL_MAX_VARS) return NULL;
-    v = &e->vars[e->nvars++];
+    cl_var_t *v = &e->vars[e->nvars++];
     kstrncpy(v->name,name,31); v->name[31]='\0';
     v->is_str=false; v->num=0; v->str[0]='\0';
     return v;
 }
+static cl_var_t *cl_make(cl_env_t *e, const char *name) {
+    cl_var_t *v = cl_find(e,name);
+    if (v) return v;
+    return cl_make_local(e, name);
+}
+static cl_func_t *cl_find_func(cl_env_t *e, const char *name) {
+    for (u32 i=0; i<e->nfuncs; i++)
+        if (kstrcmp(e->funcs[i].name,name)==0) return &e->funcs[i];
+    return e->parent ? cl_find_func(e->parent, name) : NULL;
+}
 
 /* ── Expression evaluation ───────────────────────────────────────────────── */
 static cl_val_t cl_expr(cl_env_t *e, lexer_t *l);
+static void cl_block(cl_env_t *e, lexer_t *l);
 
 static cl_val_t cl_primary(cl_env_t *e, lexer_t *l) {
     if (l->cur.type == T_NUM)   { cl_val_t v=vnum(l->cur.num); lex_next(l); return v; }
@@ -170,6 +197,39 @@ static cl_val_t cl_primary(cl_env_t *e, lexer_t *l) {
     if (l->cur.type == T_IDENT) {
         char name[32]; kstrncpy(name,l->cur.str,31); name[31]='\0';
         lex_next(l);
+        if (l->cur.type == T_LPAREN) {
+            lex_next(l);
+            cl_val_t arg_vals[CL_MAX_ARGS]; u32 nargs = 0;
+            while (l->cur.type != T_RPAREN && l->cur.type != T_EOF && nargs < CL_MAX_ARGS) {
+                arg_vals[nargs++] = cl_expr(e,l);
+                if (l->cur.type == T_COMMA) lex_next(l);
+                else break;
+            }
+            if (l->cur.type == T_RPAREN) lex_next(l);
+            
+            cl_func_t *f = cl_find_func(e, name);
+            if (f) {
+                if (f->is_native) {
+                    return f->native_fn(arg_vals, nargs);
+                }
+                cl_env_t fn_env; kmemset(&fn_env,0,sizeof(fn_env));
+                cl_env_t *root = e; while(root->parent) root = root->parent;
+                fn_env.parent = root;
+                for (u32 i=0; i<f->nargs && i<nargs; i++) {
+                    cl_var_t *v = cl_make_local(&fn_env, f->args[i]);
+                    if (v) {
+                        v->is_str = arg_vals[i].is_str;
+                        if (arg_vals[i].is_str) kstrncpy(v->str, arg_vals[i].str, 63); else v->num = arg_vals[i].num;
+                    }
+                }
+                lexer_t fn_lex; fn_lex.src = l->src; fn_lex.pos = f->body_pos; fn_lex.len = l->len;
+                lex_next(&fn_lex);
+                cl_block(&fn_env, &fn_lex);
+                if (fn_env.ret_is_str) return vstr(fn_env.ret_str);
+                return vnum(fn_env.ret_num);
+            }
+            return vnum(0);
+        }
         cl_var_t *v = cl_find(e,name);
         if (!v) return vnum(0);
         return v->is_str ? vstr(v->str) : vnum(v->num);
@@ -273,7 +333,7 @@ static void cl_stmt(cl_env_t *e, lexer_t *l) {
         if (l->cur.type != T_EQ) { e->had_error=true; return; }
         lex_next(l);
         cl_val_t v=cl_expr(e,l);
-        cl_var_t *var=cl_make(e,name);
+        cl_var_t *var=cl_make_local(e,name);
         if (var) { var->is_str=v.is_str; if(v.is_str)kstrncpy(var->str,v.str,63); else var->num=v.num; }
         if (l->cur.type==T_SEMI) lex_next(l);
         return;
@@ -355,9 +415,49 @@ static void cl_stmt(cl_env_t *e, lexer_t *l) {
     /* return [expr]; */
     if (l->cur.type == T_KW_RETURN) {
         lex_next(l);
-        if (l->cur.type!=T_SEMI) { cl_val_t v=cl_expr(e,l); e->ret_num=v.num; }
+        if (l->cur.type!=T_SEMI) {
+            cl_val_t v=cl_expr(e,l);
+            e->ret_is_str = v.is_str;
+            if (v.is_str) kstrncpy(e->ret_str, v.str, 63);
+            else e->ret_num=v.num;
+        }
         e->ret_called=true;
         if (l->cur.type==T_SEMI) lex_next(l);
+        return;
+    }
+
+    /* func name(arg1, arg2) { } */
+    if (l->cur.type == T_KW_FUNC) {
+        lex_next(l);
+        if (l->cur.type != T_IDENT) { e->had_error=true; return; }
+        char fname[32]; kstrncpy(fname,l->cur.str,31); fname[31]='\0';
+        lex_next(l);
+        if (l->cur.type != T_LPAREN) { e->had_error=true; return; }
+        lex_next(l);
+        
+        char args[CL_MAX_ARGS][32]; u32 nargs = 0;
+        while (l->cur.type == T_IDENT && nargs < CL_MAX_ARGS) {
+            kstrncpy(args[nargs], l->cur.str, 31); args[nargs][31]='\0';
+            nargs++;
+            lex_next(l);
+            if (l->cur.type == T_COMMA) lex_next(l);
+            else break;
+        }
+        if (l->cur.type != T_RPAREN) { e->had_error=true; return; }
+        lex_next(l);
+        if (l->cur.type != T_LBRACE) { e->had_error=true; return; }
+        
+        cl_env_t *root = e; while(root->parent) root = root->parent;
+        if (root->nfuncs < CL_MAX_FUNCS) {
+            cl_func_t *f = &root->funcs[root->nfuncs++];
+            kstrncpy(f->name, fname, 31); f->name[31]='\0';
+            f->nargs = nargs;
+            for (u32 i=0; i<nargs; i++) {
+                kstrncpy(f->args[i], args[i], 31); f->args[i][31]='\0';
+            }
+            f->body_pos = l->pos;
+        }
+        cl_skip_block(l);
         return;
     }
 
@@ -390,6 +490,39 @@ static void cl_block(cl_env_t *e, lexer_t *l) {
         cl_stmt(e,l);
 }
 
+/* ── Native Functions ────────────────────────────────────────────────────── */
+static void cl_register_native(cl_env_t *e, const char *name, cl_val_t (*native_fn)(cl_val_t*, u32)) {
+    if (e->nfuncs >= CL_MAX_FUNCS) return;
+    cl_func_t *f = &e->funcs[e->nfuncs++];
+    kstrncpy(f->name, name, 31); f->name[31]='\0';
+    f->is_native = true;
+    f->native_fn = native_fn;
+}
+
+static cl_val_t nat_sys_alert(cl_val_t *args, u32 nargs) {
+    if (nargs > 0 && args[0].is_str) notify_push("CareLang", args[0].str, COL_PRIMARY);
+    return vnum(0);
+}
+static cl_val_t nat_sys_window(cl_val_t *args, u32 nargs) {
+    if (nargs >= 1 && args[0].is_str) wm_open(APP_NONE, args[0].str, 100, 100, 400, 300);
+    return vnum(0);
+}
+static cl_val_t nat_sys_beep(cl_val_t *args, u32 nargs) {
+    if (nargs >= 1 && !args[0].is_str) speaker_beep(args[0].num, 200);
+    return vnum(0);
+}
+static cl_val_t nat_sys_exec(cl_val_t *args, u32 nargs) {
+    if (nargs >= 1 && !args[0].is_str) wm_open((app_id_t)args[0].num, "App", 150, 150, 600, 400);
+    return vnum(0);
+}
+
+static void cl_init_natives(cl_env_t *env) {
+    cl_register_native(env, "sys_alert", nat_sys_alert);
+    cl_register_native(env, "sys_window", nat_sys_window);
+    cl_register_native(env, "sys_beep", nat_sys_beep);
+    cl_register_native(env, "sys_exec", nat_sys_exec);
+}
+
 /* ── Public entry points ─────────────────────────────────────────────────── */
 
 /* Output goes to terminal_write (VGA text console / kernel shell) */
@@ -397,6 +530,7 @@ int care_lang_exec(const char *src, u32 len) {
     if (!src || len==0) return -1;
     g_cl_out=NULL; g_cl_out_max=0; g_cl_out_len=0;
     cl_env_t env; kmemset(&env,0,sizeof(env));
+    cl_init_natives(&env);
     lexer_t  lex; lex.src=src; lex.pos=0; lex.len=len;
     lex_next(&lex);
     cl_block(&env,&lex);
@@ -409,6 +543,7 @@ int care_lang_exec_buf(const char *src, u32 len, char *out, u32 out_max) {
     out[0]='\0';
     g_cl_out=out; g_cl_out_max=out_max; g_cl_out_len=0;
     cl_env_t env; kmemset(&env,0,sizeof(env));
+    cl_init_natives(&env);
     lexer_t  lex; lex.src=src; lex.pos=0; lex.len=len;
     lex_next(&lex);
     cl_block(&env,&lex);

@@ -215,7 +215,7 @@ static void rebuild_passwd_file(void) {
     if (!pf) pf = vfs_mkfile(etc, "passwd");
     if (!pf) return;
 
-    char out[FS_FILE_DATA_MAX];
+    char out[4096];
     out[0] = '\0';
 
     for (u32 i = 0; i < user_count; i++) {

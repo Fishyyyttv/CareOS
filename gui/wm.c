@@ -51,10 +51,13 @@ static desktop_icon_t icons[] = {
     {"NetMon",   APP_NETMON,   0,0,false,false, 0x22d3ee},
     {"Browser",  APP_BROWSER,  0,0,false,false, 0x7c3aed},
     {"Users",    APP_USERS,    0,0,false,false, 0xfb923c},
+    {"Maze",     APP_MAZE,     0,0,false,false, 0xef4444},
+    {"Wolf3D",   APP_3D,       0,0,false,false, 0xef4444},
+    {"Doom",     APP_DOOM,     0,0,false,false, 0xff0000},
     {"Settings", APP_SETTINGS, 0,0,false,false, 0xa78bfa},
     {"About",    APP_ABOUT,    0,0,false,false, 0x6b7280},
 };
-#define ICON_COUNT   14
+#define ICON_COUNT   17
 static i32 ICON_W      = 72;
 static i32 ICON_H      = 80;
 static i32 ICON_COL_W  = 96;   /* full column width = ICON_W + gap between cols */
@@ -180,6 +183,7 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     case APP_CLOCK:    *w = 280; *h = 240; return;
     case APP_ABOUT:    *w = 460; *h = 340; return;
     case APP_PAINT:    *w = sw*75/100; *h = sh*75/100; return;
+    case APP_DOOM:     *w = 640; *h = 400 + 30; return; /* DOOM resolution + titlebar */
     default:           *w = sw*65/100; *h = sh*70/100; return;
     }
 }
@@ -271,6 +275,9 @@ window_t *wm_open(app_id_t app, const char *title,
         case APP_EDITOR:   app_editor_init(win);   break;
         case APP_PAINT:    app_paint_init(win);    break;
         case APP_USERS:    app_users_init(win);    break;
+        case APP_MAZE:     app_maze_init(win);     break;
+        case APP_3D:       app_3d_init(win);       break;
+        case APP_DOOM:     app_doom_init(win);     break;
         case APP_ABOUT:    app_about_init(win);    break;
         case APP_HELP:     app_help_init(win);     break;
         default: break;
@@ -567,6 +574,9 @@ static void draw_window(window_t *w) {
     case APP_CLOCK:    app_clock_draw(w);    break;
     case APP_NETMON:   app_netmon_draw(w);   break;
     case APP_USERS:    app_users_draw(w);    break;
+    case APP_MAZE:     app_maze_draw(w);     break;
+    case APP_3D:       app_3d_draw(w);       break;
+    case APP_DOOM:     app_doom_draw(w);     break;
     case APP_HELP:     app_help_draw(w);     break;
     default: break;
     }
@@ -790,6 +800,7 @@ void wm_handle_mouse(mouse_t *m) {
         case APP_SETTINGS: app_settings_click(hit, m->x, m->y, m); break;
         case APP_BROWSER:  app_browser_click(hit, m->x, m->y);     break;
         case APP_PKGMGR:   app_pkgmgr_click(hit, m->x, m->y);     break;
+        case APP_EDITOR:   app_editor_click(hit, m->x, m->y, m);   break;
         case APP_PAINT:    app_paint_click(hit, m->x, m->y, m);    break;
         case APP_USERS:    app_users_click(hit, m->x, m->y);       break;
         default: break;
@@ -838,6 +849,9 @@ void wm_handle_key(char c, window_t *w) {
     case APP_PAINT:    app_paint_key(w, c);    break;
     case APP_CALC:     app_calc_key(w, c);     break;
     case APP_FILES:    app_files_key(w, c);    break;
+    case APP_MAZE:     app_maze_key(w, c);     break;
+    case APP_3D:       app_3d_key(w, c);       break;
+    case APP_DOOM:     app_doom_key(w, c);     break;
     default: break;
     }
 }

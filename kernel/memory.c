@@ -5,20 +5,10 @@
 #include "kernel.h"
 
 /* -- Heap ------------------------------------------------------------------- */
-typedef struct block_hdr {
-    u64              magic;
-    u64              size;
-    bool             free;
-    u8               reserved[7]; // Alignment
-    struct block_hdr *next;
-    struct block_hdr *prev;
-} block_hdr_t;
-
-#define HEAP_MAGIC  0xC4E05AFE
 #define HDR_SIZE    sizeof(block_hdr_t)
 #define MIN_SPLIT   (HDR_SIZE + 16)
 
-static u8          heap_mem[KERNEL_HEAP_SIZE];
+static u8          heap_mem[KERNEL_HEAP_SIZE] __attribute__((aligned(16)));
 static block_hdr_t *heap_head = NULL;
 
 void pmm_init(void) {

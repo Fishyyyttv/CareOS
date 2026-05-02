@@ -6,23 +6,49 @@ QEMU      := qemu-system-x86_64
 GCC_INC   := $(shell gcc -print-file-name=include 2>/dev/null)
 LIBGCC    := $(shell gcc -print-libgcc-file-name 2>/dev/null)
 
-CFLAGS    := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
-             -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
-             -Iinclude -Igui -fno-builtin \
-             -mno-red-zone -mno-mmx -mno-sse -mno-sse2
-             
+KERN_CFLAGS := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
+               -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
+               -Iinclude -Iinclude/libc -Igui -fno-builtin \
+               -mno-red-zone -mno-mmx -mno-sse -mno-sse2
+
+APP_CFLAGS  := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
+               -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
+               -Iinclude -Iinclude/libc -Igui -fno-builtin \
+               -mno-red-zone
+
+CFLAGS      := $(KERN_CFLAGS)
+DOOM_CFLAGS := $(APP_CFLAGS) -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400
+
+DOOM_EXCLUDE := doomgeneric/doomgeneric/doomgeneric_allegro.c \
+                doomgeneric/doomgeneric/doomgeneric_emscripten.c \
+                doomgeneric/doomgeneric/doomgeneric_linuxvt.c \
+                doomgeneric/doomgeneric/doomgeneric_sdl.c \
+                doomgeneric/doomgeneric/doomgeneric_soso.c \
+                doomgeneric/doomgeneric/doomgeneric_sosox.c \
+                doomgeneric/doomgeneric/doomgeneric_win.c \
+                doomgeneric/doomgeneric/doomgeneric_xlib.c \
+                doomgeneric/doomgeneric/i_allegromusic.c \
+                doomgeneric/doomgeneric/i_allegrosound.c \
+                doomgeneric/doomgeneric/i_sdlmusic.c \
+                doomgeneric/doomgeneric/i_sdlsound.c \
+                doomgeneric/doomgeneric/i_cdmus.c \
+                doomgeneric/doomgeneric/dummy.c
+
+DOOM_DIR  := doomgeneric/doomgeneric
+DOOM_SRC  := $(filter-out $(DOOM_EXCLUDE), $(wildcard doomgeneric/doomgeneric/*.c))
+
 LDFLAGS   := -m elf_x86_64 -T kernel.ld
 NASMFLAGS := -f elf64
 
 DISK      := careos.img
-DISK_MB   = 512
+DISK_MB   = 4096
 DISK_RESERVED_SECTORS := 104
 
 # -machine pc,usb=off   forces PS/2 mouse on IRQ12 (no USB tablet)
-# -drive                64MB disk image so ATA driver finds a drive
+# -drive                4GB disk image so ATA driver finds a drive
 # -display sdl          proper window that captures mouse (Ctrl+Alt+G to release)
 # -serial stdio         boot stage logs in your terminal
-QEMUBASE  := -m 256M -cdrom careos.iso -no-reboot -serial stdio -vga std \
+QEMUBASE  := -m 4096M -smp 4 -cpu max -cdrom careos.iso -no-reboot -serial stdio -vga std \
              -machine pc,usb=off \
              -drive file=$(DISK),format=raw,if=ide,index=0 \
              -netdev user,id=net0 -device e1000,netdev=net0
@@ -81,11 +107,16 @@ C_SRC     := kernel/kernel.c       \
              apps/app_clock.c      \
              apps/app_netmon.c     \
              apps/app_users.c      \
-             apps/app_help.c
+             apps/app_help.c       \
+             apps/app_maze.c       \
+             apps/app_3d.c         \
+             apps/app_doom.c       \
+             kernel/libc_shim.c
 
 ASM_OBJ   := $(ASM_SRC:.asm=.o)
 C_OBJ     := $(C_SRC:.c=.o)
-ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) tests/ring3_exit.bin.o
+DOOM_OBJ  := $(DOOM_SRC:.c=.o)
+ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o DOOM1.WAD.bin.o
 
 .PHONY: all run run-1080p run-kvm run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk
 
@@ -100,6 +131,14 @@ $(DISK):
 %.o: %.asm
 	@echo "  NASM  $<"
 	$(NASM) $(NASMFLAGS) -o $@ $<
+
+doomgeneric/doomgeneric/%.o: doomgeneric/doomgeneric/%.c
+	@echo "  CC    $< (DOOM)"
+	$(CC) $(DOOM_CFLAGS) -c -o $@ $<
+
+kernel/libc_shim.o: kernel/libc_shim.c
+	@echo "  CC    $< (SHIM)"
+	$(CC) $(DOOM_CFLAGS) -c -o $@ $<
 
 %.o: %.c
 	@echo "  CC    $<"
@@ -129,7 +168,7 @@ run-kvm: $(DISK) careos.iso
 
 # Headless: no window, serial only (mouse will not work but good for testing)
 run-nowindow: $(DISK) careos.iso
-	$(QEMU) -m 256M -cdrom careos.iso -nographic -no-reboot \
+	$(QEMU) -m 1024M -cdrom careos.iso -nographic -no-reboot \
 	        -machine pc,usb=off \
 	        -drive file=$(DISK),format=raw,if=ide,index=0 \
 	        -netdev user,id=net0 -device e1000,netdev=net0
@@ -165,10 +204,15 @@ tests/ring3_fault: tests/ring3_fault.o
 tests/ring3_exit.bin.o: tests/ring3_exit
 	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 tests/ring3_exit tests/ring3_exit.bin.o
 
+# Embed DOOM1.WAD directly into the kernel binary
+DOOM1.WAD.bin.o: DOOM1.WAD
+	@echo "  EMBED DOOM1.WAD ($$(du -h DOOM1.WAD | cut -f1))"
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 DOOM1.WAD DOOM1.WAD.bin.o
+
 test-elfs: tests/ring3_exit tests/ring3_fault
 
 clean:
-	@rm -f $(ALL_OBJ) kernel/kernel.elf careos.iso
+	@rm -f $(ALL_OBJ) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
 	@rm -f tests/ring3_exit.o tests/ring3_exit tests/ring3_fault.o tests/ring3_fault tests/ring3_exit.bin.o
 	@echo "  Cleaned (kept $(DISK) for persistent users/data)"
 

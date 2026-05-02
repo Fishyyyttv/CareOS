@@ -461,6 +461,47 @@ static void desktop_fade_in(mouse_t *mouse) {
     }
 }
 
+static void run_matrix_screensaver(mouse_t *mouse) {
+    i32 sw = (i32)SCREEN_W;
+    i32 sh = (i32)SCREEN_H;
+    u32 cols = sw / 14;
+    if (cols > 256) cols = 256;
+    static i32 drops[256];
+    for (u32 i = 0; i < cols; i++) drops[i] = -((i32)((timer_get_ticks() + i * 17) % sh) / 14);
+
+    mouse_update(mouse);
+    keyboard_flush();
+    i32 last_lx = mouse->x, last_ly = mouse->y;
+
+    gfx_clear(COL_BLACK);
+
+    while (1) {
+        __asm__ volatile("sti; hlt");
+        if (keyboard_haschar()) { keyboard_flush(); break; }
+        mouse_update(mouse);
+        if (mouse->left_clicked || mouse->right_clicked || kabs(mouse->x - last_lx) > 10 || kabs(mouse->y - last_ly) > 10) break;
+        
+        gfx_rect_blend(0, 0, sw, sh, COL_BLACK, 25); /* Trail effect */
+
+        for (u32 i = 0; i < cols; i++) {
+            char str[2]; 
+            str[0] = 33 + (timer_get_ticks() / 10 + i * 17) % 94; 
+            str[1] = 0;
+            
+            i32 dy = drops[i] * 14;
+            if (dy > 0) {
+                gfx_str_bg_none(i * 14, dy, str, COL_WHITE); /* Leading char is white */
+                gfx_str_bg_none(i * 14, dy - 14, str, COL_GREEN); /* Trail is green */
+            }
+            drops[i]++;
+            if (dy > sh && ((timer_get_ticks() + i) % 100 > 95)) drops[i] = 0;
+        }
+        
+        gfx_flip();
+        timer_wait(35);
+    }
+}
+
 static bool run_login_flow(mouse_t *mouse) {
     login_state_t login;
     kmemset(&login, 0, sizeof(login));
@@ -643,12 +684,17 @@ void gui_run(void) {
                 g_last_activity_tick = timer_get_ticks();
             }
 
-            /* Idle / Screensaver Check (10 minutes = 600,000 ms) */
+            /* Idle / Screensaver Check (10 minutes = 600,000 ms, screensaver at 30,000 ms) */
             u32 now = timer_get_ticks();
             if (now - g_last_activity_tick > 600000) {
-                /* For now, just re-lock the screen if idle */
+                /* Auto-lock the screen if idle for 10 mins */
                 serial_write("  [gui] auto-locking due to idle\n");
                 run_login_flow(&mouse);
+                g_last_activity_tick = timer_get_ticks();
+                needs_redraw = true;
+            } else if (now - g_last_activity_tick > 30000) {
+                /* Show Matrix Screensaver after 30 seconds */
+                run_matrix_screensaver(&mouse);
                 g_last_activity_tick = timer_get_ticks();
                 needs_redraw = true;
             }

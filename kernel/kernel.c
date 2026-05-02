@@ -59,13 +59,29 @@ static void slog_ok(const char *subsys){
     serial_write("\n");
 }
 
+static void enable_sse(void) {
+    u64 cr0, cr4;
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1u << 2); /* clear EM */
+    cr0 |= (1u << 1);  /* set MP */
+    __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0));
+    __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1u << 9);  /* set OSFXSR */
+    cr4 |= (1u << 10); /* set OSXMMEXCPT */
+    __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4));
+}
+
 void kernel_main(u64 magic, u64 mbi_addr){
     /* Stage 1: core hardware */
     slog_stage(1, "Hardware init");
     pmm_init();      slog_ok("PMM");
     gdt_init();      slog_ok("GDT");
+    enable_sse();    slog_ok("SSE");
+    serial_write("[boot] calling terminal_init...\n");
     terminal_init(); slog_ok("VGA terminal");
+    serial_write("[boot] calling serial_init...\n");
     serial_init();   slog_ok("Serial (COM1)");
+    serial_write("[boot] calling idt_init...\n");
     idt_init();      slog_ok("IDT");
 
     if (magic != MB2_MAGIC) {
@@ -212,9 +228,60 @@ void kernel_main(u64 magic, u64 mbi_addr){
 
     settings_init();     slog_ok("Settings");
     vfs_storage_online();slog_ok("Home persistence");
+
+    /* Inject embedded DOOM1.WAD into /home/user after storage is online.
+     * Temporarily clear the directory's ext2 inode so vfs_mkfile creates
+     * a pure in-memory node instead of trying to write 4MB to ext2. */
+    {
+        extern u8 _binary_DOOM1_WAD_start[];
+        extern u8 _binary_DOOM1_WAD_end[];
+        u32 wad_size = (u32)(uintptr_t)(_binary_DOOM1_WAD_end - _binary_DOOM1_WAD_start);
+        char _wsb[12];
+        serial_write("[doom] WAD size = ");
+        kutoa(wad_size, _wsb, 10); serial_write(_wsb); serial_write("\n");
+
+        if (wad_size > 4) {
+            const char *magic = (const char *)_binary_DOOM1_WAD_start;
+            if ((magic[0]=='I'||magic[0]=='P') && magic[1]=='W' &&
+                 magic[2]=='A' && magic[3]=='D') {
+                fs_node_t *user_dir = vfs_resolve_path("/home/user");
+                if (!user_dir) {
+                    fs_node_t *home = vfs_find(vfs_root(), "home");
+                    if (!home) home = vfs_mkdir(vfs_root(), "home");
+                    if (home) {
+                        u32 hi = home->inode_num; home->inode_num = 0;
+                        user_dir = vfs_mkdir(home, "user");
+                        home->inode_num = hi;
+                    }
+                }
+                if (user_dir) {
+                    u32 saved = user_dir->inode_num;
+                    user_dir->inode_num = 0;
+                    fs_node_t *wad_node = vfs_mkfile(user_dir, "DOOM1.WAD");
+                    user_dir->inode_num = saved;
+                    if (wad_node) {
+                        wad_node->raw_data = (void *)_binary_DOOM1_WAD_start;
+                        wad_node->size     = wad_size;
+                        wad_node->inode_num = 0;
+                        serial_write("[doom] DOOM1.WAD ready at /home/user/DOOM1.WAD\n");
+                    } else {
+                        serial_write("[doom] ERROR: vfs_mkfile failed for DOOM1.WAD\n");
+                    }
+                } else {
+                    serial_write("[doom] ERROR: /home/user not found\n");
+                }
+            } else {
+                serial_write("[doom] ERROR: DOOM1.WAD bad magic - replace with real WAD\n");
+            }
+        } else {
+            serial_write("[doom] ERROR: DOOM1.WAD missing or empty\n");
+        }
+    }
+
     users_init();        slog_ok("Users");
 
     carepkg_init();      slog_ok("CarePackage manager");
+    serial_write("[boot] Initializing scheduler...\n");
     scheduler_init();    slog_ok("Scheduler");
 
     e1000_init();

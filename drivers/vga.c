@@ -95,7 +95,7 @@ void terminal_set_cursor(u32 col, u32 row) {
 }
 
 /* ── kprintf / ksprintf ─────────────────────────────────────────────────── */
-static int kvsnprintf(char *out, size_t max, const char *fmt, va_list ap) {
+int kvsnprintf(char *out, size_t max, const char *fmt, va_list ap) {
     char *p = out;
     char *end = out + max - 1;
     char tmp[32];

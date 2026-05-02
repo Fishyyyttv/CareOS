@@ -75,7 +75,10 @@ void app_notes_key(window_t *w,char c){
         } 
     } else if(c==0x13){ /* Ctrl+S: Save */
         struct fs_node *f = vfs_resolve_path("/home/user/notes.txt");
-        if (!f) f = vfs_mkfile(vfs_root(), "/home/user/notes.txt");
+        if (!f) {
+            struct fs_node *dir = vfs_resolve_path("/home/user");
+            if (dir) f = vfs_mkfile(dir, "notes.txt");
+        }
         if (f) {
             vfs_write(f, w->text_buf, w->text_len);
             notify_push("Notes", "Saved to /home/user/notes.txt", g_theme->success);

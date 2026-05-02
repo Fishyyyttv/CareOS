@@ -34,7 +34,22 @@
       "Bash(command -v make)",
       "Bash(command -v i686-w64-mingw32-gcc)",
       "PowerShell(Test-Path *)",
-      "Bash(git commit -m 'fix: add forward declaration for browser_save_tab to resolve implicit-declaration error *)"
+      "Bash(git commit -m 'fix: add forward declaration for browser_save_tab to resolve implicit-declaration error *)",
+      "Bash(xxd \"D:/Users/mhetm/Downloads/CareOS_v9_full/CareOS_v9/DOOM1.WAD\")",
+      "Bash(nm \"D:/Users/mhetm/Downloads/CareOS_v9_full/CareOS_v9/DOOM1.WAD.bin.o\")",
+      "Bash(objdump -t \"D:/Users/mhetm/Downloads/CareOS_v9_full/CareOS_v9/DOOM1.WAD.bin.o\")",
+      "Bash(x86_64-elf-objdump -t DOOM1.WAD.bin.o)",
+      "Bash(x86_64-linux-gnu-nm DOOM1.WAD.bin.o)",
+      "Bash(/usr/bin/x86_64-linux-gnu-objdump -t DOOM1.WAD.bin.o)",
+      "Bash(objcopy --version)",
+      "Bash(awk '{print $6, $7, $8, $9}')",
+      "Bash(grep -v \"//.*open\")",
+      "Bash(read fn *)",
+      "Bash(awk '{print $5, $6, $7, $8, $9}')",
+      "Bash(size \"D:/Users/mhetm/Downloads/CareOS_v9_full/CareOS_v9/kernel/kernel.elf\")",
+      "Bash(objdump -h \"D:/Users/mhetm/Downloads/CareOS_v9_full/CareOS_v9/kernel/kernel.elf\")",
+      "Bash(readelf -S \"D:/Users/mhetm/Downloads/CareOS_v9_full/CareOS_v9/kernel/kernel.elf\")",
+      "Bash(objdump -h /mnt/d/Users/mhetm/Downloads/CareOS_v9_full/CareOS_v9/kernel/kernel.elf)"
     ]
   }
 }

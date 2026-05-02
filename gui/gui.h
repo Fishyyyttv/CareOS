@@ -146,8 +146,9 @@ typedef enum {
     APP_NONE=0, APP_TERMINAL, APP_NOTES, APP_FILES,
     APP_SYSMON, APP_CALC, APP_ABOUT, APP_HELP,
     APP_BROWSER, APP_SETTINGS, APP_PKGMGR,
-    APP_EDITOR, APP_PAINT, APP_CLOCK, APP_NETMON, APP_USERS
+    APP_EDITOR, APP_PAINT, APP_CLOCK, APP_NETMON, APP_USERS, APP_MAZE, APP_3D, APP_DOOM
 } app_id_t;
+
 
 /* -- Typography & Icons --------------------------------------------------- */
 typedef enum {
@@ -260,6 +261,8 @@ typedef struct window {
     /* Editor app */
     char  editor_path[FS_PATH_MAX];
     bool  editor_modified;
+    bool  editor_show_sidebar;
+    u32   editor_sidebar_tab;
 
     /* Paint app */
     u32   paint_color;
@@ -473,9 +476,14 @@ void app_pkgmgr_init(window_t *w);
 void app_pkgmgr_draw(window_t *w);
 void app_pkgmgr_key(window_t *w, char c);
 
+void app_doom_init(window_t *w);
+void app_doom_draw(window_t *w);
+void app_doom_key(window_t *w, char c);
+
 void app_editor_init(window_t *w);
 void app_editor_draw(window_t *w);
 void app_editor_key(window_t *w, char c);
+void app_editor_click(window_t *w, i32 x, i32 y, mouse_t *m);
 
 void app_paint_init(window_t *w);
 void app_paint_draw(window_t *w);
@@ -487,6 +495,14 @@ void app_netmon_draw(window_t *w);
 void app_users_init(window_t *w);
 void app_users_draw(window_t *w);
 void app_users_key(window_t *w, char c);
+
+void app_maze_init(window_t *w);
+void app_maze_draw(window_t *w);
+void app_maze_key(window_t *w, char c);
+
+void app_3d_init(window_t *w);
+void app_3d_draw(window_t *w);
+void app_3d_key(window_t *w, char c);
 
 /* -- Notification system -------------------------------------------------- */
 #define NOTIFY_MAX 4
@@ -560,5 +576,8 @@ void speaker_stop(void);
 void speaker_beep(u32 freq, u32 ms);
 void speaker_startup(void);
 void speaker_error(void);
+
+extern gfx_buffer_t g_screen_buf;
+extern gfx_buffer_t *g_target;
 
 #endif /* GUI_H */
