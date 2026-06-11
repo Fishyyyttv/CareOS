@@ -1,0 +1,10 @@
+{
+    "KPlugin": {
+        "Authors": [{"Name": "CareOS Project"}],
+        "Description": "CareOS Shell look and feel",
+        "Id": "org.careos.desktop",
+        "License": "MIT",
+        "Name": "CareOS Shell",
+        "Version": "1.0"
+    }
+}

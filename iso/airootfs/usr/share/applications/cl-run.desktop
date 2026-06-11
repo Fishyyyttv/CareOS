@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Run CL Script
+Comment=Run a Care Language (.cl) script
+Exec=konsole --hold -e cl %f
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+MimeType=text/x-care-language;
+Categories=CareOS;Development;
+NoDisplay=true

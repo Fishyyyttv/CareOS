@@ -1,0 +1,15 @@
+NAME="CareOS"
+PRETTY_NAME="CareOS 2026.05"
+ID=careos
+ID_LIKE=arch
+VERSION="2026.05"
+VERSION_ID="2026.05"
+BUILD_ID=rolling
+VARIANT="Plasma Live Desktop"
+VARIANT_ID=plasma
+ANSI_COLOR="1;34"
+HOME_URL="https://careos.local"
+DOCUMENTATION_URL="file:///usr/share/careos/welcome/index.html"
+SUPPORT_URL="file:///usr/share/careos/welcome/index.html"
+BUG_REPORT_URL=""
+LOGO=distributor-logo-careos

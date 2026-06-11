@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""CareOS command reference."""
+from __future__ import annotations
+
+import os
+
+BLUE = "\033[38;2;85;154;255m"
+ACCENT = "\033[38;2;130;188;255m"
+DIM = "\033[38;2;138;153;186m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def item(command: str, description: str) -> None:
+    print(f"  {ACCENT}{command:<26}{RESET}{DIM}{description}{RESET}")
+
+
+print(f"""
+{BLUE}{BOLD}CareOS {os.environ.get("CAREOS_VERSION", "2026.05")}{RESET}
+{DIM}A CareOS desktop built on an Arch Linux core.{RESET}
+""")
+
+print(f"{BLUE}{BOLD}System{RESET}")
+item("carectl", "Open the CareOS control command")
+item("carectl status", "Show OS, desktop, hardware, and package status")
+item("carectl doctor", "Check common live-system services")
+item("careos-install", "Start the CareOS installer")
+
+print(f"\n{BLUE}{BOLD}Packages{RESET}")
+item("carepkg search <text>", "Search available packages")
+item("carepkg install <pkg>", "Install packages using the CareOS package flow")
+item("carepkg remove <pkg>", "Remove packages")
+item("careos-update", "Refresh and upgrade the system")
+
+print(f"\n{BLUE}{BOLD}Care Language{RESET}")
+item("cl", "Start the CL interactive shell")
+item("cl file.cl", "Run a Care Language script")
+
+print(f"\n{BLUE}{BOLD}Shortcuts{RESET}")
+item("pkg", "Alias for carepkg")
+item("update", "Alias for careos-update")
+item("info", "Alias for careos-info")
+item("sys", "Alias for carectl status")
+print()

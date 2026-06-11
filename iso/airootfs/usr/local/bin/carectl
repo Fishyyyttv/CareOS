@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""CareOS control command."""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+
+BLUE = "\033[38;2;85;154;255m"
+ACCENT = "\033[38;2;130;188;255m"
+GREEN = "\033[38;2;46;204;142m"
+RED = "\033[38;2;245;96;96m"
+DIM = "\033[38;2;138;153;186m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def call(cmd: list[str]) -> int:
+    return subprocess.call(cmd)
+
+
+def service(name: str) -> str:
+    rc = subprocess.run(["systemctl", "is-active", "--quiet", name]).returncode
+    return f"{GREEN}active{RESET}" if rc == 0 else f"{RED}not active{RESET}"
+
+
+def show_help() -> int:
+    print(f"""
+{BLUE}{BOLD}CareOS Control{RESET}
+{DIM}A small command center for the CareOS live and installed system.{RESET}
+
+{ACCENT}Commands{RESET}
+  carectl status      Show system profile
+  carectl doctor      Check common CareOS services
+  carectl install     Start the CareOS installer
+  carectl welcome     Open the CareOS welcome center
+  carectl packages    Open package command help
+  carectl theme       Show active CareOS desktop theme paths
+""")
+    return 0
+
+
+def doctor() -> int:
+    print(f"\n{BLUE}{BOLD}CareOS Doctor{RESET}\n")
+    for name in ["NetworkManager", "sddm", "bluetooth", "cups", "power-profiles-daemon"]:
+        print(f"  {DIM}{name:<24}{RESET}{service(name)}")
+    print()
+    return 0
+
+
+def theme() -> int:
+    print(f"\n{BLUE}{BOLD}CareOS Theme{RESET}\n")
+    paths = [
+        "/usr/share/wallpapers/CareOS/contents/images/1920x1080.svg",
+        "/usr/share/color-schemes/CareOS.colors",
+        "/usr/share/sddm/themes/careos",
+        "/usr/share/plasma/look-and-feel/org.careos.desktop",
+        "/usr/share/Kvantum/CareOS",
+    ]
+    for path in paths:
+        print(f"  {ACCENT}{path}{RESET}")
+    print()
+    return 0
+
+
+def welcome() -> int:
+    page = "/usr/share/careos/welcome/index.html"
+    opener = shutil.which("xdg-open") or shutil.which("firefox")
+    if not opener:
+        print(page)
+        return 0
+    return call([opener, page])
+
+
+def main() -> int:
+    command = sys.argv[1] if len(sys.argv) > 1 else "help"
+    if command in {"help", "-h", "--help"}:
+        return show_help()
+    if command == "status":
+        return call(["careos-info"])
+    if command == "doctor":
+        return doctor()
+    if command == "install":
+        os.execvp("careos-install", ["careos-install"])
+    if command == "welcome":
+        return welcome()
+    if command == "packages":
+        return call(["carepkg", "--help"])
+    if command == "theme":
+        return theme()
+    print(f"{RED}Unknown CareOS control command:{RESET} {command}")
+    return show_help() or 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

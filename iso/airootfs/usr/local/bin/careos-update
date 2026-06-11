@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""CareOS updater."""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+
+BLUE = "\033[38;2;85;154;255m"
+GREEN = "\033[38;2;46;204;142m"
+RED = "\033[38;2;245;96;96m"
+DIM = "\033[38;2;138;153;186m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def is_root() -> bool:
+    return getattr(os, "geteuid", lambda: 1)() == 0
+
+
+def run(label: str, cmd: list[str]) -> bool:
+    print(f"{BLUE}{label}{RESET}")
+    rc = subprocess.run(cmd).returncode
+    if rc == 0:
+        print(f"  {GREEN}ok{RESET}")
+        return True
+    print(f"  {RED}failed{RESET}")
+    return False
+
+
+def main() -> int:
+    if not is_root():
+        sudo = shutil.which("sudo")
+        if not sudo:
+            print(f"{RED}CareOS Update needs administrator access.{RESET}")
+            return 1
+        os.execvp(sudo, [sudo, "careos-update", *sys.argv[1:]])
+
+    print(f"\n{BLUE}{BOLD}CareOS Update{RESET} {DIM}{os.environ.get('CAREOS_VERSION', '2026.05')}{RESET}\n")
+    ok = True
+    ok &= run("Refreshing CareOS package indexes", ["pacman", "-Sy"])
+    ok &= run("Upgrading CareOS packages", ["pacman", "-Su"])
+    if shutil.which("flatpak"):
+        ok &= run("Updating Flatpak runtimes", ["flatpak", "update", "-y"])
+    print()
+    if ok:
+        print(f"{GREEN}{BOLD}CareOS is up to date.{RESET}")
+        return 0
+    print(f"{RED}One or more update steps failed. Review the output above.{RESET}")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=CareScript Studio
+Comment=Write and run Care Language (.cl) scripts
+Exec=carescript-studio
+Icon=careos-carescript
+Terminal=false
+Type=Application
+Categories=CareOS;Development;

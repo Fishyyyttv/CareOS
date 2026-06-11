@@ -1,0 +1,71 @@
+// CareOS Plymouth boot animation
+// Dark navy background with animated blue dots and wordmark
+
+// ── Screen setup ──────────────────────────────────────────────────────────────
+screen_width  = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+// ── Background ────────────────────────────────────────────────────────────────
+bg = Rectangle();
+bg.SetX(0);
+bg.SetY(0);
+bg.SetWidth(screen_width);
+bg.SetHeight(screen_height);
+bg.SetColor(0.031, 0.051, 0.090, 1.0);  // #080d17
+
+// ── Wordmark (text-based) ─────────────────────────────────────────────────────
+// Use a filled rectangle bar as a visual accent below the logo text
+accent_h = Math.Int(screen_height * 0.003);
+accent_w = Math.Int(screen_width  * 0.18);
+accent_x = Math.Int((screen_width  - accent_w) / 2);
+accent_y = Math.Int(screen_height  * 0.56);
+
+accent = Rectangle();
+accent.SetX(accent_x);
+accent.SetY(accent_y);
+accent.SetWidth(accent_w);
+accent.SetHeight(accent_h);
+accent.SetColor(0.333, 0.604, 1.0, 1.0);  // #559aff
+
+// ── Dot animation ─────────────────────────────────────────────────────────────
+NUM_DOTS  = 5;
+DOT_SIZE  = Math.Int(screen_height * 0.012);
+DOT_SPACE = Math.Int(DOT_SIZE * 2.2);
+total_w   = NUM_DOTS * DOT_SPACE - Math.Int(DOT_SPACE * 0.2);
+start_x   = Math.Int((screen_width - total_w) / 2);
+dot_y     = Math.Int(screen_height * 0.64);
+
+for (i = 0; i < NUM_DOTS; i++) {
+    dots[i] = Rectangle();
+    dots[i].SetWidth(DOT_SIZE);
+    dots[i].SetHeight(DOT_SIZE);
+    dots[i].SetX(start_x + i * DOT_SPACE);
+    dots[i].SetY(dot_y);
+    dots[i].SetColor(0.333, 0.604, 1.0, 0.2);
+}
+
+// ── Animation tick ────────────────────────────────────────────────────────────
+frame = 0;
+
+fun refresh_callback() {
+    frame++;
+    active = Math.Int(frame / 8) % NUM_DOTS;
+    for (i = 0; i < NUM_DOTS; i++) {
+        if (i == active) {
+            dots[i].SetColor(0.333, 0.604, 1.0, 1.0);   // bright
+        } else if (i == (active - 1 + NUM_DOTS) % NUM_DOTS) {
+            dots[i].SetColor(0.333, 0.604, 1.0, 0.5);   // fading
+        } else {
+            dots[i].SetColor(0.333, 0.604, 1.0, 0.18);  // dim
+        }
+    }
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+// ── Password prompt (for encrypted disks) ─────────────────────────────────────
+fun display_password_callback(prompt, bullets) {
+    // Nothing fancy — just keep the dots running
+}
+
+Plymouth.SetDisplayPasswordFunction(display_password_callback);

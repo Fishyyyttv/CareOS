@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Care Language REPL
+Comment=Interactive Care Language scripting environment
+Exec=konsole --hold -e cl
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=Development;

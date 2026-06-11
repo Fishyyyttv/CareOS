@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CareOS Welcome</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; }
+  body {
+    color: #eaf0ff;
+    font-family: "Noto Sans", "Segoe UI", system-ui, sans-serif;
+    background-color: #080d17;
+    background-image:
+      linear-gradient(90deg, rgba(8,13,23,0.86), rgba(8,13,23,0.58)),
+      url("file:///usr/share/wallpapers/CareOS/contents/images/1920x1080.svg");
+    background-size: cover;
+    background-position: center;
+    overflow: hidden;
+  }
+  .shell {
+    min-height: 100%;
+    display: grid;
+    grid-template-columns: minmax(320px, 0.85fr) minmax(520px, 1.15fr);
+    gap: clamp(24px, 5vw, 80px);
+    align-items: center;
+    padding: clamp(28px, 6vw, 76px);
+  }
+  .brand { max-width: 620px; }
+  .eyebrow {
+    color: #82bcff;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(56px, 9vw, 118px);
+    line-height: 0.9;
+    font-weight: 300;
+  }
+  .rule {
+    width: 96px;
+    height: 3px;
+    margin: 26px 0 22px;
+    background: linear-gradient(90deg, #559aff, #2ecc8e, #f56060);
+  }
+  .tagline {
+    color: #c9d6f4;
+    font-size: clamp(17px, 2vw, 24px);
+    line-height: 1.45;
+    max-width: 540px;
+  }
+  .base {
+    margin-top: 26px;
+    color: #8a99ba;
+    font-size: 13px;
+  }
+  .actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(210px, 1fr));
+    gap: 14px;
+  }
+  .tile {
+    min-height: 150px;
+    padding: 20px;
+    border: 1px solid rgba(130,188,255,0.25);
+    border-radius: 8px;
+    background: rgba(15,23,38,0.88);
+    color: #eaf0ff;
+    text-decoration: none;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+  }
+  .tile:hover {
+    transform: translateY(-2px);
+    border-color: #559aff;
+    background: rgba(22,32,51,0.94);
+  }
+  .tile.primary {
+    background: linear-gradient(135deg, rgba(85,154,255,0.96), rgba(46,204,142,0.9));
+    color: #07101c;
+    border-color: transparent;
+  }
+  .tile.danger { border-color: rgba(245,96,96,0.34); }
+  .topline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    color: inherit;
+  }
+  .code {
+    font-family: "Cascadia Code", "Noto Sans Mono", monospace;
+    font-size: 12px;
+    color: #82bcff;
+  }
+  .primary .code { color: rgba(7,16,28,0.78); }
+  h2 {
+    font-size: 20px;
+    line-height: 1.2;
+    margin: 22px 0 8px;
+    font-weight: 650;
+  }
+  p {
+    margin: 0;
+    color: #9eaccd;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .primary p { color: rgba(7,16,28,0.75); }
+  .message {
+    grid-column: 1 / -1;
+    min-height: 58px;
+    padding: 16px 18px;
+    border-left: 3px solid #559aff;
+    background: rgba(8,13,23,0.8);
+    color: #c9d6f4;
+    font-size: 13px;
+  }
+  .message code {
+    color: #82bcff;
+    font-family: "Cascadia Code", "Noto Sans Mono", monospace;
+  }
+  @media (max-width: 880px) {
+    body { overflow: auto; }
+    .shell { grid-template-columns: 1fr; align-items: start; }
+    .actions { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main class="shell">
+  <section class="brand" aria-label="CareOS">
+    <div class="eyebrow">Live desktop</div>
+    <h1>CareOS</h1>
+    <div class="rule"></div>
+    <p class="tagline">A focused Plasma desktop with CareOS tools, theme, shell, package flow, and Care Language built over an Arch Linux core.</p>
+    <p class="base">Live user: <strong>liveuser</strong> / <strong>liveuser</strong>. Changes are temporary until installed.</p>
+  </section>
+
+  <section class="actions" aria-label="CareOS actions">
+    <button class="tile primary" onclick="show('install')">
+      <span class="topline"><span class="code">careos-install</span><span>01</span></span>
+      <span>
+        <h2>Install CareOS</h2>
+        <p>Launch the CareOS installer flow for this machine.</p>
+      </span>
+    </button>
+    <button class="tile" onclick="show('control')">
+      <span class="topline"><span class="code">carectl</span><span>02</span></span>
+      <span>
+        <h2>CareOS Control</h2>
+        <p>Check services, system status, theme paths, and package commands.</p>
+      </span>
+    </button>
+    <button class="tile" onclick="show('packages')">
+      <span class="topline"><span class="code">carepkg</span><span>03</span></span>
+      <span>
+        <h2>CareOS Packages</h2>
+        <p>Search, install, remove, and upgrade packages through the CareOS command surface.</p>
+      </span>
+    </button>
+    <button class="tile danger" onclick="show('language')">
+      <span class="topline"><span class="code">cl</span><span>04</span></span>
+      <span>
+        <h2>Care Language</h2>
+        <p>Run the bundled CL scripting environment and examples.</p>
+      </span>
+    </button>
+
+    <div id="message" class="message">Open Konsole or use the desktop shortcuts to start any CareOS command.</div>
+  </section>
+</main>
+<script>
+  const messages = {
+    install: "Run <code>careos-install</code>, or double-click <strong>Install CareOS</strong> on the desktop.",
+    control: "Run <code>carectl</code> for the CareOS control command. Try <code>carectl doctor</code>.",
+    packages: "Run <code>carepkg search firefox</code> or <code>careos-update</code> to manage the system.",
+    language: "Run <code>cl</code> for the Care Language shell, or open the examples folder in your home directory."
+  };
+  function show(key) {
+    document.getElementById("message").innerHTML = messages[key];
+  }
+</script>
+</body>
+</html>

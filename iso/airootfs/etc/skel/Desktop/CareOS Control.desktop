@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=CareOS Control
+Comment=Open the CareOS control command
+Exec=konsole --hold -e carectl
+Icon=distributor-logo-careos
+Terminal=false
+Type=Application

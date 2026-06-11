@@ -1,0 +1,9 @@
+[SddmGreeterTheme]
+Name=CareOS
+Description=CareOS Login Theme
+Author=CareOS Project
+License=MIT
+Type=sddm-theme
+Version=1.0
+MainScript=Main.qml
+ConfigFile=theme.conf

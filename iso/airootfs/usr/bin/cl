@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""
+cl — CareOS Care Language (CL) interpreter v1.0
+Run .cl scripts: cl script.cl
+Interactive REPL: cl
+"""
+import sys, subprocess
+from enum import Enum, auto
+from dataclasses import dataclass
+from typing import Any
+
+# ── Token types ───────────────────────────────────────────────────────────────
+
+class TT(Enum):
+    NUM=auto(); STR=auto(); IDENT=auto(); OP=auto()
+    LPAR=auto(); RPAR=auto(); LBRACE=auto(); RBRACE=auto()
+    SEMI=auto(); COMMA=auto(); EOF=auto()
+
+@dataclass
+class Tok:
+    k: TT
+    v: Any = None
+
+# ── Lexer ─────────────────────────────────────────────────────────────────────
+
+TWO_OPS = {'==','!=','<=','>='}
+
+def lex(src: str) -> list:
+    toks, i = [], 0
+    while i < len(src):
+        c = src[i]
+        if c.isspace(): i += 1; continue
+        if c == '/' and src[i:i+2] in ('//',):
+            while i < len(src) and src[i] != '\n': i += 1
+            continue
+        if c == '#':
+            while i < len(src) and src[i] != '\n': i += 1
+            continue
+        if c == '"':
+            j = i+1
+            while j < len(src) and src[j] != '"': j += 1
+            toks.append(Tok(TT.STR, src[i+1:j])); i = j+1; continue
+        if c.isdigit():
+            j = i
+            while j < len(src) and (src[j].isdigit() or src[j]=='.'): j += 1
+            v = float(src[i:j]); toks.append(Tok(TT.NUM, int(v) if v==int(v) else v)); i=j; continue
+        if src[i:i+2] in TWO_OPS:
+            toks.append(Tok(TT.OP, src[i:i+2])); i+=2; continue
+        if c in '+-*/=<>': toks.append(Tok(TT.OP, c))
+        elif c=='(': toks.append(Tok(TT.LPAR))
+        elif c==')': toks.append(Tok(TT.RPAR))
+        elif c=='{': toks.append(Tok(TT.LBRACE))
+        elif c=='}': toks.append(Tok(TT.RBRACE))
+        elif c==';': toks.append(Tok(TT.SEMI))
+        elif c==',': toks.append(Tok(TT.COMMA))
+        elif c.isalpha() or c=='_':
+            j = i
+            while j < len(src) and (src[j].isalnum() or src[j]=='_'): j += 1
+            toks.append(Tok(TT.IDENT, src[i:j])); i=j; continue
+        i += 1
+    toks.append(Tok(TT.EOF)); return toks
+
+# ── Interpreter ───────────────────────────────────────────────────────────────
+
+class CLError(Exception): pass
+class _Ret(Exception):
+    def __init__(self, v): self.v = v
+
+class CL:
+    MAX_ITER = 10_000
+
+    def __init__(self):
+        self.toks: list = []
+        self.pos: int = 0
+        self.fns: dict = {}   # name → (params, body_pos)
+        self.out: list = []
+
+    # helpers
+    def pk(self):  return self.toks[self.pos]
+    def nxt(self): t=self.toks[self.pos]; self.pos+=1; return t
+    def eat(self, k, v=None):
+        t=self.nxt()
+        if t.k!=k: raise CLError(f"Expected {k}, got {t}")
+        if v is not None and t.v!=v: raise CLError(f"Expected '{v}', got '{t.v}'")
+        return t
+    def see(self, k, v=None):
+        t=self.pk(); return t.k==k and (v is None or t.v==v)
+
+    def run(self, src: str, env: dict=None) -> str:
+        self.toks=lex(src); self.pos=0; self.out=[]
+        scope = env or {}
+        try: self._body(scope, eof=True)
+        except _Ret: pass
+        return '\n'.join(str(x) for x in self.out)
+
+    # ── Statements ────────────────────────────────────────────────────────────
+
+    def _body(self, sc, eof=False):
+        while True:
+            if self.pk().k==TT.EOF: break
+            if not eof and self.pk().k==TT.RBRACE: break
+            self._stmt(sc)
+
+    def _block(self, sc):
+        self.eat(TT.LBRACE)
+        ch=dict(sc); self._body(ch)
+        self.eat(TT.RBRACE)
+        for k in sc:
+            if k in ch: sc[k]=ch[k]
+
+    def _skip_block(self):
+        self.eat(TT.LBRACE); d=1
+        while d:
+            t=self.nxt()
+            if t.k==TT.LBRACE: d+=1
+            elif t.k==TT.RBRACE: d-=1
+            elif t.k==TT.EOF: raise CLError("Unexpected EOF")
+
+    def _stmt(self, sc):
+        t=self.pk()
+        if t.k==TT.IDENT:
+            if   t.v=='var':    self._var(sc)
+            elif t.v=='print':  self._print(sc)
+            elif t.v=='if':     self._if(sc)
+            elif t.v=='while':  self._while(sc)
+            elif t.v=='func':   self._func()
+            elif t.v=='return': self._return(sc)
+            else:               self._assign_or_call(sc)
+        else: self.nxt()
+
+    def _var(self, sc):
+        self.nxt(); name=self.eat(TT.IDENT).v
+        self.eat(TT.OP,'='); val=self._expr(sc); self.eat(TT.SEMI)
+        sc[name]=val
+
+    def _print(self, sc):
+        self.nxt(); val=self._expr(sc); self.eat(TT.SEMI)
+        self.out.append(val)
+
+    def _if(self, sc):
+        self.nxt(); self.eat(TT.LPAR); c=self._expr(sc); self.eat(TT.RPAR)
+        if self._bool(c): self._block(sc)
+        else: self._skip_block()
+        if self.see(TT.IDENT,'else'):
+            self.nxt()
+            if self._bool(c): self._skip_block()
+            else: self._block(sc)
+
+    def _while(self, sc):
+        p=self.pos; n=0
+        while True:
+            self.pos=p; self.eat(TT.LPAR); c=self._expr(sc); self.eat(TT.RPAR)
+            if not self._bool(c): self._skip_block(); break
+            if n>=self.MAX_ITER: self._skip_block(); raise CLError("Max iterations exceeded")
+            self._block(sc); n+=1
+
+    def _func(self):
+        self.nxt(); name=self.eat(TT.IDENT).v; self.eat(TT.LPAR)
+        params=[]
+        while not self.see(TT.RPAR):
+            params.append(self.eat(TT.IDENT).v)
+            if self.see(TT.COMMA): self.nxt()
+        self.eat(TT.RPAR); bp=self.pos; self._skip_block()
+        self.fns[name]=(params,bp)
+
+    def _return(self, sc):
+        self.nxt()
+        if self.see(TT.SEMI): self.nxt(); raise _Ret(0)
+        v=self._expr(sc); self.eat(TT.SEMI); raise _Ret(v)
+
+    def _assign_or_call(self, sc):
+        name=self.nxt().v
+        if self.see(TT.OP,'='):
+            self.nxt(); v=self._expr(sc); self.eat(TT.SEMI); sc[name]=v
+        elif self.see(TT.LPAR):
+            self._call(name,sc); self.eat(TT.SEMI)
+        else: self.eat(TT.SEMI)
+
+    # ── Expressions ───────────────────────────────────────────────────────────
+
+    def _expr(self, sc):
+        l=self._cmp(sc)
+        while self.see(TT.OP,'+') or self.see(TT.OP,'-'):
+            op=self.nxt().v; r=self._cmp(sc)
+            if op=='+':
+                if isinstance(l,str) or isinstance(r,str): l=self._s(l)+self._s(r)
+                else: l=l+r
+            else: l=l-r
+        return l
+
+    def _cmp(self, sc):
+        l=self._mul(sc)
+        cmp={'==','!=','<','>','<=','>='}
+        while self.pk().k==TT.OP and self.pk().v in cmp:
+            op=self.nxt().v; r=self._mul(sc)
+            l=1 if eval(f'{repr(l)}{op}{repr(r)}') else 0
+        return l
+
+    def _mul(self, sc):
+        l=self._unary(sc)
+        while self.see(TT.OP,'*') or self.see(TT.OP,'/'):
+            op=self.nxt().v; r=self._unary(sc)
+            l=l*r if op=='*' else (l/r if r else 0)
+        return l
+
+    def _unary(self, sc):
+        if self.see(TT.OP,'-'): self.nxt(); return -self._primary(sc)
+        return self._primary(sc)
+
+    def _primary(self, sc):
+        t=self.pk()
+        if t.k==TT.NUM:   self.nxt(); return t.v
+        if t.k==TT.STR:   self.nxt(); return t.v
+        if t.k==TT.LPAR:  self.nxt(); v=self._expr(sc); self.eat(TT.RPAR); return v
+        if t.k==TT.IDENT:
+            name=self.nxt().v
+            if self.see(TT.LPAR): return self._call(name,sc)
+            return sc.get(name, 0)
+        return 0
+
+    # ── Native + user functions ───────────────────────────────────────────────
+
+    def _call(self, name: str, sc: dict):
+        self.eat(TT.LPAR); args=[]
+        while not self.see(TT.RPAR):
+            args.append(self._expr(sc))
+            if self.see(TT.COMMA): self.nxt()
+        self.eat(TT.RPAR)
+
+        # ── Native functions (Linux equivalents of the original CareOS syscalls)
+        if name=='sys_alert':
+            msg=self._s(args[0]) if args else ''
+            try: subprocess.Popen(['notify-send','CareOS',msg])
+            except FileNotFoundError: print(f'\033[38;2;85;154;255m[alert]\033[0m {msg}')
+            return 0
+
+        if name=='sys_window':
+            title=self._s(args[0]) if args else 'CareOS'
+            try: subprocess.Popen(['kdialog','--title','CareOS','--msgbox',title])
+            except FileNotFoundError: print(f'\033[38;2;85;154;255m[window]\033[0m {title}')
+            return 0
+
+        if name=='sys_beep':
+            print('\a', end='', flush=True); return 0
+
+        if name=='sys_exec':
+            app=self._s(args[0]) if args else ''
+            try: subprocess.Popen([app])
+            except FileNotFoundError: self.out.append(f'exec: {app}: not found')
+            return 0
+
+        if name=='len':   return len(self._s(args[0])) if args else 0
+        if name=='str':   return self._s(args[0]) if args else ''
+        if name=='num':
+            try: return float(args[0]) if args else 0
+            except: return 0
+        if name=='print': self.out.append(args[0] if args else ''); return 0
+
+        # ── User-defined functions
+        if name in self.fns:
+            params,bp=self.fns[name]; saved=self.pos; self.pos=bp
+            fn_sc={**sc}
+            for p,a in zip(params,args): fn_sc[p]=a
+            result=0
+            try: self._block(fn_sc)
+            except _Ret as r: result=r.v
+            self.pos=saved; return result
+
+        raise CLError(f"Unknown function: {name}")
+
+    def _bool(self, v): return bool(v) if not isinstance(v,str) else len(v)>0
+    def _s(self, v): return str(int(v)) if isinstance(v,float) and v==int(v) else str(v)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+BLUE  = '\033[38;2;85;154;255m'
+DIM   = '\033[38;2;138;153;186m'
+RESET = '\033[0m'
+
+def main():
+    if len(sys.argv) >= 2:
+        # File mode
+        try:
+            with open(sys.argv[1]) as f: src=f.read()
+        except FileNotFoundError:
+            print(f'cl: {sys.argv[1]}: No such file', file=sys.stderr); sys.exit(1)
+        interp=CL()
+        try:
+            out=interp.run(src)
+            if out: print(out)
+        except CLError as e:
+            print(f'{BLUE}cl error:{RESET} {e}', file=sys.stderr); sys.exit(1)
+        return
+
+    # REPL mode
+    print(f'{BLUE}CareOS Care Language (CL) v1.0{RESET}')
+    print(f'{DIM}Type exit to quit, or run: cl <script.cl>{RESET}\n')
+    interp=CL(); buf=[]
+    while True:
+        try:
+            prompt = f'{BLUE}cl{RESET} ❯ ' if not buf else f'{DIM}... {RESET}'
+            line=input(prompt)
+            if line.strip()=='exit': break
+            buf.append(line)
+            try:
+                out=interp.run('\n'.join(buf))
+                if out: print(f'{DIM}{out}{RESET}')
+                buf=[]
+            except CLError:
+                pass  # keep buffering
+        except (EOFError, KeyboardInterrupt):
+            print(); break
+
+if __name__=='__main__': main()

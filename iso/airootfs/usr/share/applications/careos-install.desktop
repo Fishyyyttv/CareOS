@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Install CareOS
+Comment=Start the CareOS installer
+Exec=konsole --hold -e careos-install
+Icon=distributor-logo-careos
+Terminal=false
+Type=Application
+Categories=CareOS;System;

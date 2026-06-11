@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""CareOS installer launcher."""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+
+BLUE = "\033[38;2;85;154;255m"
+ACCENT = "\033[38;2;130;188;255m"
+DIM = "\033[38;2;138;153;186m"
+RED = "\033[38;2;245;96;96m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def is_root() -> bool:
+    return getattr(os, "geteuid", lambda: 1)() == 0
+
+
+def banner() -> None:
+    print(f"""
+{BLUE}{BOLD}CareOS Installer{RESET}
+{DIM}Install the CareOS Plasma desktop onto this computer.{RESET}
+""")
+
+
+def main() -> int:
+    banner()
+
+    calamares = shutil.which("calamares")
+    if calamares and os.environ.get("DISPLAY"):
+        print(f"{ACCENT}Starting graphical CareOS installer...{RESET}")
+        if is_root():
+            os.execv(calamares, [calamares])
+        pkexec = shutil.which("pkexec")
+        if pkexec:
+            os.execv(pkexec, [pkexec, calamares])
+
+    archinstall = shutil.which("archinstall")
+    if not archinstall:
+        print(f"{RED}No installer backend was found.{RESET}")
+        print(f"{DIM}Install archinstall or Calamares, then run careos-install again.{RESET}")
+        return 1
+
+    print(f"{DIM}Graphical installer is unavailable in this image, so CareOS will use the guided terminal installer backend.{RESET}")
+    print(f"{DIM}The installed system keeps the CareOS identity, theme, shell profile, and desktop defaults.{RESET}\n")
+    if is_root():
+        os.execv(archinstall, [archinstall])
+
+    sudo = shutil.which("sudo")
+    if not sudo:
+        print(f"{RED}Administrator access is required and sudo was not found.{RESET}")
+        return 1
+    return subprocess.call([sudo, archinstall])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

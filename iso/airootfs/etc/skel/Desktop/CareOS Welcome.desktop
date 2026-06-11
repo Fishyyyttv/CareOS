@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=CareOS Welcome
+Comment=Open the CareOS welcome center
+Exec=firefox /usr/share/careos/welcome/index.html
+Icon=distributor-logo-careos
+Terminal=false
+Type=Application

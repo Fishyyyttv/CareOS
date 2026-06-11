@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""CareScript Studio — CareOS Care Language IDE."""
+
+import sys, tempfile
+from pathlib import Path
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout,
+    QSplitter, QPlainTextEdit, QTextEdit, QToolBar,
+    QFileDialog, QLabel, QStatusBar,
+)
+from PyQt6.QtGui import (
+    QSyntaxHighlighter, QTextCharFormat, QColor, QFont,
+    QKeySequence, QAction,
+)
+from PyQt6.QtCore import Qt, QProcess, QRegularExpression, QSize
+
+# ── Palette ───────────────────────────────────────────────────────────────────
+BG      = "#080d17"
+SURFACE = "#0f1726"
+PRIMARY = "#559aff"
+ACCENT  = "#82bcff"
+TEXT    = "#eaf0ff"
+DIM     = "#8a99ba"
+BORDER  = "#2c3c58"
+SUCCESS = "#2ecc8e"
+ERROR   = "#f56060"
+
+
+# ── Syntax highlighter ────────────────────────────────────────────────────────
+class CLHighlighter(QSyntaxHighlighter):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._rules = []
+
+        def fmt(color, italic=False, bold=False):
+            f = QTextCharFormat()
+            f.setForeground(QColor(color))
+            if italic:
+                f.setFontItalic(True)
+            if bold:
+                f.setFontWeight(700)
+            return f
+
+        patterns = [
+            (r'\b(var|if|else|while|func|return|print)\b',            fmt(PRIMARY, bold=True)),
+            (r'\b(sys_alert|sys_window|sys_beep|sys_exec|len|str|num)\b', fmt(ACCENT)),
+            (r'"[^"]*"',                                               fmt(SUCCESS)),
+            (r'\b\d+(\.\d+)?\b',                                      fmt(TEXT, italic=True)),
+            (r'(//[^\n]*|#[^\n]*)',                                    fmt(DIM, italic=True)),
+            (r'[+\-*/=<>!]+',                                          fmt(ERROR)),
+        ]
+        for pattern, fmt_ in patterns:
+            self._rules.append((QRegularExpression(pattern), fmt_))
+
+    def highlightBlock(self, text):
+        for rx, fmt in self._rules:
+            it = rx.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                self.setFormat(m.capturedStart(), m.capturedLength(), fmt)
+
+
+# ── Main window ───────────────────────────────────────────────────────────────
+class CareScriptStudio(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self._filepath: Path | None = None
+        self._process = QProcess(self)
+        self._process.readyReadStandardOutput.connect(self._on_stdout)
+        self._process.readyReadStandardError.connect(self._on_stderr)
+        self._process.finished.connect(self._on_done)
+        self._build_ui()
+        self._new_file()
+
+    def _build_ui(self):
+        self.setWindowTitle("CareScript Studio")
+        self.setMinimumSize(900, 620)
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget   {{ background: {BG}; color: {TEXT}; }}
+            QToolBar               {{ background: {SURFACE}; border-bottom: 1px solid {BORDER};
+                                      spacing: 4px; padding: 4px 8px; }}
+            QToolButton            {{ color: {TEXT}; background: transparent;
+                                      border: 1px solid transparent; border-radius: 4px;
+                                      padding: 4px 12px; }}
+            QToolButton:hover      {{ background: {BORDER}; }}
+            QToolButton:pressed    {{ background: {PRIMARY}; color: {BG}; }}
+            QSplitter::handle      {{ background: {BORDER}; }}
+            QStatusBar             {{ background: {SURFACE}; color: {DIM}; }}
+            QLabel                 {{ color: {DIM}; }}
+        """)
+
+        tb = QToolBar()
+        tb.setMovable(False)
+        tb.setIconSize(QSize(16, 16))
+        self.addToolBar(tb)
+
+        for label, shortcut, slot in [
+            ("New",       "Ctrl+N", self._new_file),
+            ("Open",      "Ctrl+O", self._open_file),
+            ("Save",      "Ctrl+S", self._save_file),
+        ]:
+            act = QAction(label, self)
+            act.setShortcut(QKeySequence(shortcut))
+            act.triggered.connect(slot)
+            tb.addAction(act)
+
+        tb.addSeparator()
+        run_act = QAction("▶  Run", self)
+        run_act.setShortcut(QKeySequence("Ctrl+R"))
+        run_act.triggered.connect(self._run)
+        tb.addAction(run_act)
+
+        self._editor = QPlainTextEdit()
+        self._editor.setFont(QFont("Cascadia Code", 12))
+        self._editor.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background: {SURFACE}; color: {TEXT};
+                border: 1px solid {BORDER}; border-radius: 6px; padding: 8px;
+                selection-background-color: {BORDER};
+            }}
+        """)
+        CLHighlighter(self._editor.document())
+
+        self._output = QTextEdit()
+        self._output.setReadOnly(True)
+        self._output.setFont(QFont("Cascadia Code", 11))
+        self._output.setStyleSheet(f"""
+            QTextEdit {{
+                background: {BG}; color: {DIM};
+                border: 1px solid {BORDER}; border-radius: 6px; padding: 8px;
+            }}
+        """)
+
+        out_label = QLabel("Output")
+        out_label.setStyleSheet(f"color: {DIM}; font-size: 11px; padding: 2px 0;")
+
+        out_box = QWidget()
+        out_layout = QVBoxLayout(out_box)
+        out_layout.setContentsMargins(0, 0, 0, 0)
+        out_layout.setSpacing(2)
+        out_layout.addWidget(out_label)
+        out_layout.addWidget(self._output)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self._editor)
+        splitter.addWidget(out_box)
+        splitter.setSizes([420, 180])
+
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(12, 8, 12, 12)
+        layout.setSpacing(0)
+        layout.addWidget(splitter)
+        self.setCentralWidget(central)
+
+        self._status = QStatusBar()
+        self.setStatusBar(self._status)
+        self._status.showMessage("Ready")
+
+    # ── File ops ──────────────────────────────────────────────────────────────
+
+    def _new_file(self):
+        self._editor.setPlainText('// New CL script\nprint "Hello from CareOS!";')
+        self._filepath = None
+        self.setWindowTitle("CareScript Studio — untitled.cl")
+        self._output.clear()
+
+    def _open_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open CL Script", str(Path.home()),
+            "Care Language (*.cl);;All Files (*)"
+        )
+        if path:
+            self._filepath = Path(path)
+            self._editor.setPlainText(self._filepath.read_text(encoding="utf-8"))
+            self.setWindowTitle(f"CareScript Studio — {self._filepath.name}")
+
+    def _save_file(self):
+        if not self._filepath:
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save CL Script", str(Path.home() / "script.cl"),
+                "Care Language (*.cl);;All Files (*)"
+            )
+            if not path:
+                return
+            self._filepath = Path(path)
+        self._filepath.write_text(self._editor.toPlainText(), encoding="utf-8")
+        self.setWindowTitle(f"CareScript Studio — {self._filepath.name}")
+        self._status.showMessage(f"Saved {self._filepath.name}")
+
+    # ── Run ───────────────────────────────────────────────────────────────────
+
+    def _run(self):
+        self._output.clear()
+        if self._process.state() != QProcess.ProcessState.NotRunning:
+            return
+        tmp = Path(tempfile.gettempdir()) / "carescript_run.cl"
+        tmp.write_text(self._editor.toPlainText(), encoding="utf-8")
+        self._status.showMessage("Running…")
+        self._process.start("cl", [str(tmp)])
+
+    def _on_stdout(self):
+        data = self._process.readAllStandardOutput().data().decode(errors="replace")
+        self._output.setTextColor(QColor(SUCCESS))
+        self._output.insertPlainText(data)
+        self._output.ensureCursorVisible()
+
+    def _on_stderr(self):
+        data = self._process.readAllStandardError().data().decode(errors="replace")
+        self._output.setTextColor(QColor(ERROR))
+        self._output.insertPlainText(data)
+        self._output.ensureCursorVisible()
+
+    def _on_done(self, exit_code, _):
+        self._status.showMessage("Done ✓" if exit_code == 0 else f"Exit {exit_code}")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("CareScript Studio")
+    win = CareScriptStudio()
+    if len(sys.argv) >= 2:
+        p = Path(sys.argv[1])
+        if p.exists():
+            win._filepath = p
+            win._editor.setPlainText(p.read_text(encoding="utf-8"))
+            win.setWindowTitle(f"CareScript Studio — {p.name}")
+    win.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

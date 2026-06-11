@@ -1,0 +1,23 @@
+# Disk images
+careos.img
+*.img
+
+# ISOs (build output)
+careos.iso
+*.iso
+out/
+
+# DOOM assets (copyrighted)
+DOOM1.WAD
+
+# Build artifacts
+*.bin.o
+*.o
+*.elf
+gfx
+kernel/kernel.elf
+iso/boot/kernel.elf
+-boot
+
+# Brainstorming session files
+.superpowers/

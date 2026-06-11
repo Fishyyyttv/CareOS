@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""CareOS package command.
+
+This is intentionally a CareOS command surface while using pacman as the
+trusted package backend.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+
+BLUE = "\033[38;2;85;154;255m"
+ACCENT = "\033[38;2;130;188;255m"
+GREEN = "\033[38;2;46;204;142m"
+RED = "\033[38;2;245;96;96m"
+DIM = "\033[38;2;138;153;186m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+HELP = f"""
+{BLUE}{BOLD}CareOS Packages{RESET}
+{DIM}CareOS package flow backed by pacman and the Arch repositories.{RESET}
+
+{ACCENT}Usage{RESET}
+  carepkg search <text>       Search packages
+  carepkg info <package>      Show package details
+  carepkg install <package>   Install one or more packages
+  carepkg remove <package>    Remove one or more packages
+  carepkg list                List installed packages
+  carepkg update              Refresh package databases
+  carepkg upgrade             Upgrade the system
+"""
+
+
+def is_root() -> bool:
+    return getattr(os, "geteuid", lambda: 1)() == 0
+
+
+def run(cmd: list[str]) -> int:
+    return subprocess.run(cmd).returncode
+
+
+def admin(cmd: list[str]) -> int:
+    if is_root():
+        return run(cmd)
+    sudo = shutil.which("sudo")
+    if not sudo:
+        print(f"{RED}This action needs administrator access and sudo is missing.{RESET}")
+        return 1
+    return run([sudo, *cmd])
+
+
+def need_args(args: list[str], usage: str) -> list[str]:
+    if not args:
+        print(f"{RED}Usage:{RESET} {usage}")
+        sys.exit(2)
+    return args
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in {"-h", "--help", "help"}:
+        print(HELP)
+        return 0
+
+    command, rest = args[0], args[1:]
+
+    if command == "search":
+        query = " ".join(need_args(rest, "carepkg search <text>"))
+        print(f"{BLUE}Searching CareOS packages for{RESET} {ACCENT}{query}{RESET}\n")
+        return run(["pacman", "-Ss", query])
+
+    if command == "info":
+        package = need_args(rest, "carepkg info <package>")[0]
+        return run(["pacman", "-Si", package])
+
+    if command == "install":
+        packages = need_args(rest, "carepkg install <package> [package...]")
+        print(f"{BLUE}Installing through CareOS Packages:{RESET} {ACCENT}{' '.join(packages)}{RESET}")
+        rc = admin(["pacman", "-S", *packages])
+        if rc == 0:
+            print(f"{GREEN}Done.{RESET}")
+        return rc
+
+    if command == "remove":
+        packages = need_args(rest, "carepkg remove <package> [package...]")
+        print(f"{BLUE}Removing through CareOS Packages:{RESET} {ACCENT}{' '.join(packages)}{RESET}")
+        rc = admin(["pacman", "-Rns", *packages])
+        if rc == 0:
+            print(f"{GREEN}Done.{RESET}")
+        return rc
+
+    if command == "list":
+        return run(["pacman", "-Q"])
+
+    if command == "update":
+        return admin(["pacman", "-Sy"])
+
+    if command == "upgrade":
+        return admin(["pacman", "-Syu"])
+
+    print(f"{RED}Unknown CareOS package command:{RESET} {command}")
+    print(HELP)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

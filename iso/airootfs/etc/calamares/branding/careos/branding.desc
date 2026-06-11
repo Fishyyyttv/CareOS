@@ -1,0 +1,30 @@
+---
+componentName:  careos
+welcomeStyleCalamares: false
+
+strings:
+    productName:         CareOS
+    shortProductName:    CareOS
+    version:             "2026.05 Kindred"
+    shortVersion:        "2026.05"
+    versionedName:       "CareOS 2026.05"
+    shortVersionedName:  "CareOS 2026.05"
+    bootloaderEntryName: CareOS
+    productUrl:          "https://careos.local"
+    supportUrl:          "file:///usr/share/careos/welcome/index.html"
+    knownIssuesUrl:      ""
+    releaseNotesUrl:     ""
+
+images:
+    productLogo:    "logo.svg"
+    productIcon:    "logo.svg"
+    productWelcome: "logo.svg"
+
+slideshow:    "show.qml"
+slideshowAPI: 2
+
+style:
+    sidebarBackground:    "#080d17"
+    sidebarText:          "#eaf0ff"
+    sidebarTextSelect:    "#080d17"
+    sidebarTextHighlight: "#559aff"

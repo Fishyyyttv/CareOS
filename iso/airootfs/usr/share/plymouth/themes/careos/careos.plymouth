@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=CareOS
+Description=CareOS boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/careos
+ScriptFile=/usr/share/plymouth/themes/careos/careos.script

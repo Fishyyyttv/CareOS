@@ -1,0 +1,15 @@
+[Compositing]
+Backend=OpenGL
+GLCore=true
+HiddenPreviews=5
+OpenGLIsUnsafe=false
+
+[Effect-overview]
+BorderActivate=7
+
+[org.kde.kdecoration2]
+library=org.kde.breeze
+theme=__aurorae__svg__Breeze
+
+[TabBox]
+HighlightWindows=true

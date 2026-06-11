@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=CareOS Welcome Center
+Exec=firefox --new-window /usr/share/careos/welcome/index.html
+Icon=distributor-logo-careos
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=2

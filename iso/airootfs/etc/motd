@@ -1,0 +1,9 @@
+
+  CAREOS 2026.05 PLASMA
+  A CareOS desktop built on an Arch Linux core.
+
+  carectl        CareOS control command
+  careos-install Install CareOS
+  carepkg        Package management
+  careos-help    Command reference
+

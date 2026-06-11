@@ -1,0 +1,185 @@
+# =============================================================================
+# CareOS packages.x86_64 — full package list for the live ISO
+# =============================================================================
+
+# --- Base system ---
+base
+base-devel
+linux
+linux-headers
+linux-firmware
+mkinitcpio
+mkinitcpio-archiso
+
+# --- Boot ---
+grub
+efibootmgr
+os-prober
+memtest86+-efi
+
+# --- Arch tooling ---
+arch-install-scripts
+archlinux-keyring
+
+# --- Network ---
+networkmanager
+network-manager-applet
+nm-connection-editor
+wireless_tools
+wpa_supplicant
+
+# --- Display server ---
+xorg-server
+xorg-xrandr
+xorg-xinit
+xorg-xkbutils
+
+# --- Display manager ---
+sddm
+sddm-kcm
+
+# --- KDE Plasma ---
+plasma-meta
+xdg-desktop-portal-kde
+xdg-user-dirs
+
+# --- KDE apps ---
+ark
+dolphin
+filelight
+gwenview
+kcalc
+kdeconnect
+kdegraphics-thumbnailers
+kfind
+khelpcenter
+konsole
+kate
+kwrite
+okular
+partitionmanager
+plasma-systemmonitor
+spectacle
+print-manager
+elisa
+kmail
+kontact
+
+# --- Browser ---
+firefox
+
+# --- Fonts (from common Linux distros) ---
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+noto-fonts-extra
+ttf-dejavu
+ttf-liberation
+ttf-ubuntu-font-family
+ttf-cascadia-code
+adobe-source-code-pro-fonts
+ttf-fira-sans
+ttf-fira-code
+
+# --- Drivers: GPU ---
+mesa
+lib32-mesa
+libva-mesa-driver
+libvdpau
+vulkan-intel
+vulkan-radeon
+intel-media-driver
+xf86-video-intel
+xf86-video-amdgpu
+xf86-video-nouveau
+vulkan-icd-loader
+lib32-vulkan-icd-loader
+
+# --- Drivers: Input ---
+xf86-input-libinput
+
+# --- Audio ---
+pipewire
+pipewire-alsa
+pipewire-jack
+pipewire-pulse
+gst-plugin-pipewire
+wireplumber
+pavucontrol
+
+# --- Bluetooth ---
+bluez
+bluez-utils
+
+# --- Printing ---
+cups
+cups-pdf
+
+# --- Storage ---
+ntfs-3g
+exfatprogs
+dosfstools
+btrfs-progs
+e2fsprogs
+gparted
+
+# --- Installer ---
+archinstall
+kpmcore
+
+# --- Power ---
+power-profiles-daemon
+upower
+
+# --- System utils ---
+sudo
+nano
+vim
+git
+wget
+curl
+htop
+fastfetch
+pv
+zip
+unzip
+7zip
+rsync
+lshw
+pciutils
+usbutils
+dmidecode
+inxi
+
+# --- Shell ---
+zsh
+zsh-syntax-highlighting
+zsh-autosuggestions
+zsh-completions
+
+# --- Plymouth (boot animation) ---
+plymouth
+
+# --- Icon theme ---
+papirus-icon-theme
+
+# --- Qt style engine ---
+kvantum
+
+# --- Python (for CL interpreter + CareOS tools) ---
+python
+python-pyqt6
+
+# --- Zram (compressed RAM swap) ---
+zram-generator
+
+# --- Flatpak support ---
+flatpak
+
+# --- Image generation (for themes) ---
+imagemagick
+
+# --- Misc ---
+bash-completion
+man-db
+man-pages
