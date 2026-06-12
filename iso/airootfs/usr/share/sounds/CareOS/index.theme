@@ -1,0 +1,8 @@
+[Sound Theme]
+Name=CareOS
+Comment=CareOS system sounds
+Inherits=freedesktop
+Directories=stereo
+
+[stereo]
+OutputProfile=stereo
