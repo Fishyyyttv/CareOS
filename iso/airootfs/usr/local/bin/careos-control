@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+"""CareOS Control Center — PyQt6 tabbed settings panel."""
+import configparser, json, subprocess, sys
+from pathlib import Path
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QCheckBox, QRadioButton, QFrame
+)
+
+CONFIG_DIR = Path.home() / ".config" / "careos"
+BIT_CFG    = CONFIG_DIR / "bit.json"
+SETTINGS   = CONFIG_DIR / "settings.ini"
+
+STYLE = """
+QWidget       { background: #080d17; color: #eaf0ff; font-family: Inter; font-size: 13px; }
+QTabWidget::pane { border: none; background: #080d17; }
+QTabBar::tab  {
+    background: #0f1726; color: #8a99ba;
+    border: none; padding: 10px 20px; border-radius: 6px 6px 0 0; margin-right: 2px;
+}
+QTabBar::tab:selected { background: #1c2942; color: #eaf0ff; }
+QPushButton {
+    background: #559aff; color: #080d17; border: none;
+    border-radius: 7px; padding: 8px 20px; font-weight: 600;
+}
+QPushButton:hover   { background: #6aabff; }
+QPushButton:pressed { background: #2f6fc8; }
+QPushButton#secondary {
+    background: #1c2942; color: #8a99ba; border: 1px solid #2c3c58;
+}
+QPushButton#secondary:hover { color: #eaf0ff; background: #2a3a56; }
+QCheckBox { spacing: 8px; }
+QCheckBox::indicator { width:16px; height:16px; border-radius:4px;
+                        border:1px solid #2c3c58; background:#0f1726; }
+QCheckBox::indicator:checked { background:#559aff; border-color:#559aff; }
+QRadioButton { spacing: 8px; }
+QRadioButton::indicator { width:14px; height:14px; border-radius:7px;
+                           border:1px solid #2c3c58; background:#0f1726; }
+QRadioButton::indicator:checked { background:#559aff; border-color:#559aff; }
+"""
+
+OUTFIT_NAMES   = ["blue", "cyan", "green", "pink", "gold"]
+OUTFIT_COLORS  = ["#559aff", "#38bff8", "#2ecc8e", "#f56060", "#f0b430"]
+OUTFIT_UNLOCKS = [0, 50, 100, 150, 200]
+
+
+def load_bit():
+    if BIT_CFG.exists():
+        try:
+            return json.loads(BIT_CFG.read_text())
+        except Exception:
+            pass
+    return {"points": 0, "outfit": "blue"}
+
+
+def save_bit(cfg):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    BIT_CFG.write_text(json.dumps(cfg, indent=2))
+
+
+def load_settings():
+    cfg = configparser.ConfigParser()
+    if SETTINGS.exists():
+        cfg.read(str(SETTINGS))
+    return cfg
+
+
+def save_settings(cfg):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(str(SETTINGS), "w") as f:
+        cfg.write(f)
+
+
+def _sep():
+    f = QFrame()
+    f.setFrameShape(QFrame.Shape.HLine)
+    f.setStyleSheet("color: #2c3c58;")
+    return f
+
+
+def _h(text, size=14):
+    lbl = QLabel(text)
+    lbl.setFont(QFont("Inter", size, QFont.Weight.Bold))
+    return lbl
+
+
+def _sub(text):
+    lbl = QLabel(text)
+    lbl.setStyleSheet("color: #505e78; font-size: 11px;")
+    return lbl
+
+
+class BitTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.bit = load_bit()
+        self.ini = load_settings()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(28, 24, 28, 24)
+        v.setSpacing(16)
+
+        v.addWidget(_h("Bit the Desktop Pet"))
+
+        self.enabled_chk = QCheckBox("Show Bit on desktop")
+        enabled = self.ini.get("Bit", "enabled", fallback="true") == "true"
+        self.enabled_chk.setChecked(enabled)
+        self.enabled_chk.toggled.connect(self._toggle_bit)
+        v.addWidget(self.enabled_chk)
+
+        v.addWidget(_sep())
+
+        pts = self.bit.get("points", 0)
+        row = QHBoxLayout()
+        row.addWidget(_h(f"Care Points: {pts}", 13))
+        reset_btn = QPushButton("Reset")
+        reset_btn.setObjectName("secondary")
+        reset_btn.setFixedWidth(70)
+        reset_btn.clicked.connect(self._reset_points)
+        row.addWidget(reset_btn)
+        v.addLayout(row)
+        v.addWidget(_sub("Click Bit on the desktop to earn points. Unlock new outfits!"))
+
+        v.addWidget(_sep())
+        v.addWidget(_h("Outfits", 13))
+
+        grid = QHBoxLayout()
+        grid.setSpacing(8)
+        self._outfit_btns = []
+        current = self.bit.get("outfit", "blue")
+        for i, (name, color) in enumerate(zip(OUTFIT_NAMES, OUTFIT_COLORS)):
+            threshold = OUTFIT_UNLOCKS[i]
+            btn = QPushButton(name.capitalize())
+            btn.setFixedSize(72, 60)
+            unlocked = pts >= threshold
+            btn.setEnabled(unlocked)
+            btn.setCheckable(True)
+            btn.setChecked(name == current)
+            if unlocked:
+                btn.setStyleSheet(f"""
+                    QPushButton {{ background:#0f1726; border:2px solid #2c3c58;
+                        border-radius:8px; color:#8a99ba; font-size:11px; }}
+                    QPushButton:checked {{ border-color:{color}; color:#eaf0ff; }}
+                    QPushButton:hover   {{ border-color:{color}88; }}
+                """)
+                btn.clicked.connect(lambda _, n=name: self._set_outfit(n))
+            else:
+                btn.setStyleSheet("""
+                    QPushButton { background:#0a0e18; border:1px solid #1a2030;
+                        border-radius:8px; color:#2c3c58; font-size:10px; }
+                """)
+                btn.setToolTip(f"Unlock at {threshold} pts")
+            self._outfit_btns.append(btn)
+            grid.addWidget(btn)
+        v.addLayout(grid)
+        v.addStretch()
+
+    def _toggle_bit(self, checked):
+        if "Bit" not in self.ini:
+            self.ini["Bit"] = {}
+        self.ini["Bit"]["enabled"] = "true" if checked else "false"
+        save_settings(self.ini)
+        cmd = ["systemctl", "--user", "start" if checked else "stop", "bit-pet"]
+        subprocess.run(cmd, capture_output=True)
+
+    def _reset_points(self):
+        self.bit["points"] = 0
+        save_bit(self.bit)
+
+    def _set_outfit(self, name):
+        self.bit["outfit"] = name
+        save_bit(self.bit)
+        for btn in self._outfit_btns:
+            btn.setChecked(btn.text().lower() == name)
+
+
+class AppearanceTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(28, 24, 28, 24)
+        v.setSpacing(16)
+
+        v.addWidget(_h("Appearance"))
+
+        v.addWidget(_h("Theme", 13))
+        row = QHBoxLayout()
+        self._dark  = QRadioButton("Dark  (default)")
+        self._light = QRadioButton("Light")
+        self._dark.setChecked(True)
+        row.addWidget(self._dark)
+        row.addWidget(self._light)
+        row.addStretch()
+        v.addLayout(row)
+
+        v.addWidget(_sep())
+        v.addWidget(_h("Accent Color", 13))
+        v.addWidget(_sub("Changes affect future sessions."))
+        accents = [
+            ("#559aff", "Blue"), ("#38bff8", "Cyan"), ("#2ecc8e", "Green"),
+            ("#f56060", "Pink"), ("#f0b430", "Gold"), ("#a78bfa", "Purple"),
+        ]
+        arow = QHBoxLayout()
+        arow.setSpacing(8)
+        for color, name in accents:
+            btn = QPushButton()
+            btn.setFixedSize(36, 36)
+            btn.setToolTip(name)
+            btn.setStyleSheet(f"""
+                QPushButton {{ background:{color}; border-radius:18px; border:none; }}
+                QPushButton:hover {{ border:2px solid #eaf0ff; }}
+            """)
+            arow.addWidget(btn)
+        arow.addStretch()
+        v.addLayout(arow)
+
+        v.addWidget(_sep())
+        v.addWidget(_h("Wallpaper", 13))
+        for name, desc in [
+            ("Navy Grid", "Default dark navy with blue grid"),
+            ("Deep Space", "Deeper blue-black with star field"),
+            ("Minimal Dark", "Solid #080d17, no patterns"),
+        ]:
+            btn = QPushButton(name)
+            btn.setObjectName("secondary")
+            btn.setToolTip(desc)
+            v.addWidget(btn)
+        v.addStretch()
+
+
+class SystemTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(28, 24, 28, 24)
+        v.setSpacing(16)
+
+        v.addWidget(_h("System"))
+
+        import platform
+        try:
+            kernel = subprocess.check_output(["uname", "-r"], text=True).strip()
+        except Exception:
+            kernel = "unknown"
+        try:
+            with open("/etc/careos-release") as f:
+                version = f.read().strip()
+        except Exception:
+            version = "CareOS 9"
+
+        for label, value in [
+            ("Version", version), ("Kernel", kernel),
+            ("Platform", platform.machine()),
+        ]:
+            row = QHBoxLayout()
+            row.addWidget(_sub(label + ":"))
+            lbl = QLabel(value)
+            lbl.setStyleSheet("color: #82bcff; font-size: 12px;")
+            row.addWidget(lbl)
+            row.addStretch()
+            v.addLayout(row)
+
+        v.addWidget(_sep())
+
+        for label, cmd in [
+            ("Update packages", ["konsole", "-e", "carepkg", "update"]),
+            ("Open Terminal",   ["konsole"]),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _, c=cmd: subprocess.Popen(c))
+            v.addWidget(btn)
+
+        v.addStretch()
+
+
+class AboutTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(28, 40, 28, 24)
+        v.setSpacing(12)
+        v.addStretch()
+
+        logo = QLabel("💙")
+        logo.setFont(QFont("Inter", 48))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(logo)
+
+        v.addWidget(QLabel("CareOS", alignment=Qt.AlignmentFlag.AlignCenter,
+                            font=QFont("Inter", 22, QFont.Weight.Bold)))
+        v.addWidget(QLabel("Version 9", alignment=Qt.AlignmentFlag.AlignCenter,
+                            styleSheet="color:#8a99ba;"))
+        v.addWidget(QLabel(
+            "A focused Arch Linux desktop built with care.\n"
+            "Custom kernel, KDE Plasma, and Bit the pet.",
+            alignment=Qt.AlignmentFlag.AlignCenter,
+            styleSheet="color:#505e78; font-size:12px;",
+            wordWrap=True,
+        ))
+        v.addSpacing(12)
+        gh = QPushButton("View on GitHub")
+        gh.setObjectName("secondary")
+        gh.clicked.connect(lambda: subprocess.Popen(
+            ["xdg-open", "https://github.com/Fishyyyttv/CareOS"]
+        ))
+        v.addWidget(gh, alignment=Qt.AlignmentFlag.AlignCenter)
+        v.addStretch()
+
+
+class ControlCenter(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("CareOS Control")
+        self.setFixedSize(700, 500)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+
+        tabs = QTabWidget()
+        tabs.addTab(BitTab(),        "  Bit  ")
+        tabs.addTab(AppearanceTab(), "  Appearance  ")
+        tabs.addTab(SystemTab(),     "  System  ")
+        tabs.addTab(AboutTab(),      "  About  ")
+        v.addWidget(tabs)
+
+        scr = QApplication.primaryScreen()
+        if scr:
+            geo = scr.geometry()
+            self.move(
+                (geo.width()  - self.width())  // 2,
+                (geo.height() - self.height()) // 2,
+            )
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setStyleSheet(STYLE)
+    w = ControlCenter()
+    w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
