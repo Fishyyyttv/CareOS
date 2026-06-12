@@ -1,0 +1,17 @@
+[Icon Theme]
+Name=CareOS
+Comment=CareOS icon theme
+Inherits=Papirus,hicolor
+Directories=apps/scalable,places/scalable
+
+[apps/scalable]
+Size=scalable
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[places/scalable]
+Size=scalable
+MinSize=16
+MaxSize=512
+Type=Scalable
