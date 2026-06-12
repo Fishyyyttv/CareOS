@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""CareOS Welcome — 4-page PyQt6 first-run wizard."""
+import json, sys
+from pathlib import Path
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QPainter, QFont, QPainterPath
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QCheckBox, QStackedWidget
+)
+
+CONFIG_DIR   = Path.home() / ".config" / "careos"
+WELCOME_FLAG = CONFIG_DIR / ".welcomed"
+BIT_CFG      = CONFIG_DIR / "bit.json"
+
+STYLE = """
+QWidget { background: #080d17; color: #eaf0ff; font-family: Inter; }
+QPushButton {
+    background: #559aff; color: #080d17; border: none;
+    border-radius: 8px; padding: 10px 28px; font-size: 14px; font-weight: 600;
+}
+QPushButton:hover    { background: #6aabff; }
+QPushButton:pressed  { background: #2f6fc8; }
+QPushButton#secondary {
+    background: transparent; color: #8a99ba;
+    border: 1px solid #2c3c58;
+}
+QPushButton#secondary:hover { background: #1c2942; color: #eaf0ff; }
+QCheckBox { font-size: 13px; spacing: 8px; }
+QCheckBox::indicator { width:18px; height:18px; border-radius:4px;
+                        border:1px solid #2c3c58; background:#0f1726; }
+QCheckBox::indicator:checked { background:#559aff; border-color:#559aff; }
+"""
+
+OUTFITS = [
+    ("blue",  "#559aff", "Blue"),
+    ("cyan",  "#38bff8", "Cyan"),
+    ("green", "#2ecc8e", "Green"),
+    ("pink",  "#f56060", "Pink"),
+    ("gold",  "#f0b430", "Gold"),
+]
+
+
+def load_bit():
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if BIT_CFG.exists():
+        try:
+            return json.loads(BIT_CFG.read_text())
+        except Exception:
+            pass
+    return {"points": 0, "outfit": "blue"}
+
+
+def save_bit(cfg):
+    BIT_CFG.write_text(json.dumps(cfg, indent=2))
+
+
+class HeartWidget(QWidget):
+    """Animated heart-C logo."""
+    def __init__(self, size=80, parent=None):
+        super().__init__(parent)
+        self.size = size
+        self.setFixedSize(size, size)
+        self._scale = 1.0
+        self._growing = True
+        t = QTimer(self)
+        t.timeout.connect(self._pulse)
+        t.start(40)
+
+    def _pulse(self):
+        step = 0.003
+        if self._growing:
+            self._scale += step
+            if self._scale >= 1.06:
+                self._growing = False
+        else:
+            self._scale -= step
+            if self._scale <= 1.0:
+                self._growing = True
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        s = self.size
+        cx, cy = s // 2, s // 2
+        p.translate(cx, cy)
+        p.scale(self._scale, self._scale)
+        p.translate(-cx, -cy)
+        path = QPainterPath()
+        r = s * 0.28
+        path.addEllipse(cx - r * 1.05, cy - r * 0.8, r * 1.9, r * 1.9)
+        path.addEllipse(cx - r * 0.85, cy - r * 0.8, r * 1.9, r * 1.9)
+        p.fillPath(path, QColor("#559aff"))
+        p.setPen(QColor("#0f1726"))
+        font = QFont("Inter", int(s * 0.32), QFont.Weight.Bold)
+        p.setFont(font)
+        p.drawText(0, 0, s, int(s * 1.1), Qt.AlignmentFlag.AlignCenter, "C")
+        p.end()
+
+
+class OutfitButton(QPushButton):
+    def __init__(self, name, color, label, parent=None):
+        super().__init__(parent)
+        self.outfit_name = name
+        self._color = color
+        self.setCheckable(True)
+        self.setFixedSize(80, 90)
+        self.setText(label)
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: #0f1726; border: 2px solid #2c3c58;
+                border-radius: 10px; color: #8a99ba; font-size: 10px;
+                padding-top: 50px;
+            }}
+            QPushButton:checked {{
+                border-color: {color}; color: #eaf0ff;
+            }}
+        """)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = 18
+        p.setBrush(QColor(self._color))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(self.width()//2 - r, 12, r*2, r*2)
+        p.end()
+
+
+def _label(text, size=13, color="#eaf0ff", bold=False):
+    lbl = QLabel(text)
+    f = QFont("Inter", size)
+    if bold:
+        f.setWeight(QFont.Weight.Bold)
+    lbl.setFont(f)
+    lbl.setStyleSheet(f"color: {color};")
+    lbl.setWordWrap(True)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    return lbl
+
+
+class WelcomeApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.bit_cfg = load_bit()
+        self.setWindowTitle("Welcome to CareOS")
+        self.setFixedSize(600, 420)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        self.stack = QStackedWidget()
+        root.addWidget(self.stack)
+
+        self.stack.addWidget(self._page1())
+        self.stack.addWidget(self._page2())
+        self.stack.addWidget(self._page3())
+        self.stack.addWidget(self._page4())
+
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.geometry()
+            self.move(
+                (geo.width()  - self.width())  // 2,
+                (geo.height() - self.height()) // 2,
+            )
+
+    def _nav_row(self, back_cb=None, next_cb=None, next_label="Next →"):
+        row = QHBoxLayout()
+        row.setContentsMargins(28, 0, 28, 24)
+        if back_cb:
+            b = QPushButton("← Back")
+            b.setObjectName("secondary")
+            b.clicked.connect(back_cb)
+            row.addWidget(b)
+        row.addStretch()
+        if next_cb:
+            n = QPushButton(next_label)
+            n.clicked.connect(next_cb)
+            row.addWidget(n)
+        w = QWidget()
+        w.setLayout(row)
+        return w
+
+    def _page1(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(40, 40, 40, 24)
+        v.setSpacing(12)
+        v.addStretch()
+        v.addWidget(HeartWidget(88, w), alignment=Qt.AlignmentFlag.AlignCenter)
+        v.addSpacing(8)
+        v.addWidget(_label("Welcome to CareOS", 28, bold=True))
+        v.addWidget(_label("A focused Arch Linux desktop, made with care.", 13, "#8a99ba"))
+        v.addStretch()
+        v.addWidget(self._nav_row(next_cb=lambda: self.stack.setCurrentIndex(1),
+                                  next_label="Get started →"))
+        return w
+
+    def _page2(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(40, 32, 40, 24)
+        v.setSpacing(10)
+        v.addWidget(_label("Pick Bit's starting color", 18, bold=True))
+        v.addWidget(_label("You can change this anytime in CareOS Control.", 12, "#8a99ba"))
+        v.addSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self._outfit_btns = []
+        for name, color, label in OUTFITS:
+            btn = OutfitButton(name, color, label)
+            btn.setChecked(name == self.bit_cfg.get("outfit", "blue"))
+            btn.clicked.connect(lambda _, n=name: self._pick_outfit(n))
+            row.addWidget(btn)
+            self._outfit_btns.append(btn)
+        v.addLayout(row)
+        v.addStretch()
+        v.addWidget(self._nav_row(
+            back_cb=lambda: self.stack.setCurrentIndex(0),
+            next_cb=lambda: self.stack.setCurrentIndex(2),
+        ))
+        return w
+
+    def _pick_outfit(self, name):
+        self.bit_cfg["outfit"] = name
+        for b in self._outfit_btns:
+            b.setChecked(b.outfit_name == name)
+
+    def _page3(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(60, 32, 60, 24)
+        v.setSpacing(14)
+        v.addWidget(_label("Set up your experience", 18, bold=True))
+        v.addSpacing(4)
+
+        self._chk_bit    = QCheckBox("Enable Bit (desktop pet)")
+        self._chk_bit.setChecked(True)
+        self._chk_sounds = QCheckBox("Enable system sounds")
+        self._chk_sounds.setChecked(True)
+
+        for chk in (self._chk_bit, self._chk_sounds):
+            v.addWidget(chk)
+
+        v.addStretch()
+        v.addWidget(self._nav_row(
+            back_cb=lambda: self.stack.setCurrentIndex(1),
+            next_cb=self._finish,
+            next_label="Finish ✓",
+        ))
+        return w
+
+    def _page4(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(40, 48, 40, 24)
+        v.setSpacing(12)
+        v.addStretch()
+        v.addWidget(HeartWidget(72, w), alignment=Qt.AlignmentFlag.AlignCenter)
+        v.addSpacing(8)
+        v.addWidget(_label("You're all set!", 24, bold=True))
+        v.addWidget(_label("Bit is ready to hang out. Have fun!", 13, "#8a99ba"))
+        v.addStretch()
+        v.addWidget(self._nav_row(next_cb=self.close, next_label="Open desktop →"))
+        return w
+
+    def _finish(self):
+        save_bit(self.bit_cfg)
+        import configparser
+        ini = CONFIG_DIR / "settings.ini"
+        cfg = configparser.ConfigParser()
+        if ini.exists():
+            cfg.read(str(ini))
+        if "Bit" not in cfg:
+            cfg["Bit"] = {}
+        cfg["Bit"]["enabled"] = "true" if self._chk_bit.isChecked() else "false"
+        if "Sounds" not in cfg:
+            cfg["Sounds"] = {}
+        cfg["Sounds"]["enabled"] = "true" if self._chk_sounds.isChecked() else "false"
+        with open(str(ini), "w") as f:
+            cfg.write(f)
+        WELCOME_FLAG.touch()
+        self.stack.setCurrentIndex(3)
+
+
+def main():
+    if WELCOME_FLAG.exists() and "--force" not in sys.argv:
+        return
+    app = QApplication(sys.argv)
+    app.setStyleSheet(STYLE)
+    w = WelcomeApp()
+    w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
