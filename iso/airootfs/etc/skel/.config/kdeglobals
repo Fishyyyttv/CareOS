@@ -62,17 +62,17 @@ ForegroundNegative=245,96,96
 BrowserApplication[$e]=firefox.desktop
 ColorScheme=CareOS
 Name=CareOS
-fixed=Cascadia Code,10,-1,5,50,0,0,0,0,0
-font=Noto Sans,10,-1,5,50,0,0,0,0,0
-menuFont=Noto Sans,10,-1,5,50,0,0,0,0,0
-smallestReadableFont=Noto Sans,8,-1,5,50,0,0,0,0,0
-toolBarFont=Noto Sans,10,-1,5,50,0,0,0,0,0
+fixed=JetBrains Mono,11,-1,5,50,0,0,0,0,0
+font=Inter,10,-1,5,50,0,0,0,0,0
+menuFont=Inter,10,-1,5,50,0,0,0,0,0
+smallestReadableFont=Inter,8,-1,5,50,0,0,0,0,0
+toolBarFont=Inter,10,-1,5,50,0,0,0,0,0
 XftAntialias=true
 XftHintStyle=hintfull
 XftSubPixel=rgb
 
 [Icons]
-Theme=Papirus-Dark
+Theme=CareOS
 
 [KDE]
 LookAndFeelPackage=org.careos.desktop

@@ -1,6 +1,6 @@
 [Appearance]
 ColorScheme=CareOS
-Font=Cascadia Code,11,-1,5,50,0,0,0,0,0
+Font=JetBrains Mono,11,-1,5,50,0,0,0,0,0
 
 [General]
 Name=CareOS
