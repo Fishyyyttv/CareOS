@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Bit Pet
+Exec=/usr/local/bin/bit-pet
+Icon=careos-carescript
+Terminal=false
+X-GNOME-Autostart-enabled=true
