@@ -1,71 +1,119 @@
-// CareOS Plymouth boot animation
-// Dark navy background with animated blue dots and wordmark
+// CareOS Plymouth — heart-C logo + progress ring animation
 
-// ── Screen setup ──────────────────────────────────────────────────────────────
-screen_width  = Window.GetWidth();
-screen_height = Window.GetHeight();
+screen_w = Window.GetWidth();
+screen_h = Window.GetHeight();
+cx = Math.Int(screen_w / 2);
+cy = Math.Int(screen_h / 2);
 
-// ── Background ────────────────────────────────────────────────────────────────
+// Background
 bg = Rectangle();
-bg.SetX(0);
-bg.SetY(0);
-bg.SetWidth(screen_width);
-bg.SetHeight(screen_height);
+bg.SetX(0); bg.SetY(0);
+bg.SetWidth(screen_w); bg.SetHeight(screen_h);
 bg.SetColor(0.031, 0.051, 0.090, 1.0);  // #080d17
 
-// ── Wordmark (text-based) ─────────────────────────────────────────────────────
-// Use a filled rectangle bar as a visual accent below the logo text
-accent_h = Math.Int(screen_height * 0.003);
-accent_w = Math.Int(screen_width  * 0.18);
-accent_x = Math.Int((screen_width  - accent_w) / 2);
-accent_y = Math.Int(screen_height  * 0.56);
+// Heart-C: two overlapping circles (left lobe, right lobe) + triangle bottom
+// Approximated with rectangles at increasing scale for a pixel-art heart feel
+heart_size = Math.Int(screen_h * 0.06);
+hs = heart_size;
 
-accent = Rectangle();
-accent.SetX(accent_x);
-accent.SetY(accent_y);
-accent.SetWidth(accent_w);
-accent.SetHeight(accent_h);
-accent.SetColor(0.333, 0.604, 1.0, 1.0);  // #559aff
+// Left lobe
+hl = Rectangle();
+hl.SetWidth(hs); hl.SetHeight(hs);
+hl.SetX(cx - Math.Int(hs * 0.9)); hl.SetY(cy - Math.Int(hs * 0.6));
+hl.SetColor(0.333, 0.604, 1.0, 0.0);
 
-// ── Dot animation ─────────────────────────────────────────────────────────────
-NUM_DOTS  = 5;
-DOT_SIZE  = Math.Int(screen_height * 0.012);
-DOT_SPACE = Math.Int(DOT_SIZE * 2.2);
-total_w   = NUM_DOTS * DOT_SPACE - Math.Int(DOT_SPACE * 0.2);
-start_x   = Math.Int((screen_width - total_w) / 2);
-dot_y     = Math.Int(screen_height * 0.64);
+// Right lobe
+hr = Rectangle();
+hr.SetWidth(hs); hr.SetHeight(hs);
+hr.SetX(cx - Math.Int(hs * 0.1)); hr.SetY(cy - Math.Int(hs * 0.6));
+hr.SetColor(0.333, 0.604, 1.0, 0.0);
+
+// Body (lower half of heart)
+hb = Rectangle();
+hb.SetWidth(Math.Int(hs * 1.8)); hb.SetHeight(hs);
+hb.SetX(cx - Math.Int(hs * 0.9)); hb.SetY(cy - Math.Int(hs * 0.1));
+hb.SetColor(0.333, 0.604, 1.0, 0.0);
+
+// Glow rings (layered large translucent rects behind heart)
+glow1 = Rectangle();
+glow1.SetWidth(Math.Int(hs * 4)); glow1.SetHeight(Math.Int(hs * 4));
+glow1.SetX(cx - Math.Int(hs * 2)); glow1.SetY(cy - Math.Int(hs * 2));
+glow1.SetColor(0.333, 0.604, 1.0, 0.0);
+
+glow2 = Rectangle();
+glow2.SetWidth(Math.Int(hs * 6)); glow2.SetHeight(Math.Int(hs * 6));
+glow2.SetX(cx - Math.Int(hs * 3)); glow2.SetY(cy - Math.Int(hs * 3));
+glow2.SetColor(0.333, 0.604, 1.0, 0.0);
+
+// Progress dots (ring of 12 dots around heart)
+NUM_DOTS = 12;
+DOT_R    = Math.Int(screen_h * 0.008);
+RING_R   = Math.Int(hs * 2.2);
 
 for (i = 0; i < NUM_DOTS; i++) {
+    // Plymouth has no trig — use precomputed 12-position cos/sin table
+    cos_vals[0]=1.00; cos_vals[1]=0.87; cos_vals[2]=0.50; cos_vals[3]=0.00;
+    cos_vals[4]=-0.50; cos_vals[5]=-0.87; cos_vals[6]=-1.00;
+    cos_vals[7]=-0.87; cos_vals[8]=-0.50; cos_vals[9]=0.00;
+    cos_vals[10]=0.50; cos_vals[11]=0.87;
+    sin_vals[0]=0.00; sin_vals[1]=0.50; sin_vals[2]=0.87; sin_vals[3]=1.00;
+    sin_vals[4]=0.87; sin_vals[5]=0.50; sin_vals[6]=0.00;
+    sin_vals[7]=-0.50; sin_vals[8]=-0.87; sin_vals[9]=-1.00;
+    sin_vals[10]=-0.87; sin_vals[11]=-0.50;
+
+    dx = Math.Int(RING_R * cos_vals[i]);
+    dy = Math.Int(RING_R * sin_vals[i]);
     dots[i] = Rectangle();
-    dots[i].SetWidth(DOT_SIZE);
-    dots[i].SetHeight(DOT_SIZE);
-    dots[i].SetX(start_x + i * DOT_SPACE);
-    dots[i].SetY(dot_y);
-    dots[i].SetColor(0.333, 0.604, 1.0, 0.2);
+    dots[i].SetWidth(DOT_R * 2); dots[i].SetHeight(DOT_R * 2);
+    dots[i].SetX(cx + dx - DOT_R); dots[i].SetY(cy + dy - DOT_R);
+    dots[i].SetColor(0.333, 0.604, 1.0, 0.05);
 }
 
-// ── Animation tick ────────────────────────────────────────────────────────────
 frame = 0;
+progress_val = 0.0;
+
+fun show_heart(alpha) {
+    hl.SetColor(0.333, 0.604, 1.0, alpha);
+    hr.SetColor(0.333, 0.604, 1.0, alpha);
+    hb.SetColor(0.333, 0.604, 1.0, alpha);
+    glow1.SetColor(0.333, 0.604, 1.0, alpha * 0.12);
+    glow2.SetColor(0.333, 0.604, 1.0, alpha * 0.05);
+}
 
 fun refresh_callback() {
     frame++;
-    active = Math.Int(frame / 8) % NUM_DOTS;
-    for (i = 0; i < NUM_DOTS; i++) {
-        if (i == active) {
-            dots[i].SetColor(0.333, 0.604, 1.0, 1.0);   // bright
-        } else if (i == (active - 1 + NUM_DOTS) % NUM_DOTS) {
-            dots[i].SetColor(0.333, 0.604, 1.0, 0.5);   // fading
-        } else {
-            dots[i].SetColor(0.333, 0.604, 1.0, 0.18);  // dim
+
+    // Phase 1: fade in (frames 0–50)
+    if (frame <= 50) {
+        alpha = frame / 50.0;
+        show_heart(alpha);
+    }
+
+    // Phase 2: progress ring (frames 50+)
+    if (frame > 50) {
+        show_heart(1.0);
+        filled = Math.Int(progress_val * NUM_DOTS);
+        for (i = 0; i < NUM_DOTS; i++) {
+            if (i < filled) {
+                dots[i].SetColor(0.333, 0.604, 1.0, 1.0);
+            } else if (i == filled) {
+                dots[i].SetColor(0.333, 0.604, 1.0, 0.5);
+            } else {
+                dots[i].SetColor(0.333, 0.604, 1.0, 0.08);
+            }
         }
     }
 }
 
 Plymouth.SetRefreshFunction(refresh_callback);
 
-// ── Password prompt (for encrypted disks) ─────────────────────────────────────
-fun display_password_callback(prompt, bullets) {
-    // Nothing fancy — just keep the dots running
+fun progress_callback(duration, progress) {
+    progress_val = progress;
 }
 
+Plymouth.SetBootProgressFunction(progress_callback);
+
+fun display_password_callback(prompt, bullets) {
+    // Keep running — don't clear
+}
 Plymouth.SetDisplayPasswordFunction(display_password_callback);
