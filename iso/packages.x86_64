@@ -170,7 +170,7 @@ kvantum
 python
 python-pyqt6
 python-psutil
-ttf-inter
+inter-font
 ttf-jetbrains-mono
 
 # --- Zram (compressed RAM swap) ---
