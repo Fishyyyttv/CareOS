@@ -3,9 +3,9 @@
 import json, os, random, sys
 from pathlib import Path
 import psutil
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, QFileSystemWatcher
-from PyQt6.QtGui import QColor, QPainter, QPixmap, QAction, QIcon
-from PyQt6.QtWidgets import QApplication, QWidget, QMenu, QSystemTrayIcon
+from PyQt6.QtCore import Qt, QTimer, QFileSystemWatcher
+from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtWidgets import QApplication, QWidget, QMenu
 
 CONFIG_DIR = Path.home() / ".config" / "careos"
 CONFIG_FILE = CONFIG_DIR / "bit.json"
@@ -234,15 +234,18 @@ class BitWindow(QWidget):
         self._sys.start(10_000)
 
         # Downloads watcher
-        dl = str(Path.home() / "Downloads")
-        self._watcher = QFileSystemWatcher([dl], self)
+        dl = Path.home() / "Downloads"
+        self._watcher = QFileSystemWatcher(self)
+        if dl.exists():
+            self._watcher.addPath(str(dl))
         self._watcher.directoryChanged.connect(self._on_download)
 
         # Drag support
         self._drag_pos = None
 
     def _place_window(self):
-        screen = QApplication.primaryScreen().geometry()
+        scr = QApplication.primaryScreen() or QApplication.screens()[0]
+        screen = scr.geometry()
         x = self.cfg.get("x", -1)
         y = self.cfg.get("y", -1)
         if x < 0 or y < 0:
@@ -268,6 +271,7 @@ class BitWindow(QWidget):
             if self._blink_countdown <= 0:
                 self._blink_countdown = random.randint(20, 50)
                 self.set_state("blink")
+                return
             if self._idle_ticks > 1200:  # 30min @ 150ms
                 self.set_state("sleep")
         elif self.state not in ("tired", "sleep"):
@@ -361,6 +365,7 @@ class BitWindow(QWidget):
 
         menu.addSeparator()
         menu.addAction("Hide Bit").triggered.connect(self.hide)
+        menu.addAction("Quit Bit").triggered.connect(QApplication.instance().quit)
         menu.exec(e.globalPos())
 
     def _set_outfit(self, name):
