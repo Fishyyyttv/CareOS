@@ -169,6 +169,9 @@ kvantum
 # --- Python (for CL interpreter + CareOS tools) ---
 python
 python-pyqt6
+python-psutil
+ttf-inter
+ttf-jetbrains-mono
 
 # --- Zram (compressed RAM swap) ---
 zram-generator
