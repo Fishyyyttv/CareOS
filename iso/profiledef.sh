@@ -26,5 +26,8 @@ file_permissions=(
     ["/usr/local/bin/careos-help"]="0:0:755"
     ["/usr/local/bin/careos-install"]="0:0:755"
     ["/usr/local/bin/carectl"]="0:0:755"
+    ["/usr/local/bin/bit-pet"]="0:0:755"
+    ["/usr/local/bin/careos-welcome"]="0:0:755"
+    ["/usr/local/bin/careos-control"]="0:0:755"
     ["/etc/profile.d/careos.sh"]="0:0:644"
 )
