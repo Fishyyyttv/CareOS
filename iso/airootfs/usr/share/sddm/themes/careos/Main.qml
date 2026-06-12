@@ -45,6 +45,34 @@ Item {
                 }
             }
         }
+
+        // Floating particles
+        Repeater {
+            model: 18
+            delegate: Rectangle {
+                id: particle
+                width: 3; height: 3
+                radius: 1.5
+                color: "#559aff"
+                opacity: 0.1
+                x: Math.random() * Screen.width
+                y: Screen.height + 10
+                NumberAnimation on y {
+                    from: Screen.height + 10
+                    to: -10
+                    duration: 8000 + Math.random() * 12000
+                    loops: Animation.Infinite
+                    running: true
+                }
+                NumberAnimation on x {
+                    from: x
+                    to: x + (Math.random() - 0.5) * 120
+                    duration: 8000 + Math.random() * 12000
+                    loops: Animation.Infinite
+                    running: true
+                }
+            }
+        }
     }
 
     // ── Clock — top right ─────────────────────────────────────────────────────
@@ -60,14 +88,14 @@ Item {
             id: clockTime
             anchors.horizontalCenter: parent.horizontalCenter
             text: Qt.formatTime(new Date(), "hh:mm")
-            font { pixelSize: 56; weight: Font.Light; family: "Noto Sans" }
+            font { pixelSize: 56; weight: Font.Light; family: "Inter" }
             color: "#eaf0ff"
         }
         Text {
             id: clockDate
             anchors.horizontalCenter: parent.horizontalCenter
             text: Qt.formatDate(new Date(), "dddd, MMMM d")
-            font { pixelSize: 15; family: "Noto Sans" }
+            font { pixelSize: 15; family: "Inter" }
             color: "#8a99ba"
         }
 
@@ -90,21 +118,31 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: 10
 
+            Image {
+                anchors.horizontalCenter: parent.horizontalCenter
+                source: "file:///usr/share/careos/branding/heart-c.svg"
+                width: 52; height: 52
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+            }
+
+            Item { height: 8 }
+
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: "CareOS"
-                font { pixelSize: 44; weight: Font.Light; letterSpacing: 5; family: "Noto Sans" }
+                font { pixelSize: 40; weight: Font.Light; letterSpacing: 4; family: "Inter" }
                 color: "#eaf0ff"
             }
             Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: 64; height: 2; color: "#559aff"
+                width: 56; height: 2; color: "#559aff"
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "CareOS Shell"
-                font { pixelSize: 13; weight: Font.Medium; letterSpacing: 2; family: "Noto Sans" }
-                color: "#82bcff"
+                text: "version 9"
+                font { pixelSize: 12; weight: Font.Medium; letterSpacing: 2; family: "Inter" }
+                color: "#505e78"
             }
         }
 
@@ -116,7 +154,7 @@ Item {
             width: 320; height: 46
             placeholderText: "Username"
             text: userModel.lastUser
-            font { pixelSize: 14; family: "Noto Sans" }
+            font { pixelSize: 14; family: "Inter" }
             color: "#eaf0ff"
             leftPadding: 16
 
@@ -138,7 +176,7 @@ Item {
             width: 320; height: 46
             placeholderText: "Password"
             echoMode: TextInput.Password
-            font { pixelSize: 14; family: "Noto Sans" }
+            font { pixelSize: 14; family: "Inter" }
             color: "#eaf0ff"
             leftPadding: 16
 
@@ -169,7 +207,7 @@ Item {
 
             contentItem: Text {
                 text: "Sign In"
-                font { pixelSize: 14; weight: Font.Medium; family: "Noto Sans" }
+                font { pixelSize: 14; weight: Font.Medium; family: "Inter" }
                 color: "#080d17"
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment:   Text.AlignVCenter
@@ -183,7 +221,7 @@ Item {
             id: errorMsg
             anchors.horizontalCenter: parent.horizontalCenter
             color: "#f56060"
-            font { pixelSize: 13; family: "Noto Sans" }
+            font { pixelSize: 13; family: "Inter" }
             visible: text !== ""
         }
     }
@@ -205,7 +243,7 @@ Item {
         contentItem: Text {
             leftPadding: 12
             text: sessionCombo.displayText
-            font { pixelSize: 13; family: "Noto Sans" }
+            font { pixelSize: 13; family: "Inter" }
             color: "#8a99ba"
             verticalAlignment: Text.AlignVCenter
         }
