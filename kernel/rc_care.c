@@ -76,6 +76,7 @@ static void rc_care_show_error_modal(const char *which) {
 static void rc_care_run_one(const char *path, const char *which) {
     char buf[RC_CARE_MAX_SIZE];
     if (!rc_care_read_file(path, buf, sizeof(buf))) return;
+    if (kstrlen(buf) == 0) return;
     serial_write("  [rc_care] running ");
     serial_write(which);
     serial_write(" script\n");

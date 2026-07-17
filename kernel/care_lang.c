@@ -548,7 +548,10 @@ static cl_val_t nat_sys_launch(cl_val_t *args, u32 nargs) {
     return vnum(0);
 }
 static cl_val_t nat_sys_set_theme(cl_val_t *args, u32 nargs) {
-    if (nargs >= 1 && !args[0].is_str) settings_set_theme((u32)args[0].num);
+    if (nargs >= 1 && !args[0].is_str) {
+        settings_set_theme((u32)args[0].num);
+        theme_switch((u32)args[0].num == 0);  /* 0 = dark, matches gui_init's default */
+    }
     return vnum(0);
 }
 static cl_val_t nat_sys_set_wallpaper(cl_val_t *args, u32 nargs) {
