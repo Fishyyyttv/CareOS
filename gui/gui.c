@@ -619,6 +619,8 @@ void gui_run(void) {
         serial_write("  [gui_run] login flow returned failure\n");
     }
 
+    rc_care_run_startup();
+
     sw = (i32)SCREEN_W;
     sh = (i32)SCREEN_H;
     tw = sw * 62 / 100;

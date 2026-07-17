@@ -312,6 +312,9 @@ void sysinfo_print(void);
 int care_lang_exec(const char *src, u32 len);
 int care_lang_exec_buf(const char *src, u32 len, char *out, u32 out_max);
 
+/* -- Startup scripts (rc.care) --------------------------------------------- */
+void rc_care_run_startup(void);
+
 /* -- Kernel main ---------------------------------------------------------- */
 void kernel_main(u64 magic, u64 mbi_addr);
 
