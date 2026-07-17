@@ -139,7 +139,7 @@ static cl_val_t vstr(const char *s) {
 
 /* ── Environment ─────────────────────────────────────────────────────────── */
 #define CL_MAX_VARS 32
-#define CL_MAX_FUNCS 16
+#define CL_MAX_FUNCS 24  /* 11 natives (4 existing + 7 rc.care) + headroom for user-defined funcs in scripts */
 #define CL_MAX_ARGS 4
 typedef struct { char name[32]; bool is_str; i32 num; char str[64]; } cl_var_t;
 typedef struct { 
@@ -515,12 +515,89 @@ static cl_val_t nat_sys_exec(cl_val_t *args, u32 nargs) {
     if (nargs >= 1 && !args[0].is_str) wm_open((app_id_t)args[0].num, "App", 150, 150, 600, 400);
     return vnum(0);
 }
+static cl_val_t nat_sys_launch(cl_val_t *args, u32 nargs) {
+    if (nargs < 1 || !args[0].is_str) return vnum(0);
+    static const struct { const char *name; app_id_t app; const char *title; } table[] = {
+        { "terminal", APP_TERMINAL, "Terminal" },
+        { "notes",    APP_NOTES,    "Notes" },
+        { "files",    APP_FILES,    "Files" },
+        { "sysmon",   APP_SYSMON,   "Monitor" },
+        { "calc",     APP_CALC,     "Calculator" },
+        { "about",    APP_ABOUT,    "About" },
+        { "help",     APP_HELP,     "Help" },
+        { "browser",  APP_BROWSER,  "Browser" },
+        { "settings", APP_SETTINGS, "Settings" },
+        { "pkgmgr",   APP_PKGMGR,   "Packages" },
+        { "editor",   APP_EDITOR,   "Editor" },
+        { "paint",    APP_PAINT,    "Paint" },
+        { "clock",    APP_CLOCK,    "Clock" },
+        { "netmon",   APP_NETMON,   "NetMon" },
+        { "users",    APP_USERS,    "Users" },
+        { "maze",     APP_MAZE,     "Maze" },
+        { "3d",       APP_3D,       "3D Demo" },
+        { "doom",     APP_DOOM,     "DOOM" },
+    };
+    for (u32 i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
+        if (kstrcmp(args[0].str, table[i].name) == 0) {
+            i32 scrw = (i32)SCREEN_W, scrh = (i32)SCREEN_H, ww, wh;
+            app_default_size(table[i].app, scrw, scrh, &ww, &wh);
+            wm_open(table[i].app, table[i].title, (scrw - ww) / 2, (scrh - wh) / 2, ww, wh);
+            return vnum(1);
+        }
+    }
+    return vnum(0);
+}
+static cl_val_t nat_sys_set_theme(cl_val_t *args, u32 nargs) {
+    if (nargs >= 1 && !args[0].is_str) settings_set_theme((u32)args[0].num);
+    return vnum(0);
+}
+static cl_val_t nat_sys_set_wallpaper(cl_val_t *args, u32 nargs) {
+    if (nargs >= 1 && !args[0].is_str) settings_set_wallpaper((u32)args[0].num);
+    return vnum(0);
+}
+static cl_val_t nat_sys_get_setting(cl_val_t *args, u32 nargs) {
+    if (nargs < 1 || !args[0].is_str) return vnum(0);
+    const careos_settings_t *cfg = settings_get();
+    if (!cfg) return vnum(0);
+    if (kstrcmp(args[0].str, "theme") == 0)             return vnum((i32)cfg->theme);
+    if (kstrcmp(args[0].str, "wallpaper") == 0)          return vnum((i32)cfg->wallpaper);
+    if (kstrcmp(args[0].str, "clock_24h") == 0)          return vnum((i32)cfg->clock_24h);
+    if (kstrcmp(args[0].str, "taskbar_centered") == 0)   return vnum((i32)cfg->taskbar_centered);
+    if (kstrcmp(args[0].str, "mouse_sensitivity") == 0)  return vnum((i32)cfg->mouse_sensitivity);
+    return vnum(0);
+}
+static cl_val_t nat_sys_username(cl_val_t *args, u32 nargs) {
+    (void)args; (void)nargs;
+    return vstr(user_current_name());
+}
+static cl_val_t nat_sys_is_root(cl_val_t *args, u32 nargs) {
+    (void)args; (void)nargs;
+    return vnum(user_is_root() ? 1 : 0);
+}
+static cl_val_t nat_sys_first_run(cl_val_t *args, u32 nargs) {
+    (void)args; (void)nargs;
+    char marker_path[64];
+    ksprintf(marker_path, "/home/%s/.welcomed", user_current_name());
+    if (vfs_resolve_path(marker_path)) return vnum(0);
+    char home_path[48];
+    ksprintf(home_path, "/home/%s", user_current_name());
+    fs_node_t *home = vfs_resolve_path(home_path);
+    if (home) vfs_mkfile(home, ".welcomed");
+    return vnum(1);
+}
 
 static void cl_init_natives(cl_env_t *env) {
     cl_register_native(env, "sys_alert", nat_sys_alert);
     cl_register_native(env, "sys_window", nat_sys_window);
     cl_register_native(env, "sys_beep", nat_sys_beep);
     cl_register_native(env, "sys_exec", nat_sys_exec);
+    cl_register_native(env, "sys_launch", nat_sys_launch);
+    cl_register_native(env, "sys_set_theme", nat_sys_set_theme);
+    cl_register_native(env, "sys_set_wallpaper", nat_sys_set_wallpaper);
+    cl_register_native(env, "sys_get_setting", nat_sys_get_setting);
+    cl_register_native(env, "sys_username", nat_sys_username);
+    cl_register_native(env, "sys_is_root", nat_sys_is_root);
+    cl_register_native(env, "sys_first_run", nat_sys_first_run);
 }
 
 /* ── Public entry points ─────────────────────────────────────────────────── */
