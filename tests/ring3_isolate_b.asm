@@ -9,5 +9,5 @@ _start:
     mov rax, 0x8040001000   ; test data address (must match kernel.c's check)
     mov dword [rax], 0xBBBBBBBB
 .spin:
-    hlt
+    pause
     jmp .spin
