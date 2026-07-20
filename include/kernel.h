@@ -335,9 +335,24 @@ int    paging_map(pde_t *dir, u64 virt, u64 phys, u32 flags);
 void   paging_map_mmio(u32 phys_start, u32 size);
 void   paging_switch_dir(pde_t *dir);
 void   paging_free_dir(pde_t *dir);
+u64    paging_translate(pde_t *dir, u64 virt);
+
+/* User-space private address region: a dedicated PML4 slot so every
+ * process gets its own physical PDPT/PD/PT frames, never aliased with the
+ * kernel's shared identity map at PML4[0] or with other processes.
+ * See docs/superpowers/specs/2026-07-20-per-process-address-spaces-design.md */
+#define USER_PML4_INDEX   1
+#define USER_CODE_BASE    ((u64)USER_PML4_INDEX << 39)     /* 0x0000008000000000 */
+#define USER_CODE_MAX     (USER_CODE_BASE + 0x40000000ULL) /* +1GB: code/data */
+#define USER_STACK_TOP    USER_CODE_MAX                    /* stack sits right after */
+
+#define TASK_STACK_PAGES  512
+#define TASK_STACK_SIZE   (TASK_STACK_PAGES * PAGE_SIZE)
 
 /* -- Preemptive scheduler ------------------------------------------------- */
 void scheduler_init(void);
+u64  task_get_cr3(int tid);
+bool task_has_exited(int tid);
 void scheduler_tick(registers_t *r);
 void task_block(void);
 void task_unblock(u32 id);
