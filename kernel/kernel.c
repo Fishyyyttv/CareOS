@@ -359,6 +359,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
              * of boot. */
             task_kill(tid_a);
             task_kill(tid_b);
+            paging_switch_kernel();
             paging_free_dir((pde_t *)dir_a);
             paging_free_dir((pde_t *)dir_b);
         }

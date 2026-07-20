@@ -167,6 +167,10 @@ void paging_switch_dir(pde_t *dir) {
     paging_load_cr3((u64)dir);
 }
 
+void paging_switch_kernel(void) {
+    paging_load_cr3((u64)kernel_pml4);
+}
+
 void paging_free_dir(pde_t *dir) {
     pml4e_t *pml4 = (pml4e_t *)dir;
 
