@@ -42,8 +42,6 @@ static void tss_set_kernel_stack(u64 rsp0) {
 }
 
 /* ── Task control blocks ────────────────────────────────────────────────────── */
-#define TASK_STACK_PAGES 512
-#define TASK_STACK_SIZE  (TASK_STACK_PAGES * PAGE_SIZE)
 #define TIMESLICE_DEFAULT 5
 
 typedef struct tcb {
@@ -206,7 +204,7 @@ static void __attribute__((noreturn)) enter_userspace(u64 entry, u64 user_rsp) {
 
 static void __attribute__((noinline)) task_user_trampoline(void) {
     tcb_t *t = &tasks[current_task];
-    enter_userspace(t->entry, 0xBFF00000ULL + TASK_STACK_SIZE);
+    enter_userspace(t->entry, USER_STACK_TOP);
 }
 
 int task_create(const char *name, task_func_t fn) {
@@ -254,7 +252,6 @@ int task_create_user(const char *name, u64 entry, pde_t *page_dir, int session) 
     t->session_id      = session;
 
     t->kstack = (u8*)kmalloc(TASK_STACK_SIZE);
-    t->ustack = (u8*)kmalloc(TASK_STACK_SIZE);
 
     u64 *sp = (u64*)(t->kstack + TASK_STACK_SIZE);
     *--sp = (u64)task_user_trampoline;
@@ -313,4 +310,14 @@ u32 task_count_active(void) {
         if (tasks[i].state == TASK_READY || tasks[i].state == TASK_RUNNING)
             n++;
     return n;
+}
+
+u64 task_get_cr3(int tid) {
+    if (tid < 0 || (u32)tid >= task_count) return 0;
+    return tasks[tid].cr3;
+}
+
+bool task_has_exited(int tid) {
+    if (tid < 0 || (u32)tid >= task_count) return true;
+    return tasks[tid].state == TASK_DEAD;
 }
