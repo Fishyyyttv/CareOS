@@ -344,10 +344,9 @@ u64    paging_translate(pde_t *dir, u64 virt);
 #define USER_PML4_INDEX   1
 #define USER_CODE_BASE    ((u64)USER_PML4_INDEX << 39)     /* 0x0000008000000000 */
 #define USER_CODE_MAX     (USER_CODE_BASE + 0x40000000ULL) /* +1GB: code/data */
-#define USER_STACK_TOP    USER_CODE_MAX                    /* stack sits right after */
-
 #define TASK_STACK_PAGES  512
 #define TASK_STACK_SIZE   (TASK_STACK_PAGES * PAGE_SIZE)
+#define USER_STACK_TOP    (USER_CODE_MAX + TASK_STACK_SIZE)  /* stack sits right after */
 
 /* -- Preemptive scheduler ------------------------------------------------- */
 void scheduler_init(void);

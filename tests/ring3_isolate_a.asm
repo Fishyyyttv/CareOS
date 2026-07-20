@@ -7,7 +7,7 @@ BITS 64
 SECTION .text
 GLOBAL _start
 _start:
-    mov rax, 0x8000000800   ; test data address (must match kernel.c's check)
+    mov rax, 0x8040001000   ; test data address (must match kernel.c's check)
     mov dword [rax], 0xAAAAAAAA
     xor edi, edi             ; arg1 (exit code) = 0
     mov eax, 1                ; syscall 1 = SYS_EXIT

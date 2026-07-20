@@ -337,8 +337,8 @@ void kernel_main(u64 magic, u64 mbi_addr){
             } else {
                 u64 dir_a = task_get_cr3(tid_a);
                 u64 dir_b = task_get_cr3(tid_b);
-                u64 phys_a = paging_translate((pde_t *)dir_a, 0x8000000800ULL);
-                u64 phys_b = paging_translate((pde_t *)dir_b, 0x8000000800ULL);
+                u64 phys_a = paging_translate((pde_t *)dir_a, 0x8040001000ULL);
+                u64 phys_b = paging_translate((pde_t *)dir_b, 0x8040001000ULL);
                 u32 val_a = (phys_a != ~0ULL) ? *(volatile u32 *)phys_a : 0;
                 u32 val_b = (phys_b != ~0ULL) ? *(volatile u32 *)phys_b : 0;
 

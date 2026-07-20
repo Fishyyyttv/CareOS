@@ -270,6 +270,16 @@ void task_yield(void) {
 }
 
 __attribute__((noreturn)) void task_exit(void) {
+    /* Reclaim the process's private address space now. Note: we do NOT
+     * free tasks[current_task].kstack here — task_exit() is running on
+     * that very kernel stack, so freeing it out from under ourselves
+     * would corrupt memory. Kernel-stack reclamation needs a separate
+     * reaper that runs from a different stack after the task is dead;
+     * that gap is left for future work. */
+    if (tasks[current_task].is_user && tasks[current_task].cr3 != 0) {
+        paging_free_dir((pde_t *)tasks[current_task].cr3);
+        tasks[current_task].cr3 = 0;
+    }
     tasks[current_task].state = TASK_DEAD;
     task_yield();
     while (1) { __asm__ volatile ("hlt"); }
