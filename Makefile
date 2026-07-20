@@ -117,7 +117,7 @@ C_SRC     := kernel/kernel.c       \
 ASM_OBJ   := $(ASM_SRC:.asm=.o)
 C_OBJ     := $(C_SRC:.c=.o)
 DOOM_OBJ  := $(DOOM_SRC:.c=.o)
-ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o DOOM1.WAD.bin.o
+ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o
 
 .PHONY: all run run-1080p run-kvm run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk
 
@@ -193,28 +193,48 @@ tests/ring3_exit.o: tests/ring3_exit.asm
 	nasm -f elf64 -o tests/ring3_exit.o tests/ring3_exit.asm
 
 tests/ring3_exit: tests/ring3_exit.o
-	ld -m elf_x86_64 -Ttext 0x400000 -o tests/ring3_exit tests/ring3_exit.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_exit tests/ring3_exit.o
 
 tests/ring3_fault.o: tests/ring3_fault.asm
 	nasm -f elf64 -o tests/ring3_fault.o tests/ring3_fault.asm
 
 tests/ring3_fault: tests/ring3_fault.o
-	ld -m elf_x86_64 -Ttext 0x400000 -o tests/ring3_fault tests/ring3_fault.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_fault tests/ring3_fault.o
 
 # Convert ring3_exit ELF to a linkable object so it can be embedded in the kernel
 tests/ring3_exit.bin.o: tests/ring3_exit
 	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 tests/ring3_exit tests/ring3_exit.bin.o
+
+tests/ring3_isolate_a.o: tests/ring3_isolate_a.asm
+	nasm -f elf64 -o tests/ring3_isolate_a.o tests/ring3_isolate_a.asm
+
+tests/ring3_isolate_a: tests/ring3_isolate_a.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_isolate_a tests/ring3_isolate_a.o
+
+tests/ring3_isolate_a.bin.o: tests/ring3_isolate_a
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 tests/ring3_isolate_a tests/ring3_isolate_a.bin.o
+
+tests/ring3_isolate_b.o: tests/ring3_isolate_b.asm
+	nasm -f elf64 -o tests/ring3_isolate_b.o tests/ring3_isolate_b.asm
+
+tests/ring3_isolate_b: tests/ring3_isolate_b.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_isolate_b tests/ring3_isolate_b.o
+
+tests/ring3_isolate_b.bin.o: tests/ring3_isolate_b
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 tests/ring3_isolate_b tests/ring3_isolate_b.bin.o
 
 # Embed DOOM1.WAD directly into the kernel binary
 DOOM1.WAD.bin.o: DOOM1.WAD
 	@echo "  EMBED DOOM1.WAD ($$(du -h DOOM1.WAD | cut -f1))"
 	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 DOOM1.WAD DOOM1.WAD.bin.o
 
-test-elfs: tests/ring3_exit tests/ring3_fault
+test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_isolate_b
 
 clean:
 	@rm -f $(ALL_OBJ) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
 	@rm -f tests/ring3_exit.o tests/ring3_exit tests/ring3_fault.o tests/ring3_fault tests/ring3_exit.bin.o
+	@rm -f tests/ring3_isolate_a.o tests/ring3_isolate_a tests/ring3_isolate_a.bin.o
+	@rm -f tests/ring3_isolate_b.o tests/ring3_isolate_b tests/ring3_isolate_b.bin.o
 	@echo "  Cleaned (kept $(DISK) for persistent users/data)"
 
 clean-all: clean reset-disk
