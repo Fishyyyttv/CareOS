@@ -327,31 +327,30 @@ void kernel_main(u64 magic, u64 mbi_addr){
         if (tid_a < 0 || tid_b < 0) {
             serial_write("[isolation-test] FAIL: could not launch test tasks\n");
         } else {
-            int spins = 0;
-            while (spins < 500 && !(task_has_exited(tid_a) && task_has_exited(tid_b))) {
+            /* isolate_a/b never exit (they spin after writing their marker,
+             * specifically so their address space stays alive to inspect --
+             * see tests/ring3_isolate_a.asm) -- just give them a generous,
+             * fixed number of scheduler rotations to run, then inspect. */
+            for (int i = 0; i < 64; i++) {
                 task_yield();
-                spins++;
             }
-            if (spins >= 500) {
-                serial_write("[isolation-test] FAIL: tasks did not complete in time\n");
-            } else {
-                u64 dir_a = task_get_cr3(tid_a);
-                u64 dir_b = task_get_cr3(tid_b);
-                u64 phys_a = paging_translate((pde_t *)dir_a, 0x8040001000ULL);
-                u64 phys_b = paging_translate((pde_t *)dir_b, 0x8040001000ULL);
-                u32 val_a = (phys_a != ~0ULL) ? *(volatile u32 *)phys_a : 0;
-                u32 val_b = (phys_b != ~0ULL) ? *(volatile u32 *)phys_b : 0;
 
-                slog_hex64("[isolation-test] phys_a = ", phys_a);
-                slog_hex64("[isolation-test] phys_b = ", phys_b);
-                slog_hex64("[isolation-test] val_a  = ", (u64)val_a);
-                slog_hex64("[isolation-test] val_b  = ", (u64)val_b);
+            u64 dir_a = task_get_cr3(tid_a);
+            u64 dir_b = task_get_cr3(tid_b);
+            u64 phys_a = paging_translate((pde_t *)dir_a, 0x8040001000ULL);
+            u64 phys_b = paging_translate((pde_t *)dir_b, 0x8040001000ULL);
+            u32 val_a = (phys_a != ~0ULL) ? *(volatile u32 *)phys_a : 0;
+            u32 val_b = (phys_b != ~0ULL) ? *(volatile u32 *)phys_b : 0;
 
-                bool pass = (phys_a != ~0ULL) && (phys_b != ~0ULL) &&
-                            (phys_a != phys_b) &&
-                            (val_a == 0xAAAAAAAAu) && (val_b == 0xBBBBBBBBu);
-                serial_write(pass ? "[isolation-test] PASS\n" : "[isolation-test] FAIL\n");
-            }
+            slog_hex64("[isolation-test] phys_a = ", phys_a);
+            slog_hex64("[isolation-test] phys_b = ", phys_b);
+            slog_hex64("[isolation-test] val_a  = ", (u64)val_a);
+            slog_hex64("[isolation-test] val_b  = ", (u64)val_b);
+
+            bool pass = (phys_a != ~0ULL) && (phys_b != ~0ULL) &&
+                        (phys_a != phys_b) &&
+                        (val_a == 0xAAAAAAAAu) && (val_b == 0xBBBBBBBBu);
+            serial_write(pass ? "[isolation-test] PASS\n" : "[isolation-test] FAIL\n");
         }
     }
 
