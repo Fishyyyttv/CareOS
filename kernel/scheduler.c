@@ -331,3 +331,8 @@ bool task_has_exited(int tid) {
     if (tid < 0 || (u32)tid >= task_count) return true;
     return tasks[tid].state == TASK_DEAD;
 }
+
+void task_kill(int tid) {
+    if (tid < 0 || (u32)tid >= task_count) return;
+    tasks[tid].state = TASK_DEAD;
+}

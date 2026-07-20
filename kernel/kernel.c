@@ -351,6 +351,16 @@ void kernel_main(u64 magic, u64 mbi_addr){
                         (phys_a != phys_b) &&
                         (val_a == 0xAAAAAAAAu) && (val_b == 0xBBBBBBBBu);
             serial_write(pass ? "[isolation-test] PASS\n" : "[isolation-test] FAIL\n");
+
+            /* isolate_a/b spin forever by design (see ring3_isolate_a.asm) --
+             * now that inspection is done, reap them explicitly: mark dead
+             * first so the scheduler never picks them again, then free
+             * their private address spaces so they don't leak for the rest
+             * of boot. */
+            task_kill(tid_a);
+            task_kill(tid_b);
+            paging_free_dir((pde_t *)dir_a);
+            paging_free_dir((pde_t *)dir_b);
         }
     }
 

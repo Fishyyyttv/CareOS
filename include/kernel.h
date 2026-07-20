@@ -352,6 +352,7 @@ u64    paging_translate(pde_t *dir, u64 virt);
 void scheduler_init(void);
 u64  task_get_cr3(int tid);
 bool task_has_exited(int tid);
+void task_kill(int tid);
 void scheduler_tick(registers_t *r);
 void task_block(void);
 void task_unblock(u32 id);
