@@ -147,6 +147,13 @@ int elf_load_user(fs_node_t *node, const char *name, int session) {
         u64 virt_start = ph->p_vaddr & ~(u64)(PAGE_SIZE - 1);
         u64 virt_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);
 
+        /* ld always emits a small read-only PT_LOAD segment covering just the
+         * ELF header + program header table, placed immediately below the
+         * -Ttext address (ending exactly at USER_CODE_BASE). The running
+         * program never reads its own ELF header, so skip mapping that
+         * segment instead of rejecting the whole binary because of it. */
+        if (virt_end <= USER_CODE_BASE) continue;
+
         if (virt_start < USER_CODE_BASE || virt_end > USER_CODE_MAX) {
             paging_free_dir(dir);
             return -4;
