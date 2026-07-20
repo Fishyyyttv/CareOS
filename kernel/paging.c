@@ -168,6 +168,50 @@ void paging_switch_dir(pde_t *dir) {
 }
 
 void paging_free_dir(pde_t *dir) {
-    /* For now just free the PML4 frame */
-    pmm_free_frame((u64)dir / PAGE_SIZE);
+    pml4e_t *pml4 = (pml4e_t *)dir;
+
+    if (pml4[USER_PML4_INDEX] & PDE_PRESENT) {
+        pdpte_t *pdpt = (pdpte_t *)(pml4[USER_PML4_INDEX] & ~0xFFFULL);
+        for (u32 pi = 0; pi < 512; pi++) {
+            if (!(pdpt[pi] & PDE_PRESENT)) continue;
+            pde_t *pd = (pde_t *)(pdpt[pi] & ~0xFFFULL);
+            for (u32 di = 0; di < 512; di++) {
+                if (!(pd[di] & PDE_PRESENT) || (pd[di] & PDE_4MB)) continue;
+                pte_t *pt = (pte_t *)(pd[di] & ~0xFFFULL);
+                for (u32 ti = 0; ti < 512; ti++) {
+                    if (pt[ti] & PTE_PRESENT) {
+                        pmm_free_frame((u32)((pt[ti] & ~0xFFFULL) / PAGE_SIZE));
+                    }
+                }
+                pmm_free_frame((u32)((u64)pt / PAGE_SIZE));
+            }
+            pmm_free_frame((u32)((u64)pd / PAGE_SIZE));
+        }
+        pmm_free_frame((u32)((u64)pdpt / PAGE_SIZE));
+    }
+
+    pmm_free_frame((u32)((u64)dir / PAGE_SIZE));
+}
+
+u64 paging_translate(pde_t *dir, u64 virt) {
+    pml4e_t *pml4 = (pml4e_t *)dir;
+    u32 pml4_i = PML4_INDEX(virt);
+    u32 pdpt_i = PDPT_INDEX(virt);
+    u32 pd_i   = PD_INDEX(virt);
+    u32 pt_i   = PT_INDEX(virt);
+
+    if (!(pml4[pml4_i] & PDE_PRESENT)) return ~0ULL;
+    pdpte_t *pdpt = (pdpte_t *)(pml4[pml4_i] & ~0xFFFULL);
+
+    if (!(pdpt[pdpt_i] & PDE_PRESENT)) return ~0ULL;
+    pde_t *pd = (pde_t *)(pdpt[pdpt_i] & ~0xFFFULL);
+
+    if (!(pd[pd_i] & PDE_PRESENT)) return ~0ULL;
+    if (pd[pd_i] & PDE_4MB) {
+        return (pd[pd_i] & ~0x1FFFFFULL) | (virt & 0x1FFFFFULL);
+    }
+    pte_t *pt = (pte_t *)(pd[pd_i] & ~0xFFFULL);
+
+    if (!(pt[pt_i] & PTE_PRESENT)) return ~0ULL;
+    return (pt[pt_i] & ~0xFFFULL) | (virt & 0xFFFULL);
 }
