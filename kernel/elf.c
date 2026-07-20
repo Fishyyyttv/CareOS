@@ -21,9 +21,6 @@
 #define PF_W            0x2u
 #define PF_R            0x4u
 
-#define USER_VADDR_MIN  0x400000ULL
-#define USER_VADDR_MAX  0xBFF00000ULL
-
 /* ── ELF64 data structures ──────────────────────────────────────────────────── */
 typedef struct {
     u32 e_ident_magic;
@@ -150,7 +147,7 @@ int elf_load_user(fs_node_t *node, const char *name, int session) {
         u64 virt_start = ph->p_vaddr & ~(u64)(PAGE_SIZE - 1);
         u64 virt_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);
 
-        if (virt_start < USER_VADDR_MIN || virt_end > USER_VADDR_MAX) {
+        if (virt_start < USER_CODE_BASE || virt_end > USER_CODE_MAX) {
             paging_free_dir(dir);
             return -4;
         }
@@ -185,6 +182,27 @@ int elf_load_user(fs_node_t *node, const char *name, int session) {
 
         serial_write("[elf_user] mapped segment vaddr=0x");
         char tmp[16]; kutoa((u32)ph->p_vaddr, tmp, 16); serial_write(tmp); serial_write("\n");
+    }
+
+    /* Map a dedicated, eagerly-allocated user stack right after the
+     * code/data window — private frames, never shared with any other
+     * process. See docs/superpowers/specs/
+     * 2026-07-20-per-process-address-spaces-design.md */
+    {
+        u64 stack_bottom = USER_STACK_TOP - TASK_STACK_SIZE;
+        for (u64 virt = stack_bottom; virt < USER_STACK_TOP; virt += PAGE_SIZE) {
+            u32 frame = pmm_alloc_frame();
+            if (frame == (u32)~0u) { paging_free_dir(dir); return -8; }
+
+            kmemset((void *)((u64)frame * PAGE_SIZE), 0, PAGE_SIZE);
+
+            u32 flags = PTE_PRESENT | PTE_USER | PTE_RW;
+            if (paging_map(dir, virt, (u64)frame * PAGE_SIZE, flags) != 0) {
+                pmm_free_frame(frame);
+                paging_free_dir(dir);
+                return -9;
+            }
+        }
     }
 
     int tid = task_create_user(name, eh->e_entry, dir, session);
