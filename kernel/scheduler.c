@@ -264,9 +264,32 @@ int task_create_user(const char *name, u64 entry, pde_t *page_dir, int session) 
     return (int)(task_count - 1);
 }
 
+/* task_yield used to trigger scheduler_tick via `int $0x20` -- the exact
+ * same vector real hardware IRQ0 (the PIT timer) uses. Both routed through
+ * irq0_stub -> irq_handler, which unconditionally sends a PIC End-of-
+ * Interrupt after every call. A software `int` never goes through the
+ * PIC's INTA acknowledge cycle at all, so every voluntary yield sent a
+ * spurious EOI, desynchronizing the PIC's in-service tracking until real
+ * hardware timer interrupts stopped being delivered -- observed as tasks
+ * hanging forever the first time they needed a real preemption (e.g. a
+ * ring-3 task spinning with no voluntary yield of its own) after enough
+ * software yields had run. Route the software path through its own
+ * dedicated vector (0x30) using the plain isr_common_stub/isr_handler
+ * path -- same one INT 0x80 (syscalls) already uses -- which never
+ * touches the PIC at all. */
+extern void isr_common_stub(void);
+void task_yield_stub(void);
+__asm__(
+    ".global task_yield_stub\n"
+    "task_yield_stub:\n"
+    "  pushq $0\n"
+    "  pushq $0x30\n"
+    "  jmp isr_common_stub\n"
+);
+
 void task_yield(void) {
     if (!sched_ready) return;
-    __asm__ volatile ("int $0x20");
+    __asm__ volatile ("int $0x30");
 }
 
 __attribute__((noreturn)) void task_exit(void) {
@@ -301,6 +324,10 @@ void scheduler_init(void) {
     __asm__ volatile ("fninit; fxsave %0" : "=m"(tasks[0].sse_state));
 
     register_interrupt_handler(IRQ0, (isr_handler_t)scheduler_tick);
+
+    idt_set_gate(0x30, (u32)(uintptr_t)task_yield_stub, GDT_CODE_SEG, 0x8E);
+    register_interrupt_handler(0x30, (isr_handler_t)scheduler_tick);
+
     sched_ready = true;
 }
 
