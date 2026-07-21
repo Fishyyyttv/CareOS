@@ -20,7 +20,20 @@ static void frame_clear(u32 frame) {
     phys_bitmap[frame / 32] &= ~(1u << (frame % 32));
 }
 
+/* phys_bitmap/phys_free_frames are shared, unlocked global state. This
+ * kernel has no spinlocks, and interrupts are enabled throughout most of
+ * kernel-mode execution (including while building a new process's page
+ * tables), so a timer tick can preempt mid-allocation and switch to a task
+ * whose own exit path calls pmm_free_frame concurrently -- corrupting the
+ * bitmap with no synchronization at all. Disable interrupts around the
+ * critical section (save/restore, not unconditional sti, so this nests
+ * safely if ever called from an already-cli'd context) rather than trying
+ * to protect every caller individually. */
 u32 pmm_alloc_frame(void) {
+    u64 flags;
+    __asm__ volatile ("pushfq; cli; pop %0" : "=r"(flags) :: "memory");
+
+    u32 result = (u32)~0u;
     for (u32 i = 0; i < BITMAP_WORDS; i++) {
         if (phys_bitmap[i] == 0xFFFFFFFF) continue;
         for (u32 b = 0; b < 32; b++) {
@@ -28,17 +41,26 @@ u32 pmm_alloc_frame(void) {
                 u32 frame = i * 32 + b;
                 frame_set(frame);
                 if (phys_free_frames) phys_free_frames--;
-                return frame;
+                result = frame;
+                goto done;
             }
         }
     }
-    return (u32)~0u;
+done:
+    __asm__ volatile ("push %0; popfq" : : "r"(flags) : "memory", "cc");
+    return result;
 }
 
 void pmm_free_frame(u32 frame) {
     if (frame >= FRAME_COUNT) return;
+
+    u64 flags;
+    __asm__ volatile ("pushfq; cli; pop %0" : "=r"(flags) :: "memory");
+
     frame_clear(frame);
     phys_free_frames++;
+
+    __asm__ volatile ("push %0; popfq" : : "r"(flags) : "memory", "cc");
 }
 
 /* ── Paging structures ─────────────────────────────────────────────────────── */
