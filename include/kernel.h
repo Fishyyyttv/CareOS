@@ -223,16 +223,22 @@ __attribute__((noreturn)) void kernel_panic(u32 code, const char *msg);
 #define FS_MAX_DIRS     64
 #define FS_NAME_MAX     64
 #define FS_PATH_MAX     256
-#define FS_FILE_DATA_MAX (5*1024*1024)
+
+/* Upper bound on a single file's heap allocation. File contents live on the
+ * kernel heap (KERNEL_HEAP_SIZE, 192 MiB); this ceiling stops one runaway
+ * write from consuming it. Previously file data was a 5 MiB inline array,
+ * which cost 640 MiB of BSS for the 128-node pool whether used or not. */
+#define FS_FILE_MAX_BYTES (16u*1024u*1024u)
 
 typedef enum { FS_FILE, FS_DIR } fs_node_type_t;
 
 typedef struct fs_node {
     char            name[FS_NAME_MAX];
     fs_node_type_t  type;
-    u32             size;
-    char            data[FS_FILE_DATA_MAX];
-    void           *raw_data; /* if non-NULL, file content lives here (not in data[]) */
+    u32             size;          /* valid bytes in data */
+    char           *data;          /* heap or borrowed; NULL until content exists */
+    u32             capacity;      /* allocated bytes; 0 when borrowed */
+    bool            data_owned;    /* false = borrowed memory, never kfree'd */
     struct fs_node *parent;
     struct fs_node *children[32];
     u32             child_count;
@@ -251,6 +257,13 @@ int        vfs_write(fs_node_t *f, const char *data, u32 len);
 int        vfs_read(fs_node_t *f, char *buf, u32 len);
 int        vfs_delete(fs_node_t *node);
 fs_node_t *vfs_resolve_path(const char *path);
+
+/* File data storage. Contents are heap-allocated on first write. A node with
+ * data_owned == false borrows memory it must never free (e.g. the embedded
+ * DOOM WAD living in .data). */
+int         vfs_file_reserve(fs_node_t *f, u32 bytes); /* 0 ok, -1 fail */
+const char *vfs_file_str(fs_node_t *f);                /* never NULL; "" if empty */
+void        vfs_file_release(fs_node_t *f);
 
 /* -- Paging types & flags -------------------------------------------------- */
 typedef u64 pml4e_t;

@@ -84,6 +84,7 @@ static i32 sys_read(u32 fd, char *buf, u32 count) {
 
     if (!fd_table[fd].node) return -(i32)EBADF;
     fs_node_t *node = fd_table[fd].node;
+    if (!node->data || fd_table[fd].offset >= node->size) return 0;
     u32 avail = node->size - fd_table[fd].offset;
     if (avail == 0) return 0;
     u32 n = count < avail ? count : avail;
@@ -104,8 +105,10 @@ static i32 sys_write(u32 fd, const char *buf, u32 count) {
 
     if (!fd_table[fd].node) return -(i32)EBADF;
     fs_node_t *node = fd_table[fd].node;
-    u32 space = FS_FILE_DATA_MAX - 1 - node->size;
+    if (node->size >= FS_FILE_MAX_BYTES) return -(i32)EINVAL;
+    u32 space = FS_FILE_MAX_BYTES - node->size;
     u32 n = count < space ? count : space;
+    if (vfs_file_reserve(node, node->size + n) != 0) return -(i32)EINVAL;
     kmemcpy(node->data + node->size, buf, n);
     node->size += n;
     node->data[node->size] = '\0';

@@ -88,8 +88,9 @@ static void term_exec(window_t *w,char *line){
         struct fs_node *f=argv[1][0]=='/'?vfs_resolve_path(argv[1]):vfs_find(term_cwd,argv[1]);
         if(!f){win_append(w,"cat: not found\n");return;}
         if(f->type==FS_DIR){win_append(w,"cat: is a directory\n");return;}
-        win_append(w,f->data);
-        if(f->size&&f->data[f->size-1]!='\n') win_append(w,"\n");
+        const char *txt=vfs_file_str(f);
+        win_append(w,txt);
+        if(f->size&&txt[f->size-1]!='\n') win_append(w,"\n");
     }
     else if(!kstrcmp(cmd,"mkdir")){if(argc<2)return;struct fs_node *d=vfs_mkdir(term_cwd,argv[1]);if(!d)win_append(w,"mkdir: failed\n");}
     else if(!kstrcmp(cmd,"rm")){
@@ -257,7 +258,7 @@ static void term_exec(window_t *w,char *line){
         struct fs_node *f=argv[1][0]=='/'?vfs_resolve_path(argv[1]):vfs_find(term_cwd,argv[1]);
         if(!f||f->type!=FS_FILE){win_append(w,"care: file not found\n");return;}
         char outbuf[2048];
-        if(care_lang_exec_buf(f->data,f->size,outbuf,sizeof(outbuf))!=0)
+        if(care_lang_exec_buf(vfs_file_str(f),f->size,outbuf,sizeof(outbuf))!=0)
             win_append(w,"care: script error\n");
         else if(outbuf[0]) win_append(w,outbuf);
     }

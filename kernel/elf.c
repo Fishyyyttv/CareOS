@@ -70,7 +70,7 @@ static int elf_validate(const u8 *data, u32 size) {
 
 /* ── elf_load_vfs: kernel-space flat load ────────────────────────────────────── */
 int elf_load_vfs(fs_node_t *node, const char *task_name) {
-    if (!node || node->type != FS_FILE) return -1;
+    if (!node || node->type != FS_FILE || !node->data) return -1;
 
     const u8 *data = (const u8 *)node->data;
     u32       size = node->size;
@@ -126,7 +126,7 @@ int elf_load_path(const char *path, const char *task_name) {
 
 /* ── elf_load_user: user-space ring-3 load ───────────────────────────────────── */
 int elf_load_user(fs_node_t *node, const char *name, int session) {
-    if (!node || node->type != FS_FILE) return -1;
+    if (!node || node->type != FS_FILE || !node->data) return -1;
 
     const u8 *data = (const u8 *)node->data;
     u32       size = node->size;
@@ -222,12 +222,13 @@ int elf_load_user(fs_node_t *node, const char *name, int session) {
 }
 
 int elf_check(fs_node_t *node) {
-    if (!node || node->type != FS_FILE || node->size < sizeof(elf64_ehdr_t)) return -1;
+    if (!node || node->type != FS_FILE || !node->data ||
+        node->size < sizeof(elf64_ehdr_t)) return -1;
     return elf_validate((const u8 *)node->data, node->size);
 }
 
 u32 elf_entry_point(fs_node_t *node) {
-    if (elf_check(node) != 0) return 0;
+    if (elf_check(node) != 0) return 0;   /* also covers node->data == NULL */
     const elf64_ehdr_t *eh = (const elf64_ehdr_t *)node->data;
     return (u32)eh->e_entry;
 }

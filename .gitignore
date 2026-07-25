@@ -13,11 +13,13 @@ DOOM1.WAD
 # Build artifacts
 *.bin.o
 *.o
+*.d
 *.elf
 gfx
 kernel/kernel.elf
 iso/boot/kernel.elf
 -boot
+boot.log
 
 # Brainstorming session files
 .superpowers/

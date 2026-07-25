@@ -88,7 +88,7 @@ static int smoke_embed_and_launch(const char *bin_name, const u8 *start,
     serial_write("[smoke] "); serial_write(bin_name); serial_write(" ELF size = ");
     char sb[12]; kutoa(elf_size, sb, 10); serial_write(sb); serial_write("\n");
 
-    if (elf_size == 0 || elf_size > FS_FILE_DATA_MAX) {
+    if (elf_size == 0 || elf_size > FS_FILE_MAX_BYTES) {
         serial_write("[smoke] ERROR: bad ELF size for "); serial_write(bin_name); serial_write("\n");
         return -1;
     }
@@ -100,6 +100,10 @@ static int smoke_embed_and_launch(const char *bin_name, const u8 *start,
     fs_node_t *n = vfs_mkfile(bin_dir, bin_name);
     if (!n) return -1;
 
+    if (vfs_file_reserve(n, elf_size) != 0) {
+        serial_write("[smoke] ERROR: no heap for "); serial_write(bin_name); serial_write("\n");
+        return -1;
+    }
     kmemcpy(n->data, start, elf_size);
     n->size = elf_size;
 
@@ -274,9 +278,13 @@ void kernel_main(u64 magic, u64 mbi_addr){
                     fs_node_t *wad_node = vfs_mkfile(user_dir, "DOOM1.WAD");
                     user_dir->inode_num = saved;
                     if (wad_node) {
-                        wad_node->raw_data = (void *)_binary_DOOM1_WAD_start;
-                        wad_node->size     = wad_size;
-                        wad_node->inode_num = 0;
+                        /* Borrowed: the WAD lives in .data, so it must never
+                         * be kfree'd. data_owned = false enforces that. */
+                        wad_node->data       = (char *)_binary_DOOM1_WAD_start;
+                        wad_node->capacity   = 0;
+                        wad_node->data_owned = false;
+                        wad_node->size       = wad_size;
+                        wad_node->inode_num  = 0;
                         serial_write("[doom] DOOM1.WAD ready at /home/user/DOOM1.WAD\n");
                     } else {
                         serial_write("[doom] ERROR: vfs_mkfile failed for DOOM1.WAD\n");
