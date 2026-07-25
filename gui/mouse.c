@@ -79,8 +79,8 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 += accel_q8(dx);
-            accum_dy_q8 -= accel_q8(dy); /* PS/2 Y is bottom-up */
+            accum_dx_q8 -= accel_q8(dx);
+            accum_dy_q8 += accel_q8(dy); /* both axes flipped to match host pointer */
         }
         break;
     case 3:
@@ -95,8 +95,8 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 += accel_q8(dx);
-            accum_dy_q8 -= accel_q8(dy);
+            accum_dx_q8 -= accel_q8(dx);
+            accum_dy_q8 += accel_q8(dy);
         }
 
         /* M-06: scroll wheel (4th byte, signed) */
@@ -208,15 +208,6 @@ void mouse_update(mouse_t *m) {
     if (cur_x >= (i32)SCREEN_W) cur_x = (i32)SCREEN_W - 1;
     if (cur_y >= (i32)SCREEN_H) cur_y = (i32)SCREEN_H - 1;
 
-    if (step_x != 0 || step_y != 0) {
-        char tmp[12];
-        serial_write("[dbg upd] step_x="); kitoa(step_x, tmp, 10); serial_write(tmp);
-        serial_write(" step_y="); kitoa(step_y, tmp, 10); serial_write(tmp);
-        serial_write(" -> cur_x="); kitoa(cur_x, tmp, 10); serial_write(tmp);
-        serial_write(" cur_y="); kitoa(cur_y, tmp, 10); serial_write(tmp);
-        serial_write("\n");
-    }
-
     m->x = cur_x;
     m->y = cur_y;
     m->left = lb;
@@ -246,15 +237,7 @@ static const u16 cur_outl[19] = {
     0b0000001111000, 0b0000000110000, 0b0000000000000,
 };
 
-static i32 dbg_last_x = -9999, dbg_last_y = -9999;
 void mouse_draw_cursor(i32 x, i32 y) {
-    if (x != dbg_last_x || y != dbg_last_y) {
-        char tmp[12];
-        serial_write("[dbg draw] x="); kitoa(x, tmp, 10); serial_write(tmp);
-        serial_write(" y="); kitoa(y, tmp, 10); serial_write(tmp);
-        serial_write("\n");
-        dbg_last_x = x; dbg_last_y = y;
-    }
     /* Shadow pass (offset by 1,1, dark) */
     for (i32 row = 0; row < 19; row++) {
         for (i32 col = 0; col < 13; col++) {

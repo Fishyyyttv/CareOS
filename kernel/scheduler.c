@@ -70,6 +70,24 @@ typedef struct tcb {
     u8   sse_state[512] __attribute__((aligned(16)));
 } tcb_t;
 
+/* task_get()/task_current() return (task_t *)&tasks[i], so the public task_t
+ * in kernel.h must overlay tcb_t exactly. Check every shared member rather
+ * than just the size -- the layouts used to silently diverge after `state`,
+ * so callers reading t->tick_count were actually reading tcb_t::rsp. */
+#define SAME_OFFSET(f_pub, f_tcb) \
+    _Static_assert(__builtin_offsetof(task_t, f_pub) == __builtin_offsetof(tcb_t, f_tcb), \
+                   "task_t/tcb_t layout drift at " #f_pub)
+SAME_OFFSET(id,              id);
+SAME_OFFSET(name,            name);
+SAME_OFFSET(state,           state);
+SAME_OFFSET(timeslice,       timeslice);
+SAME_OFFSET(ticks_remaining, ticks_remaining);
+SAME_OFFSET(tick_count,      total_ticks);
+SAME_OFFSET(rsp,             rsp);
+SAME_OFFSET(cr3,             cr3);
+_Static_assert(sizeof(task_t) <= sizeof(tcb_t), "task_t overhangs tcb_t");
+#undef SAME_OFFSET
+
 static tcb_t  tasks[MAX_TASKS] __attribute__((aligned(16)));
 static u32    task_count   = 0;
 static u32    current_task = 0;
@@ -79,8 +97,11 @@ task_t *task_current(void) {
     return (task_t *)&tasks[current_task];
 }
 
-u32 task_current_cr3(void) {
-    return (u32)tasks[current_task].cr3;
+/* Returns the full 64-bit CR3; 0 for a kernel task (no private address
+ * space). This used to truncate to u32, which only happened to work because
+ * every page-table frame lands in the low 4GB. */
+u64 task_current_cr3(void) {
+    return tasks[current_task].cr3;
 }
 
 /* ── Context switch (x86_64) ──────────────────────────────────────────────── */
@@ -333,7 +354,50 @@ void scheduler_init(void) {
 
 void task_init(void) { scheduler_init(); }
 
-void task_list(void) { /* Implementation same as before, omitted for brevity */ }
+/* Pad `s` out to `width` with spaces, in place. */
+static void pad_to(char *s, u32 width) {
+    u32 n = (u32)kstrlen(s);
+    while (n < width) s[n++] = ' ';
+    s[n] = '\0';
+}
+
+void task_list(void) {
+    terminal_write("  PID  STATE    TICKS   RING  CR3         NAME\n");
+
+    for (u32 i = 0; i < task_count; i++) {
+        tcb_t *t = &tasks[i];
+        if (t->state == TASK_DEAD) continue;
+
+        static const char *states[] = { "READY", "RUN", "BLOCKED", "DEAD" };
+        char line[96], num[24];
+
+        kstrcpy(line, "  ");
+        kutoa(t->id, num, 10);         kstrcat(line, num); pad_to(line, 7);
+        kstrcat(line, t->state <= TASK_DEAD ? states[t->state] : "?");
+                                                           pad_to(line, 16);
+        kutoa(t->total_ticks, num, 10); kstrcat(line, num); pad_to(line, 24);
+        kstrcat(line, t->is_user ? "3" : "0");              pad_to(line, 30);
+
+        if (t->cr3) { kutoa((u32)t->cr3, num, 16); kstrcat(line, num); }
+        else        { kstrcat(line, "-kernel-"); }
+                                                            pad_to(line, 42);
+        kstrcat(line, t->name);
+        kstrcat(line, "\n");
+
+        u32 col = (i == current_task)
+                ? VGA_ENTRY_COLOR(VGA_LIGHT_GREEN, VGA_BLACK)
+                : VGA_ENTRY_COLOR(VGA_WHITE, VGA_BLACK);
+        terminal_write_colored(line, col);
+    }
+
+    char foot[64], num[24];
+    kstrcpy(foot, "  ");
+    kutoa(task_count_active(), num, 10); kstrcat(foot, num);
+    kstrcat(foot, " runnable of ");
+    kutoa(task_count, num, 10);          kstrcat(foot, num);
+    kstrcat(foot, " task slots used\n");
+    terminal_write(foot);
+}
 
 task_t *task_get(u32 id) {
     for (u32 i = 0; i < task_count; i++)

@@ -7,7 +7,7 @@ GCC_INC   := $(shell gcc -print-file-name=include 2>/dev/null)
 LIBGCC    := $(shell gcc -print-libgcc-file-name 2>/dev/null)
 
 KERN_CFLAGS := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
-               -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
+               -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
                -Iinclude -Iinclude/libc -Igui -fno-builtin \
                -mno-red-zone -mno-mmx -mno-sse -mno-sse2
 
@@ -44,12 +44,19 @@ DISK      := careos.img
 DISK_MB   = 4096
 DISK_RESERVED_SECTORS := 104
 
-# -machine pc,usb=off   forces PS/2 mouse on IRQ12 (no USB tablet)
+# Display backend. sdl gives a predictable pointer grab (click the window to
+# grab, Ctrl+Alt+G to release) and a fullscreen toggle (Ctrl+Alt+F). Override
+# with e.g. `make run QEMU_DISPLAY=gtk` if your QEMU build has no SDL support.
+QEMU_DISPLAY ?= sdl
+
+# -machine pc,usb=off   forces PS/2 mouse on IRQ12. CareOS has no USB stack, so a
+#                       usb-tablet would NOT work; the PS/2 mouse is RELATIVE and
+#                       only moves the cursor once QEMU has grabbed the pointer.
+# -display $(QEMU_DISPLAY)  window that captures the mouse (Ctrl+Alt+G releases)
 # -drive                4GB disk image so ATA driver finds a drive
-# -display sdl          proper window that captures mouse (Ctrl+Alt+G to release)
 # -serial stdio         boot stage logs in your terminal
 QEMUBASE  := -m 4096M -smp 4 -cpu max -cdrom careos.iso -no-reboot -serial stdio -vga std \
-             -machine pc,usb=off \
+             -machine pc,usb=off -display $(QEMU_DISPLAY) \
              -drive file=$(DISK),format=raw,if=ide,index=0 \
              -netdev user,id=net0 -device e1000,netdev=net0
 
@@ -161,7 +168,9 @@ careos.iso: kernel/kernel.elf
 run: $(DISK) careos.iso
 	$(QEMU) $(QEMUBASE)
 
-run-1080p: $(DISK) careos.iso
+# Boots straight into fullscreen. Click once to grab the mouse; Ctrl+Alt+F
+# toggles fullscreen at any time, Ctrl+Alt+G releases the pointer grab.
+run-1080p run-fullscreen: $(DISK) careos.iso
 	$(QEMU) $(QEMUBASE) -full-screen
 
 run-kvm: $(DISK) careos.iso
@@ -243,7 +252,7 @@ clean-all: clean reset-disk
 help:
 	@echo "  make              build disk + ISO"
 	@echo "  make run          run in QEMU (SDL window, PS/2 mouse)"
-	@echo "  make run-1080p    run fullscreen"
+	@echo "  make run-1080p    run fullscreen (alias: run-fullscreen)"
 	@echo "  make run-kvm      run with KVM acceleration"
 	@echo "  make run-nowindow headless serial-only"
 	@echo "  make debug        run with GDB"
@@ -252,6 +261,8 @@ help:
 	@echo "  make clean-all    clean + reset disk"
 	@echo ""
 	@echo "  Mouse: click QEMU window to capture, Ctrl+Alt+G to release"
+	@echo "  Fullscreen: Ctrl+Alt+F toggles it any time (or use make run-1080p)"
+	@echo "  Display: override backend with make run QEMU_DISPLAY=gtk"
 
 
 

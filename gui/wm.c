@@ -183,7 +183,7 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     case APP_CLOCK:    *w = 280; *h = 240; return;
     case APP_ABOUT:    *w = 460; *h = 340; return;
     case APP_PAINT:    *w = sw*75/100; *h = sh*75/100; return;
-    case APP_DOOM:     *w = 640; *h = 400 + 30; return; /* DOOM resolution + titlebar */
+    case APP_DOOM:     *w = 640; *h = 400 + TITLEBAR_H; return; /* 640x400 client + titlebar */
     default:           *w = sw*65/100; *h = sh*70/100; return;
     }
 }

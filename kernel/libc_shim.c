@@ -365,9 +365,60 @@ DIR *opendir(const char *name) { return NULL; }
 struct dirent *readdir(DIR *dirp) { return NULL; }
 int closedir(DIR *dirp) { return 0; }
 
-/* -- setjmp.h -- */
-int setjmp(jmp_buf env) { return 0; }
-void longjmp(jmp_buf env, int val) { while(1); }
+/* -- setjmp.h --
+ *
+ * Real x86-64 System V implementation. These cannot be written in C: setjmp
+ * has to capture the caller's stack pointer and return address, and longjmp
+ * has to restore them and jump, which no portable C construct can express.
+ *
+ * jmp_buf is long[16] (128 bytes); we use the first 8 slots:
+ *   0:rbx  8:rbp  16:r12  24:r13  32:r14  40:r15  48:rsp  56:rip
+ *
+ * Only the SysV callee-saved integer registers need saving -- every xmm
+ * register is caller-saved in this ABI, so no FPU/SSE state belongs here.
+ * The x87 control word and MXCSR are likewise not restored, matching the
+ * behaviour glibc's _setjmp (as opposed to sigsetjmp) provides.
+ *
+ * rsp is stored as it will be *after* the ret pops the return address, so
+ * longjmp lands on a stack that looks exactly like a normal return from
+ * setjmp to its caller. */
+__asm__(
+    ".text\n"
+    ".global setjmp\n"
+    ".type setjmp, @function\n"
+    "setjmp:\n"
+    "  movq %rbx,   0(%rdi)\n"
+    "  movq %rbp,   8(%rdi)\n"
+    "  movq %r12,  16(%rdi)\n"
+    "  movq %r13,  24(%rdi)\n"
+    "  movq %r14,  32(%rdi)\n"
+    "  movq %r15,  40(%rdi)\n"
+    "  leaq 8(%rsp), %rax\n"      /* rsp as of after our ret */
+    "  movq %rax,  48(%rdi)\n"
+    "  movq (%rsp), %rax\n"       /* our return address */
+    "  movq %rax,  56(%rdi)\n"
+    "  xorl %eax, %eax\n"         /* direct call returns 0 */
+    "  ret\n"
+    ".size setjmp, .-setjmp\n"
+
+    ".global longjmp\n"
+    ".type longjmp, @function\n"
+    "longjmp:\n"
+    "  movl %esi, %eax\n"
+    "  testl %eax, %eax\n"
+    "  jnz 1f\n"
+    "  movl $1, %eax\n"           /* longjmp(env,0) must surface as 1 */
+    "1:\n"
+    "  movq  0(%rdi), %rbx\n"
+    "  movq  8(%rdi), %rbp\n"
+    "  movq 16(%rdi), %r12\n"
+    "  movq 24(%rdi), %r13\n"
+    "  movq 32(%rdi), %r14\n"
+    "  movq 40(%rdi), %r15\n"
+    "  movq 48(%rdi), %rsp\n"
+    "  jmp *56(%rdi)\n"           /* resume at the setjmp call site */
+    ".size longjmp, .-longjmp\n"
+);
 
 void *calloc(size_t nmemb, size_t size) {
     void *ptr = kmalloc(nmemb * size);

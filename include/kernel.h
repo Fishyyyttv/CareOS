@@ -280,13 +280,21 @@ typedef void (*task_func_t)(void);
 
 typedef enum { TASK_READY, TASK_RUNNING, TASK_BLOCKED, TASK_DEAD } task_state_t;
 
+/* Public view of a task. task_get()/task_current() hand out pointers to the
+ * scheduler's private tcb_t cast to this type, so the two layouts MUST agree
+ * field-for-field over this prefix. scheduler.c enforces that with
+ * _Static_assert on every member; do not reorder one without the other.
+ * (They previously disagreed from `state` onward, which is why `ps` printed a
+ * stack pointer in its tick column.) */
 typedef struct {
     u32          id;
     char         name[32];
     task_state_t state;
-    task_func_t  entry;
+    u32          timeslice;
+    u32          ticks_remaining;
+    u32          tick_count;      /* total ticks consumed */
     u64          rsp;
-    u64          tick_count;
+    u64          cr3;
 } task_t;
 
 void task_init(void);
@@ -337,6 +345,11 @@ void   paging_switch_dir(pde_t *dir);
 void   paging_switch_kernel(void);
 void   paging_free_dir(pde_t *dir);
 u64    paging_translate(pde_t *dir, u64 virt);
+/* True only if every page of [virt, virt+len) is mapped user-accessible (and
+ * writable when need_write) in `dir`, checking Present/User/RW at all four
+ * levels. This is the page-table-enforced replacement for guessing at address
+ * ranges when validating syscall arguments. */
+bool   paging_user_range_ok(pde_t *dir, u64 virt, u64 len, bool need_write);
 
 /* User-space private address region: a dedicated PML4 slot so every
  * process gets its own physical PDPT/PD/PT frames, never aliased with the
@@ -357,7 +370,7 @@ void task_kill(int tid);
 void scheduler_tick(registers_t *r);
 void task_block(void);
 void task_unblock(u32 id);
-u32  task_current_cr3(void);
+u64  task_current_cr3(void);
 
 /* -- System calls --------------------------------------------------------- */
 void syscall_init(void);

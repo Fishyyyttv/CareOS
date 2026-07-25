@@ -51,6 +51,12 @@ done:
     return result;
 }
 
+/* Declared in kernel.h but never defined until now; nothing referenced it, so
+ * it never surfaced as a link error. Useful for spotting frame leaks. */
+u32 pmm_free_count(void) {
+    return phys_free_frames;
+}
+
 void pmm_free_frame(u32 frame) {
     if (frame >= FRAME_COUNT) return;
 
@@ -217,6 +223,49 @@ void paging_free_dir(pde_t *dir) {
     }
 
     pmm_free_frame((u32)((u64)dir / PAGE_SIZE));
+}
+
+/* A paging entry grants user access only if Present and User/Supervisor are
+ * set, and write access only if R/W is also set -- at *every* level of the
+ * walk, which is exactly the rule the CPU applies. The kernel's identity map
+ * at PML4[0] deliberately omits PDE_USER, so this correctly refuses any
+ * kernel address even though that map is present in every process's PML4. */
+static bool entry_grants_user(u64 e, bool need_write) {
+    if (!(e & PDE_PRESENT)) return false;
+    if (!(e & PDE_USER))    return false;
+    if (need_write && !(e & PDE_RW)) return false;
+    return true;
+}
+
+bool paging_user_range_ok(pde_t *dir, u64 virt, u64 len, bool need_write) {
+    if (!dir) return false;
+    if (len == 0) return true;
+    if (virt + len < virt) return false;          /* wraps past the top */
+
+    pml4e_t *pml4 = (pml4e_t *)dir;
+    u64 first = virt & ~0xFFFULL;
+    u64 last  = (virt + len - 1) & ~0xFFFULL;
+
+    for (u64 p = first; ; p += PAGE_SIZE) {
+        u64 e = pml4[PML4_INDEX(p)];
+        if (!entry_grants_user(e, need_write)) return false;
+
+        pdpte_t *pdpt = (pdpte_t *)(e & ~0xFFFULL);
+        e = pdpt[PDPT_INDEX(p)];
+        if (!entry_grants_user(e, need_write)) return false;
+        if (!(e & PDE_4MB)) {                     /* not a 1GB page: descend */
+            pde_t *pd = (pde_t *)(e & ~0xFFFULL);
+            e = pd[PD_INDEX(p)];
+            if (!entry_grants_user(e, need_write)) return false;
+            if (!(e & PDE_4MB)) {                 /* not a 2MB page: descend */
+                pte_t *pt = (pte_t *)(e & ~0xFFFULL);
+                if (!entry_grants_user(pt[PT_INDEX(p)], need_write)) return false;
+            }
+        }
+
+        if (p == last) break;
+    }
+    return true;
 }
 
 u64 paging_translate(pde_t *dir, u64 virt) {
