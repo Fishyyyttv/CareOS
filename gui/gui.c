@@ -213,6 +213,9 @@ static void draw_top_bar(void) {
 typedef enum {
     LOGIN_MODE_SIGNIN = 0,
     LOGIN_MODE_SIGNUP = 1,
+    /* Credentials were correct, but the account still holds a shipped
+     * bootstrap password. The desktop stays unreachable until it is replaced. */
+    LOGIN_MODE_MUST_CHANGE = 2,
 } login_mode_t;
 
 typedef struct {
@@ -220,12 +223,19 @@ typedef struct {
     char password[64];
     u32  user_len;
     u32  pass_len;
-    u32  field; /* 0=username, 1=password */
+    u32  field; /* 0=username, 1=password (0=new, 1=confirm when MUST_CHANGE) */
     char status[96];
     u32  status_color;
     u32  failed_attempts;
     u32  lock_until_tick;
     login_mode_t mode;
+
+    /* MUST_CHANGE mode only. username still holds the authenticated account. */
+    char newpass[64];
+    u32  newpass_len;
+    char confirm[64];
+    u32  confirm_len;
+    char verified_pass[64];   /* the old password, to authorise the change */
 } login_state_t;
 
 typedef struct {
@@ -244,11 +254,14 @@ static void login_set_status(login_state_t *s, const char *msg, u32 color) {
     s->status_color = color;
 }
 
-static void login_mask_password(const login_state_t *s, char *out, u32 max) {
-    u32 n = s->pass_len;
+static void login_mask_n(char *out, u32 max, u32 n) {
     if (n >= max) n = max - 1;
     for (u32 i = 0; i < n; i++) out[i] = '*';
     out[n] = '\0';
+}
+
+static void login_mask_password(const login_state_t *s, char *out, u32 max) {
+    login_mask_n(out, max, s->pass_len);
 }
 
 static login_layout_t login_make_layout(const login_state_t *s) {
@@ -292,8 +305,13 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         .bg = COL_SURFACE2,
         .fg = COL_TEXT,
     };
-    kstrcpy(l.primary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Sign In" : "Create Account");
-    kstrcpy(l.secondary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Create Account" : "Back To Sign In");
+    if (s->mode == LOGIN_MODE_MUST_CHANGE) {
+        kstrcpy(l.primary_btn.label, "Set Password");
+        kstrcpy(l.secondary_btn.label, "Cancel");
+    } else {
+        kstrcpy(l.primary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Sign In" : "Create Account");
+        kstrcpy(l.secondary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Create Account" : "Back To Sign In");
+    }
     l.status_bar = rect_make(px + 42, py + ph - 50, pw - 84, 26);
     return l;
 }
@@ -326,17 +344,27 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     gfx_str_centered_ex(l.avatar.x, l.avatar.y + 15, l.avatar.w, "C", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
     gfx_str_centered_ex(l.panel.x, l.panel.y + 98, l.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
 
-    kstrcpy(title, s->mode == LOGIN_MODE_SIGNIN ? "Welcome Back" : "Create Account");
-    kstrcpy(subtitle, s->mode == LOGIN_MODE_SIGNIN
-        ? "Please sign in to access your desktop"
-        : "Set up a new secure local profile");
-    
+    if (s->mode == LOGIN_MODE_MUST_CHANGE) {
+        kstrcpy(title, "Change Your Password");
+        kstrcpy(subtitle, "This account uses a default password");
+    } else {
+        kstrcpy(title, s->mode == LOGIN_MODE_SIGNIN ? "Welcome Back" : "Create Account");
+        kstrcpy(subtitle, s->mode == LOGIN_MODE_SIGNIN
+            ? "Please sign in to access your desktop"
+            : "Set up a new secure local profile");
+    }
+
     gfx_str_centered(l.panel.x, l.panel.y + 136, l.panel.w, title, COL_TEXT, COL_TRANSPARENT);
     gfx_str_centered(l.panel.x, l.panel.y + 156, l.panel.w, subtitle, COL_DIM, COL_TRANSPARENT);
 
     /* Inputs */
-    gfx_str(l.user_field.x, l.user_field.y - 20, "Username", COL_MUTED, COL_TRANSPARENT);
-    gfx_str(l.pass_field.x, l.pass_field.y - 20, "Password", COL_MUTED, COL_TRANSPARENT);
+    if (s->mode == LOGIN_MODE_MUST_CHANGE) {
+        gfx_str(l.user_field.x, l.user_field.y - 20, "New Password", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.pass_field.x, l.pass_field.y - 20, "Confirm Password", COL_MUTED, COL_TRANSPARENT);
+    } else {
+        gfx_str(l.user_field.x, l.user_field.y - 20, "Username", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.pass_field.x, l.pass_field.y - 20, "Password", COL_MUTED, COL_TRANSPARENT);
+    }
 
     {
         textinput_t u_box, p_box;
@@ -345,17 +373,32 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
         u_box.rect = l.user_field;
         u_box.focused = (s->field == 0);
         u_box.hover = rect_contains(l.user_field, mouse->x, mouse->y);
-        kstrcpy(u_box.buf, s->username);
-        u_box.len = s->user_len; u_box.cursor = s->user_len;
-        kstrcpy(u_box.placeholder, "User ID");
-
-        login_mask_password(s, pass_mask, sizeof(pass_mask));
         p_box.rect = l.pass_field;
         p_box.focused = (s->field == 1);
         p_box.hover = rect_contains(l.pass_field, mouse->x, mouse->y);
-        kstrcpy(p_box.buf, pass_mask);
-        p_box.len = (u32)kstrlen(pass_mask); p_box.cursor = p_box.len;
-        kstrcpy(p_box.placeholder, "Password");
+
+        if (s->mode == LOGIN_MODE_MUST_CHANGE) {
+            /* Both fields are secrets here, so both are masked. */
+            char new_mask[64];
+            login_mask_n(new_mask, sizeof(new_mask), s->newpass_len);
+            kstrcpy(u_box.buf, new_mask);
+            u_box.len = (u32)kstrlen(new_mask); u_box.cursor = u_box.len;
+            kstrcpy(u_box.placeholder, "New password");
+
+            login_mask_n(pass_mask, sizeof(pass_mask), s->confirm_len);
+            kstrcpy(p_box.buf, pass_mask);
+            p_box.len = (u32)kstrlen(pass_mask); p_box.cursor = p_box.len;
+            kstrcpy(p_box.placeholder, "Repeat password");
+        } else {
+            kstrcpy(u_box.buf, s->username);
+            u_box.len = s->user_len; u_box.cursor = s->user_len;
+            kstrcpy(u_box.placeholder, "User ID");
+
+            login_mask_password(s, pass_mask, sizeof(pass_mask));
+            kstrcpy(p_box.buf, pass_mask);
+            p_box.len = (u32)kstrlen(pass_mask); p_box.cursor = p_box.len;
+            kstrcpy(p_box.placeholder, "Password");
+        }
 
         textinput_draw(&u_box);
         textinput_draw(&p_box);
@@ -393,8 +436,27 @@ static bool login_try(login_state_t *s) {
     }
 
     if (user_login(s->username, s->password) == 0) {
-        login_set_status(s, "Login successful. Launching desktop...", COL_GREEN);
         s->failed_attempts = 0;
+
+        /* Correct credentials, but a shipped bootstrap password: divert to a
+         * mandatory change instead of reaching the desktop. */
+        if (user_must_change_password()) {
+            kstrncpy(s->verified_pass, s->password, sizeof(s->verified_pass) - 1);
+            s->verified_pass[sizeof(s->verified_pass) - 1] = '\0';
+            s->password[0] = '\0';
+            s->pass_len = 0;
+            s->newpass[0] = '\0'; s->newpass_len = 0;
+            s->confirm[0] = '\0'; s->confirm_len = 0;
+            s->mode = LOGIN_MODE_MUST_CHANGE;
+            s->field = 0;
+            login_set_status(s, "Default password must be changed", COL_YELLOW);
+            serial_write("[login] '");
+            serial_write(s->username);
+            serial_write("' uses a default password, forcing change\n");
+            return false;
+        }
+
+        login_set_status(s, "Login successful. Launching desktop...", COL_GREEN);
         return true;
     }
 
@@ -409,6 +471,46 @@ static bool login_try(login_state_t *s) {
     } else {
         login_set_status(s, "Invalid credentials. Try again", COL_RED);
     }
+    return false;
+}
+
+/* Returns true when the password was changed and the desktop may be entered. */
+static bool login_apply_password_change(login_state_t *s) {
+    if (s->newpass_len == 0 || s->confirm_len == 0) {
+        login_set_status(s, "Enter the new password twice", COL_YELLOW);
+        return false;
+    }
+    if (kstrcmp(s->newpass, s->confirm) != 0) {
+        login_set_status(s, "Passwords do not match", COL_RED);
+        s->confirm[0] = '\0';
+        s->confirm_len = 0;
+        s->field = 1;
+        return false;
+    }
+    if (kstrcmp(s->newpass, s->verified_pass) == 0) {
+        login_set_status(s, "Choose a password you have not used", COL_YELLOW);
+        return false;
+    }
+
+    int rc = user_change_password(s->username, s->verified_pass, s->newpass);
+    if (rc == 0) {
+        /* Clear the secrets we were holding in this frame's state. */
+        kmemset(s->newpass, 0, sizeof(s->newpass));
+        kmemset(s->confirm, 0, sizeof(s->confirm));
+        kmemset(s->verified_pass, 0, sizeof(s->verified_pass));
+        s->newpass_len = 0;
+        s->confirm_len = 0;
+        login_set_status(s, "Password updated. Launching desktop...", COL_GREEN);
+        serial_write("[login] password changed, entering desktop\n");
+        return true;
+    }
+
+    if (rc == -2)
+        login_set_status(s, "Need 8+ chars with upper, lower and a number", COL_YELLOW);
+    else if (rc == -4)
+        login_set_status(s, "Current password no longer valid. Sign in again", COL_RED);
+    else
+        login_set_status(s, "Could not change password", COL_RED);
     return false;
 }
 
@@ -512,6 +614,7 @@ static bool run_login_flow(mouse_t *mouse) {
     keyboard_flush();
     mouse->x = (i32)SCREEN_W / 2;
     mouse->y = (i32)SCREEN_H / 2;
+    serial_write("[login] login screen ready\n");
 
     while (1) {
         login_layout_t layout = login_make_layout(&login);
@@ -524,7 +627,12 @@ static bool run_login_flow(mouse_t *mouse) {
                 continue;
             }
             if (c == '\n') {
-                if (login.mode == LOGIN_MODE_SIGNIN) {
+                if (login.mode == LOGIN_MODE_MUST_CHANGE) {
+                    if (login_apply_password_change(&login)) {
+                        login_fade_out(&login, mouse);
+                        return true;
+                    }
+                } else if (login.mode == LOGIN_MODE_SIGNIN) {
                     if (login_try(&login)) {
                         login_fade_out(&login, mouse);
                         return true;
@@ -535,7 +643,15 @@ static bool run_login_flow(mouse_t *mouse) {
                 continue;
             }
             if (c == '\b') {
-                if (login.field == 0 && login.user_len > 0) {
+                if (login.mode == LOGIN_MODE_MUST_CHANGE) {
+                    if (login.field == 0 && login.newpass_len > 0) {
+                        login.newpass_len--;
+                        login.newpass[login.newpass_len] = '\0';
+                    } else if (login.field == 1 && login.confirm_len > 0) {
+                        login.confirm_len--;
+                        login.confirm[login.confirm_len] = '\0';
+                    }
+                } else if (login.field == 0 && login.user_len > 0) {
                     login.user_len--;
                     login.username[login.user_len] = '\0';
                 } else if (login.field == 1 && login.pass_len > 0) {
@@ -546,7 +662,19 @@ static bool run_login_flow(mouse_t *mouse) {
             }
             if (c < 32 || c > 126) continue;
 
-            if (login.field == 0) {
+            if (login.mode == LOGIN_MODE_MUST_CHANGE) {
+                if (login.field == 0) {
+                    if (login.newpass_len < sizeof(login.newpass) - 1) {
+                        login.newpass[login.newpass_len++] = c;
+                        login.newpass[login.newpass_len] = '\0';
+                    }
+                } else {
+                    if (login.confirm_len < sizeof(login.confirm) - 1) {
+                        login.confirm[login.confirm_len++] = c;
+                        login.confirm[login.confirm_len] = '\0';
+                    }
+                }
+            } else if (login.field == 0) {
                 if (login.user_len < sizeof(login.username) - 1) {
                     login.username[login.user_len++] = c;
                     login.username[login.user_len] = '\0';
@@ -567,7 +695,12 @@ static bool run_login_flow(mouse_t *mouse) {
             else if (rect_contains(layout.pass_field, mouse->x, mouse->y))
                 login.field = 1;
             else if (button_take_click(&layout.primary_btn, mouse)) {
-                if (login.mode == LOGIN_MODE_SIGNIN) {
+                if (login.mode == LOGIN_MODE_MUST_CHANGE) {
+                    if (login_apply_password_change(&login)) {
+                        login_fade_out(&login, mouse);
+                        return true;
+                    }
+                } else if (login.mode == LOGIN_MODE_SIGNIN) {
                     if (login_try(&login)) {
                         login_fade_out(&login, mouse);
                         return true;
@@ -576,15 +709,31 @@ static bool run_login_flow(mouse_t *mouse) {
                     login_create_account(&login);
                 }
             } else if (button_take_click(&layout.secondary_btn, mouse)) {
-                login.mode = (login.mode == LOGIN_MODE_SIGNIN) ? LOGIN_MODE_SIGNUP : LOGIN_MODE_SIGNIN;
-                login.pass_len = 0;
-                login.password[0] = '\0';
-                login.field = (login.mode == LOGIN_MODE_SIGNIN) ? 1 : 0;
-                login_set_status(&login,
-                    login.mode == LOGIN_MODE_SIGNIN
-                        ? "Sign in with an existing account"
-                        : "Create a strong local account",
-                    COL_DIM);
+                if (login.mode == LOGIN_MODE_MUST_CHANGE) {
+                    /* Cancel drops the session and returns to sign-in. The
+                     * must_change flag stays set, so there is no way past it. */
+                    user_logout();
+                    kmemset(&login.newpass, 0, sizeof(login.newpass));
+                    kmemset(&login.confirm, 0, sizeof(login.confirm));
+                    kmemset(&login.verified_pass, 0, sizeof(login.verified_pass));
+                    login.newpass_len = 0;
+                    login.confirm_len = 0;
+                    login.pass_len = 0;
+                    login.password[0] = '\0';
+                    login.mode = LOGIN_MODE_SIGNIN;
+                    login.field = 1;
+                    login_set_status(&login, "Sign in to continue", COL_DIM);
+                } else {
+                    login.mode = (login.mode == LOGIN_MODE_SIGNIN) ? LOGIN_MODE_SIGNUP : LOGIN_MODE_SIGNIN;
+                    login.pass_len = 0;
+                    login.password[0] = '\0';
+                    login.field = (login.mode == LOGIN_MODE_SIGNIN) ? 1 : 0;
+                    login_set_status(&login,
+                        login.mode == LOGIN_MODE_SIGNIN
+                            ? "Sign in with an existing account"
+                            : "Create a strong local account",
+                        COL_DIM);
+                }
             }
         }
 

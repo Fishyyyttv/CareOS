@@ -6,12 +6,12 @@ QEMU      := qemu-system-x86_64
 GCC_INC   := $(shell gcc -print-file-name=include 2>/dev/null)
 LIBGCC    := $(shell gcc -print-libgcc-file-name 2>/dev/null)
 
-KERN_CFLAGS := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
+KERN_CFLAGS := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
                -Iinclude -Iinclude/libc -Igui -fno-builtin \
                -mno-red-zone -mno-mmx -mno-sse -mno-sse2
 
-APP_CFLAGS  := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
+APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
                -Iinclude -Iinclude/libc -Igui -fno-builtin \
                -mno-red-zone
@@ -42,7 +42,10 @@ NASMFLAGS := -f elf64
 
 DISK      := careos.img
 DISK_MB   = 4096
-DISK_RESERVED_SECTORS := 104
+# Must equal CAREOS_DISK_RESERVED_SECTORS in include/kernel.h
+# (HOMEFS 96 + SETTINGS 4 + USERDB 8). If these disagree, the ext2 filesystem
+# overlaps the reserved tail where homefs/settings/userdb live.
+DISK_RESERVED_SECTORS := 108
 
 # Display backend. sdl gives a predictable pointer grab (click the window to
 # grab, Ctrl+Alt+G to release) and a fullscreen toggle (Ctrl+Alt+F). Override
@@ -152,6 +155,12 @@ kernel/libc_shim.o: kernel/libc_shim.c
 	@echo "  CC    $<"
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Header dependency tracking. Without this, editing a header (e.g. the
+# fs_node_t layout in include/kernel.h) rebuilds nothing, and stale objects
+# get linked against new ones with mismatched struct layouts.
+DEP_FILES := $(ALL_OBJ:.o=.d)
+-include $(DEP_FILES)
+
 kernel/kernel.elf: $(ALL_OBJ)
 	@echo "  LD    kernel.elf"
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJ) $(LIBGCC)
@@ -240,7 +249,7 @@ DOOM1.WAD.bin.o: DOOM1.WAD
 test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_isolate_b
 
 clean:
-	@rm -f $(ALL_OBJ) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
+	@rm -f $(ALL_OBJ) $(ALL_OBJ:.o=.d) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
 	@rm -f tests/ring3_exit.o tests/ring3_exit tests/ring3_fault.o tests/ring3_fault tests/ring3_exit.bin.o
 	@rm -f tests/ring3_isolate_a.o tests/ring3_isolate_a tests/ring3_isolate_a.bin.o
 	@rm -f tests/ring3_isolate_b.o tests/ring3_isolate_b tests/ring3_isolate_b.bin.o

@@ -112,9 +112,9 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *fp) {
     u32    avail = fh->node->size > fh->pos ? fh->node->size - fh->pos : 0;
     if (total > (size_t)avail) total = (size_t)avail;
     if (total == 0) return 0;
-    const char *src = fh->node->raw_data
-                      ? (const char *)fh->node->raw_data
-                      : fh->node->data;
+    /* Owned and borrowed content now share one pointer. */
+    const char *src = fh->node->data;
+    if (!src) return 0;
     kmemcpy(ptr, src + fh->pos, total);
     fh->pos += (u32)total;
     return total / size;

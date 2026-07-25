@@ -1,10 +1,31 @@
-CareOS v6 -- Desktop Release Build
-Build: March 2026
+CareOS v9 -- Desktop Release Build
+Build: July 2026
 
 Highlights:
+  [1] True per-process address spaces: user ELF binaries run in ring 3 with
+      isolated page tables, a dedicated user address range, and real user stacks
+  [2] Scheduler and paging hardening: per-process directories are actually freed,
+      the frame allocator's bitmap is guarded against concurrent access, and
+      task_yield no longer sends spurious PIC EOIs that silently killed the timer
+  [3] rc.care startup scripts: /etc/rc.care and per-user rc.care run at login,
+      with CareLang native functions (sys_launch, settings, user info)
+  [4] Theme engine with per-user theme preference, applied live
+  [5] TLS 1.3 networking stack (X25519, AES-GCM, SHA-256) behind the browser app
+  [6] carepkg package manager and ext2 read/write support
+
+Previously, in v6:
   [1] Proper GUI login gate (no auto-login)
   [2] Login lockout after repeated failures
   [3] Refined staged splash/loader screen
   [4] Fixed launcher overlay rendering + input handling
   [5] VFS hardening: duplicate-name prevention and recursive delete cleanup
   [6] Safer VFS path generation with bounded writes
+
+Notes:
+  This file describes the freestanding CareOS kernel build (boot/, kernel/,
+  gui/, apps/) produced by `make`. The KDE Plasma desktop distribution tracked
+  in docs/superpowers/specs/2026-05-05-kde-plasma-distro-design.md is a separate
+  deliverable and is not covered here.
+
+  Per-release detail lives in CHANGES_v5.md / CHANGES_v6.md and in the design
+  specs and implementation plans under docs/superpowers/.

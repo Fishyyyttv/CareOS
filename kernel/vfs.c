@@ -51,6 +51,55 @@ static fs_node_t *alloc_node(void) {
 
 static void add_child(fs_node_t *parent, fs_node_t *child);
 
+/* -- File data storage ------------------------------------------------------
+ * File contents live on the kernel heap, allocated on first write. A node with
+ * data_owned == false borrows memory it must never free (e.g. the DOOM WAD
+ * embedded in .data by the Makefile). */
+
+void vfs_file_release(fs_node_t *f) {
+    if (!f) return;
+    if (f->data && f->data_owned) kfree(f->data);
+    f->data = NULL;
+    f->capacity = 0;
+    f->data_owned = false;
+    f->size = 0;
+}
+
+int vfs_file_reserve(fs_node_t *f, u32 bytes) {
+    if (!f) return -1;
+    if (bytes > FS_FILE_MAX_BYTES) return -1;
+
+    /* +1 so callers can always NUL-terminate at [size]. */
+    u32 need = bytes + 1u;
+    if (f->data && f->data_owned && f->capacity >= need) return 0;
+
+    u32 cap = f->capacity ? f->capacity : 64u;
+    while (cap < need) {
+        if (cap > FS_FILE_MAX_BYTES / 2u) { cap = need; break; }
+        cap *= 2u;
+    }
+
+    char *buf = (char *)kmalloc(cap);
+    if (!buf) return -1;
+    kmemset(buf, 0, cap);
+
+    /* Carry forward existing content, whether it was owned or borrowed. */
+    if (f->data && f->size) {
+        u32 keep = f->size < bytes ? f->size : bytes;
+        kmemcpy(buf, f->data, keep);
+    }
+    if (f->data && f->data_owned) kfree(f->data);
+
+    f->data = buf;
+    f->capacity = cap;
+    f->data_owned = true;
+    return 0;
+}
+
+const char *vfs_file_str(fs_node_t *f) {
+    return (f && f->data) ? f->data : "";
+}
+
 /* -- Public API ------------------------------------------------------------- */
 fs_node_t *vfs_root(void) { return fs_root_node; }
 
@@ -67,13 +116,16 @@ static void vfs_ext2_cache_file(fs_node_t *node) {
     if (!node || node->type != FS_FILE || node->inode_num == 0) return;
     if (ext2_read_inode(node->inode_num, &ino) != 0) return;
 
-    node->size = ino.i_size;
     u32 to_read = ino.i_size;
-    if (to_read >= FS_FILE_DATA_MAX) to_read = FS_FILE_DATA_MAX - 1;
+    if (to_read > FS_FILE_MAX_BYTES) to_read = FS_FILE_MAX_BYTES;
+    if (vfs_file_reserve(node, to_read) != 0) return;
+
     if (to_read > 0) {
         if (ext2_read_data(&ino, 0, node->data, to_read) < 0) return;
     }
     node->data[to_read] = '\0';
+    /* size tracks what we actually cached, so it can never exceed capacity. */
+    node->size = to_read;
 }
 
 static fs_node_t *vfs_ext2_cache_child(fs_node_t *parent, u32 inode_num,
@@ -229,8 +281,17 @@ static void homefs_serialize_node(fs_node_t *node, u32 *off, u32 max, u32 *entri
     homefs_get_relpath(node, rel, sizeof(rel));
     if (rel[0] != '\0') {
         u32 plen = (u32)kstrlen(rel);
-        u32 dlen = (node->type == FS_FILE) ? node->size : 0;
-        if (dlen > FS_FILE_DATA_MAX) dlen = FS_FILE_DATA_MAX;
+        u32 dlen = (node->type == FS_FILE && node->data) ? node->size : 0;
+
+        /* data_len is u16 on disk. The old code clamped against a 5 MiB
+         * constant and then truncated into the u16, silently corrupting any
+         * file over 64 KiB. Skip the data instead of writing a wrong length. */
+        if (dlen > 0xFFFFu) {
+            serial_write("[homefs] file too large to persist, skipping data: ");
+            serial_write(rel);
+            serial_write("\n");
+            dlen = 0;
+        }
 
         homefs_entry_hdr_t eh;
         eh.type = (u8)node->type;
@@ -305,7 +366,7 @@ static void homefs_deserialize_entry(const char *path, u32 plen, u8 type,
 
     fs_node_t *f = vfs_mkfile(parent, name);
     if (!f) return;
-    if (dlen > FS_FILE_DATA_MAX) dlen = FS_FILE_DATA_MAX;
+    if (dlen > FS_FILE_MAX_BYTES) dlen = FS_FILE_MAX_BYTES;
     vfs_write(f, (const char*)data, dlen);
 }
 
@@ -494,19 +555,21 @@ static i32 vfs_ext2_write(fs_node_t *node, u32 off, u32 len, const u8 *buf) {
 }
 
 int vfs_write(fs_node_t *f, const char *data, u32 len) {
-    if (!f || f->type != FS_FILE) return -1;
+    if (!f || f->type != FS_FILE || !data) return -1;
+    if (len > FS_FILE_MAX_BYTES) len = FS_FILE_MAX_BYTES;
     if (f->inode_num != 0) {
         int written = (int)vfs_ext2_write(f, 0, len, (const u8*)data);
         if (written > 0) {
             u32 cached = (u32)written;
-            if (cached >= FS_FILE_DATA_MAX) cached = FS_FILE_DATA_MAX - 1;
+            if (cached > FS_FILE_MAX_BYTES) cached = FS_FILE_MAX_BYTES;
+            if (vfs_file_reserve(f, cached) != 0) return -1;
             kmemcpy(f->data, data, cached);
             f->data[cached] = '\0';
-            f->size = (u32)written;
+            f->size = cached;
         }
         return written;
     }
-    if (len >= FS_FILE_DATA_MAX) len = FS_FILE_DATA_MAX - 1;
+    if (vfs_file_reserve(f, len) != 0) return -1;
     kmemcpy(f->data, data, len);
     f->data[len] = '\0';
     f->size = len;
@@ -521,8 +584,9 @@ int vfs_read(fs_node_t *f, char *buf, u32 len) {
         if (n >= 0) vfs_ext2_cache_file(f);
         return n;
     }
+    if (!f->data) return 0;
     u32 n = f->size < len ? f->size : len;
-    kmemcpy(buf, f->raw_data ? f->raw_data : (void *)f->data, n);
+    kmemcpy(buf, f->data, n);
     return (int)n;
 }
 
@@ -533,6 +597,9 @@ static void vfs_wipe_subtree(fs_node_t *node) {
         node->child_count--;
         vfs_wipe_subtree(child);
     }
+    /* Must run before the kmemset, which would otherwise drop the pointer
+     * and leak the heap allocation. */
+    vfs_file_release(node);
     kmemset(node, 0, sizeof(fs_node_t));
 }
 
@@ -680,9 +747,11 @@ int vfs_copy(fs_node_t *src, fs_node_t *dst_dir, const char *new_name) {
     if (!src || src->type != FS_FILE || !dst_dir) return -1;
     fs_node_t *n = vfs_mkfile(dst_dir, new_name ? new_name : src->name);
     if (!n) return -1;
+    if (src->size == 0 || !src->data) { n->size = 0; return 0; }
+    if (vfs_file_reserve(n, src->size) != 0) return -1;
     kmemcpy(n->data, src->data, src->size);
     n->size = src->size;
-    n->data[n->size < FS_FILE_DATA_MAX ? n->size : FS_FILE_DATA_MAX - 1] = '\0';
+    n->data[n->size] = '\0';
     homefs_maybe_save(dst_dir);
     return 0;
 }
