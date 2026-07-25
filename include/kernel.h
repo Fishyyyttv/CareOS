@@ -476,7 +476,10 @@ int         ata_cached_write(u32 lba, const void *buf);
 void        ata_cache_flush(void);
 #define CAREOS_DISK_HOMEFS_SECTORS    96u
 #define CAREOS_DISK_SETTINGS_SECTORS   4u
-#define CAREOS_DISK_USERDB_SECTORS     4u
+/* 8 sectors = 4096 B, enough for MAX_USERS (16) v4 records of 198 B each
+ * (3168 B) plus the header. The old value of 4 could not even hold 16 v3
+ * records (2512 B > 2048 B), which users_persist_save did not bound-check. */
+#define CAREOS_DISK_USERDB_SECTORS     8u
 #define CAREOS_DISK_RESERVED_SECTORS  (CAREOS_DISK_HOMEFS_SECTORS + CAREOS_DISK_SETTINGS_SECTORS + CAREOS_DISK_USERDB_SECTORS)
 
 /* -- e1000 Ethernet driver ------------------------------------------------ */

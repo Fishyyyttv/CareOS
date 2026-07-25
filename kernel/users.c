@@ -375,10 +375,20 @@ static void users_persist_save(void) {
     userdb_hdr_t *hdr = (userdb_hdr_t*)userdb_io;
     hdr->magic = USERDB_MAGIC;
     hdr->version = USERDB_VERSION;
-    hdr->count = user_count;
+
+    /* users_persist_load bound-checks its payload, but this function did not:
+     * it wrote user_count records into a fixed userdb_io[] with no cap, so a
+     * populated account list overflowed the static buffer and corrupted
+     * whatever followed it in BSS. Cap the write to what the region holds. */
+    u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
+    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v3_t);
+    u32 to_write = user_count < max_entries ? user_count : max_entries;
+    if (to_write < user_count)
+        serial_write("[users] WARNING: userdb region too small, truncating save\n");
+    hdr->count = to_write;
 
     userdb_entry_v3_t *entries = (userdb_entry_v3_t*)(userdb_io + sizeof(userdb_hdr_t));
-    for (u32 i = 0; i < user_count && i < MAX_USERS; i++) {
+    for (u32 i = 0; i < to_write; i++) {
         entries[i].uid = users[i].uid;
         entries[i].gid = users[i].gid;
         entries[i].pass_hash = users[i].pass_hash;

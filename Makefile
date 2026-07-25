@@ -42,7 +42,10 @@ NASMFLAGS := -f elf64
 
 DISK      := careos.img
 DISK_MB   = 4096
-DISK_RESERVED_SECTORS := 104
+# Must equal CAREOS_DISK_RESERVED_SECTORS in include/kernel.h
+# (HOMEFS 96 + SETTINGS 4 + USERDB 8). If these disagree, the ext2 filesystem
+# overlaps the reserved tail where homefs/settings/userdb live.
+DISK_RESERVED_SECTORS := 108
 
 # -machine pc,usb=off   forces PS/2 mouse on IRQ12 (no USB tablet)
 # -drive                4GB disk image so ATA driver finds a drive
