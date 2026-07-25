@@ -306,6 +306,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
     serial_write("[boot] Initializing scheduler...\n");
     scheduler_init();    slog_ok("Scheduler");
 
+#if !defined(CAREOS_SKIP_SMOKE_TESTS)
     /* ── Ring-3 smoke tests: must run after scheduler_init(), which resets
      * the task table — anything launched before it never actually runs. ── */
     {
@@ -372,6 +373,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
             paging_free_dir((pde_t *)dir_b);
         }
     }
+#endif /* CAREOS_SKIP_SMOKE_TESTS */
 
     e1000_init();
     net_init();          slog_ok("Networking");

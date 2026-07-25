@@ -8,20 +8,22 @@
 
 #define MAX_USERS 16
 #define USERDB_MAGIC   0x43555352u  /* CUSR */
-#define USERDB_VERSION 3u
+#define USERDB_VERSION 4u
 #define USERDB_SECTORS CAREOS_DISK_USERDB_SECTORS
 #define USERDB_SECTOR_SIZE 512u
 
+/* Must stay field-for-field identical to user_t in include/kernel.h -- the
+ * GUI apps cast user_get_by_uid()'s result to user_t*. */
 typedef struct {
     u32  uid, gid;
     char name[32];
-    u32  pass_hash;
+    u8   pass_hash[USER_PASS_HASH_LEN];
     char home[64];
     char shell[32];
     bool active;
     bool is_root;
 
-    u32  salt;
+    u8   salt[USER_SALT_LEN];
     u8   failed_attempts;
     u32  lock_until_tick;
     u32  theme_pref;
@@ -30,6 +32,8 @@ typedef struct {
     u8   last_login_day;
     u8   last_login_hour;
     u8   last_login_minute;
+    u8   hash_algo;
+    bool must_change_password;
 } user_rec_t;
 
 typedef struct {
@@ -45,6 +49,26 @@ typedef struct __attribute__((packed)) {
     u32 count;
     u32 checksum;
 } userdb_hdr_t;
+
+typedef struct __attribute__((packed)) {
+    u32  uid;
+    u32  gid;
+    u8   hash_algo;
+    u8   must_change;
+    u8   pass_hash[USER_PASS_HASH_LEN];
+    u8   salt[USER_SALT_LEN];
+    u8   active;
+    u8   is_root;
+    char name[32];
+    char home[64];
+    char shell[32];
+    u32  theme_pref;
+    u16  last_login_year;
+    u8   last_login_month;
+    u8   last_login_day;
+    u8   last_login_hour;
+    u8   last_login_minute;
+} userdb_entry_v4_t;
 
 typedef struct __attribute__((packed)) {
     u32  uid;
@@ -95,21 +119,11 @@ static u32        current_uid = 65534;
 static session_t  session = { false, 65534, 0, "guest" };
 static u8         userdb_io[USERDB_SECTORS * USERDB_SECTOR_SIZE];
 
-static u32 simple_hash(const char *s) {
-    u32 h = 2166136261u;
-    while (*s) {
-        h ^= (u8)*s++;
-        h *= 16777619u;
-    }
-    return h;
-}
-
-static u32 user_salt_default(const char *name, u32 uid) {
-    u32 t = timer_get_ticks();
-    return simple_hash(name) ^ (uid * 2654435761u) ^ (t << 1) ^ 0x9e3779b9u;
-}
-
-/* Moderately stronger than plain djb2: salted and iterated. */
+/* Legacy pre-v4 password hash. Retained ONLY to verify records written before
+ * the move to PBKDF2, so existing installs are not locked out; those records
+ * are rehashed on the next successful login. Never use this for new hashes.
+ * (simple_hash and user_salt_default went away with it -- salts now come from
+ * user_make_salt, which mixes rdtsc and the RTC rather than tick count alone.) */
 static u32 hash_password_salted(const char *pw, u32 salt) {
     u32 h = 2166136261u ^ salt;
     for (u32 round = 0; round < 512; round++) {
@@ -124,6 +138,92 @@ static u32 hash_password_salted(const char *pw, u32 salt) {
         h ^= 0xA5A5A5A5u + round;
     }
     return h ^ (h >> 16);
+}
+
+/* -- Password hashing -------------------------------------------------------
+ * Stored hashes are PBKDF2-HMAC-SHA256 (32 bytes, 16-byte salt). The previous
+ * scheme returned a u32: 512 mixing rounds bought far less than a 32-bit
+ * output cost, since that space is trivially searched offline and any
+ * colliding string authenticates. hash_password_salted is kept below solely
+ * to verify pre-v4 records so existing installs are not locked out. */
+
+#define PBKDF2_ITERS 4096u
+
+/* PBKDF2-HMAC-SHA256 with dkLen == 32, so exactly one output block. */
+static void pbkdf2_sha256(const char *pw, const u8 *salt, u32 slen,
+                          u32 iters, u8 *out32) {
+    u8  block[USER_SALT_LEN + 4];
+    u32 pwlen = (u32)kstrlen(pw);
+
+    if (slen > USER_SALT_LEN) slen = USER_SALT_LEN;
+    kmemcpy(block, salt, slen);
+    /* INT32BE(1) -- the single block index */
+    block[slen + 0] = 0; block[slen + 1] = 0;
+    block[slen + 2] = 0; block[slen + 3] = 1;
+
+    u8 u[32], t[32];
+    hmac_sha256((const u8*)pw, pwlen, block, slen + 4u, u);
+    kmemcpy(t, u, 32);
+
+    for (u32 i = 1; i < iters; i++) {
+        hmac_sha256((const u8*)pw, pwlen, u, 32, u);
+        for (u32 j = 0; j < 32; j++) t[j] ^= u[j];
+    }
+    kmemcpy(out32, t, 32);
+}
+
+static u64 rdtsc_now(void) {
+    u32 lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((u64)hi << 32) | lo;
+}
+
+/* Mixes the timestamp counter, the RTC, and the tick count. This is NOT a
+ * CSPRNG -- it is adequate for salting a hobby kernel's password store, but
+ * must not be reused for key material. The old salt leaned on
+ * timer_get_ticks() alone, which is near-constant at first boot. */
+static void user_make_salt(u8 *salt16) {
+    rtc_time_t t; rtc_read(&t);
+    u64 a = rdtsc_now();
+    u64 b = ((u64)t.year << 40) ^ ((u64)t.month << 32) ^ ((u64)t.day << 24)
+          ^ ((u64)t.hour << 16) ^ ((u64)t.minute << 8) ^ (u64)t.second
+          ^ ((u64)timer_get_ticks() << 3) ^ (a >> 17);
+    for (u32 i = 0; i < 8; i++) salt16[i]     = (u8)(a >> (i * 8));
+    for (u32 i = 0; i < 8; i++) salt16[8 + i] = (u8)(b >> (i * 8));
+}
+
+static void user_set_password(user_rec_t *u, const char *pw) {
+    if (!u || !pw) return;
+    user_make_salt(u->salt);
+    pbkdf2_sha256(pw, u->salt, USER_SALT_LEN, PBKDF2_ITERS, u->pass_hash);
+    u->hash_algo = USER_HASH_PBKDF2_S256;
+}
+
+static void users_persist_save(void);
+
+static bool user_verify_password(user_rec_t *u, const char *pw) {
+    if (!u || !pw) return false;
+
+    if (u->hash_algo == USER_HASH_PBKDF2_S256) {
+        u8 got[32];
+        pbkdf2_sha256(pw, u->salt, USER_SALT_LEN, PBKDF2_ITERS, got);
+        u8 diff = 0;
+        for (u32 i = 0; i < 32; i++) diff |= (u8)(got[i] ^ u->pass_hash[i]);
+        return diff == 0;   /* constant time across the digest */
+    }
+
+    /* Pre-v4 record: verify with the old algorithm, then upgrade in place. */
+    u32 legacy_salt = 0, want = 0;
+    kmemcpy(&legacy_salt, u->salt, 4);
+    kmemcpy(&want, u->pass_hash, 4);
+    if (hash_password_salted(pw, legacy_salt) != want) return false;
+
+    user_set_password(u, pw);
+    users_persist_save();
+    serial_write("[users] upgraded legacy password hash to PBKDF2 for ");
+    serial_write(u->name);
+    serial_write("\n");
+    return true;
 }
 
 static bool password_is_strong(const char *pw) {
@@ -201,7 +301,9 @@ static void users_compact(void) {
 
 static void users_sanitize_profile(user_rec_t *u) {
     if (!u) return;
-    if (!u->salt) u->salt = user_salt_default(u->name, u->uid);
+    /* A pre-v4 record may carry an all-zero salt (v1 had no salt field). Leave
+     * it alone: the legacy verifier needs the stored value, whatever it was,
+     * and the record is reseeded with a real salt on upgrade. */
     u->failed_attempts = 0;
     u->lock_until_tick = 0;
     if (u->theme_pref != USER_THEME_SYSTEM_DEFAULT && u->theme_pref > 1)
@@ -259,6 +361,45 @@ static bool users_persist_load(void) {
     user_count = 0;
 
     if (hdr->version == USERDB_VERSION) {
+        u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v4_t);
+        u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
+        if (payload_len > max_payload) return false;
+
+        u8 *payload = userdb_io + sizeof(userdb_hdr_t);
+        if (userdb_checksum(payload, payload_len) != hdr->checksum) return false;
+
+        userdb_entry_v4_t *entries = (userdb_entry_v4_t*)payload;
+        for (u32 i = 0; i < hdr->count && i < MAX_USERS; i++) {
+            user_rec_t *u = &users[user_count++];
+            u->uid = entries[i].uid;
+            u->gid = entries[i].gid;
+            u->hash_algo = entries[i].hash_algo;
+            u->must_change_password = entries[i].must_change ? true : false;
+            kmemcpy(u->pass_hash, entries[i].pass_hash, USER_PASS_HASH_LEN);
+            kmemcpy(u->salt, entries[i].salt, USER_SALT_LEN);
+            u->active = entries[i].active ? true : false;
+            u->is_root = entries[i].is_root ? true : false;
+            u->theme_pref = entries[i].theme_pref;
+            u->last_login_year = entries[i].last_login_year;
+            u->last_login_month = entries[i].last_login_month;
+            u->last_login_day = entries[i].last_login_day;
+            u->last_login_hour = entries[i].last_login_hour;
+            u->last_login_minute = entries[i].last_login_minute;
+
+            kstrncpy(u->name, entries[i].name, sizeof(u->name) - 1);
+            u->name[sizeof(u->name) - 1] = '\0';
+            kstrncpy(u->home, entries[i].home, sizeof(u->home) - 1);
+            u->home[sizeof(u->home) - 1] = '\0';
+            kstrncpy(u->shell, entries[i].shell, sizeof(u->shell) - 1);
+            u->shell[sizeof(u->shell) - 1] = '\0';
+            users_sanitize_profile(u);
+        }
+        return user_count > 0;
+    }
+
+    /* v1-v3 hold a 32-bit legacy hash. Keep it, tag the record, and let
+     * user_verify_password upgrade it on the next successful login. */
+    if (hdr->version == 3u) {
         u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v3_t);
         u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
         if (payload_len > max_payload) return false;
@@ -271,10 +412,12 @@ static bool users_persist_load(void) {
             user_rec_t *u = &users[user_count++];
             u->uid = entries[i].uid;
             u->gid = entries[i].gid;
-            u->pass_hash = entries[i].pass_hash;
+            kmemcpy(u->pass_hash, &entries[i].pass_hash, 4);
+            kmemcpy(u->salt, &entries[i].salt, 4);
+            u->hash_algo = USER_HASH_LEGACY_FNV;
+            u->must_change_password = false;
             u->active = entries[i].active ? true : false;
             u->is_root = entries[i].is_root ? true : false;
-            u->salt = entries[i].salt;
             u->theme_pref = entries[i].theme_pref;
             u->last_login_year = entries[i].last_login_year;
             u->last_login_month = entries[i].last_login_month;
@@ -306,10 +449,12 @@ static bool users_persist_load(void) {
             user_rec_t *u = &users[user_count++];
             u->uid = entries[i].uid;
             u->gid = entries[i].gid;
-            u->pass_hash = entries[i].pass_hash;
+            kmemcpy(u->pass_hash, &entries[i].pass_hash, 4);
+            kmemcpy(u->salt, &entries[i].salt, 4);
+            u->hash_algo = USER_HASH_LEGACY_FNV;
+            u->must_change_password = false;
             u->active = entries[i].active ? true : false;
             u->is_root = entries[i].is_root ? true : false;
-            u->salt = entries[i].salt;
             u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
             u->last_login_year = 0;
             u->last_login_month = 0;
@@ -341,10 +486,13 @@ static bool users_persist_load(void) {
             user_rec_t *u = &users[user_count++];
             u->uid = entries[i].uid;
             u->gid = entries[i].gid;
-            u->pass_hash = entries[i].pass_hash;
+            kmemcpy(u->pass_hash, &entries[i].pass_hash, 4);
+            /* v1 had no salt field at all; the legacy verifier hashed with 0. */
+            kmemset(u->salt, 0, USER_SALT_LEN);
+            u->hash_algo = USER_HASH_LEGACY_FNV;
+            u->must_change_password = false;
             u->active = entries[i].active ? true : false;
             u->is_root = entries[i].is_root ? true : false;
-            u->salt = 0;
             u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
             u->last_login_year = 0;
             u->last_login_month = 0;
@@ -381,20 +529,22 @@ static void users_persist_save(void) {
      * populated account list overflowed the static buffer and corrupted
      * whatever followed it in BSS. Cap the write to what the region holds. */
     u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
-    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v3_t);
+    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v4_t);
     u32 to_write = user_count < max_entries ? user_count : max_entries;
     if (to_write < user_count)
         serial_write("[users] WARNING: userdb region too small, truncating save\n");
     hdr->count = to_write;
 
-    userdb_entry_v3_t *entries = (userdb_entry_v3_t*)(userdb_io + sizeof(userdb_hdr_t));
+    userdb_entry_v4_t *entries = (userdb_entry_v4_t*)(userdb_io + sizeof(userdb_hdr_t));
     for (u32 i = 0; i < to_write; i++) {
         entries[i].uid = users[i].uid;
         entries[i].gid = users[i].gid;
-        entries[i].pass_hash = users[i].pass_hash;
+        entries[i].hash_algo = users[i].hash_algo;
+        entries[i].must_change = users[i].must_change_password ? 1 : 0;
+        kmemcpy(entries[i].pass_hash, users[i].pass_hash, USER_PASS_HASH_LEN);
+        kmemcpy(entries[i].salt, users[i].salt, USER_SALT_LEN);
         entries[i].active = users[i].active ? 1 : 0;
         entries[i].is_root = users[i].is_root ? 1 : 0;
-        entries[i].salt = users[i].salt;
         entries[i].theme_pref = users[i].theme_pref;
         entries[i].last_login_year = users[i].last_login_year;
         entries[i].last_login_month = users[i].last_login_month;
@@ -410,7 +560,7 @@ static void users_persist_save(void) {
         entries[i].shell[sizeof(entries[i].shell) - 1] = '\0';
     }
 
-    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v3_t);
+    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v4_t);
     hdr->checksum = userdb_checksum((u8*)entries, payload_len);
 
     u32 lba = users_db_lba();
@@ -467,8 +617,7 @@ static int user_add(u32 uid, u32 gid, const char *name, const char *pass,
     u->active = true;
     u->is_root = is_root;
     u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
-    u->salt = user_salt_default(name, uid);
-    u->pass_hash = hash_password_salted(pass, u->salt);
+    user_set_password(u, pass);
     return 0;
 }
 
@@ -499,7 +648,7 @@ int user_login(const char *name, const char *pass) {
     u32 now = timer_get_ticks();
     if (u->lock_until_tick > now) return -3;
 
-    if (u->pass_hash != hash_password_salted(pass, u->salt)) {
+    if (!user_verify_password(u, pass ? pass : "")) {
         if (u->failed_attempts < 255) u->failed_attempts++;
         if (u->failed_attempts >= 5) {
             u->lock_until_tick = now + (30u * PIT_HZ);
@@ -630,11 +779,12 @@ int user_change_password(const char *name, const char *old_pass,
     bool root = user_is_root();
     if (!root && !self_change) return -3;
 
-    if (!root && u->pass_hash != hash_password_salted(old_pass ? old_pass : "", u->salt))
+    if (!root && !user_verify_password(u, old_pass ? old_pass : ""))
         return -4;
 
-    u->salt = user_salt_default(u->name, u->uid) ^ timer_get_ticks();
-    u->pass_hash = hash_password_salted(new_pass, u->salt);
+    user_set_password(u, new_pass);
+    /* The shipped bootstrap password is now gone for this account. */
+    u->must_change_password = false;
     users_persist_save();
     return 0;
 }
@@ -712,17 +862,28 @@ void users_init(void) {
     user_count = 0;
     users_set_guest_session();
 
+    /* These are deliberately weak, well-known bootstrap credentials, kept so a
+     * fresh QEMU boot is not a chicken-and-egg problem. They are marked
+     * must_change_password, so the login gate forces a strong replacement
+     * before the desktop is reachable and they cannot survive first boot.
+     * Do NOT "fix" this by inventing a stronger literal here -- a shipped
+     * password is weak because it is shipped, not because it is short. */
     if (!users_persist_load()) {
         user_add(0, 0, "root", "root", "/root", true);
         user_add(1000, 1000, "user", "CareOS123", "/home/user", false);
+        for (u32 i = 0; i < user_count; i++) users[i].must_change_password = true;
         users_persist_save();
         serial_write("[users] initialized default account database\n");
     } else {
         users_compact();
+        u32 before = user_count;
         if (!find_user_by_name("root"))
             user_add(0, 0, "root", "root", "/root", true);
         if (!find_user_by_name("user"))
             user_add(1000, 1000, "user", "CareOS123", "/home/user", false);
+        /* Only newly re-seeded accounts get the flag; existing ones keep
+         * whatever the operator already set. */
+        for (u32 i = before; i < user_count; i++) users[i].must_change_password = true;
         users_persist_save();
         serial_write("[users] loaded account database from disk\n");
     }
@@ -752,9 +913,14 @@ void user_passwd(const char *name, const char *new_pass) {
     if (!user_is_root() && !self_change) return;
     if (!password_is_strong(new_pass)) return;
 
-    u->salt = user_salt_default(u->name, u->uid) ^ timer_get_ticks();
-    u->pass_hash = hash_password_salted(new_pass, u->salt);
+    user_set_password(u, new_pass);
+    u->must_change_password = false;
     users_persist_save();
+}
+
+bool user_must_change_password(void) {
+    user_rec_t *u = find_user_by_uid(current_uid);
+    return u ? u->must_change_password : false;
 }
 
 void user_set_current_theme_preference(u32 theme) {

@@ -378,15 +378,27 @@ int  copy_from_user(void *dst, const void *user_src, u32 len);
 int  copy_to_user(void *user_dst, const void *src, u32 len);
 
 /* -- User management ------------------------------------------------------ */
+/* Password hash algorithms. Records written before v4 of the on-disk userdb
+ * hold a 32-bit FNV-style hash; they verify against the legacy algorithm and
+ * are transparently upgraded to PBKDF2 on the next successful login. */
+#define USER_HASH_LEGACY_FNV  0u
+#define USER_HASH_PBKDF2_S256 1u
+
+#define USER_PASS_HASH_LEN 32u
+#define USER_SALT_LEN      16u
+
+/* NOTE: this must stay field-for-field identical to user_rec_t in
+ * kernel/users.c. apps/app_users.c and apps/app_settings.c cast the void*
+ * from user_get_by_uid() to user_t*, so any layout drift is silent corruption. */
 typedef struct {
     u32  uid, gid;
     char name[32];
-    u32  pass_hash;
+    u8   pass_hash[USER_PASS_HASH_LEN];
     char home[64];
     char shell[32];
     bool active;
     bool is_root;
-    u32  salt;
+    u8   salt[USER_SALT_LEN];
     u8   failed_attempts;
     u32  lock_until_tick;
     u32  theme_pref;
@@ -395,6 +407,8 @@ typedef struct {
     u8   last_login_day;
     u8   last_login_hour;
     u8   last_login_minute;
+    u8   hash_algo;
+    bool must_change_password;
 } user_t;
 
 void *user_get_by_uid(u32 uid);
@@ -414,6 +428,9 @@ int         user_change_password(const char *name, const char *old_pass,
                                  const char *new_pass);
 void        user_list(void);
 void        user_set_current_theme_preference(u32 theme);
+/* True when the logged-in account still holds a shipped bootstrap password and
+ * must set a new one before reaching the desktop. */
+bool        user_must_change_password(void);
 
 /* VFS path helper (implemented in users.c) */
 void vfs_get_path(fs_node_t *node, char *buf, u32 max);
