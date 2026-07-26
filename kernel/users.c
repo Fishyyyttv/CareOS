@@ -1110,6 +1110,34 @@ bool user_must_change_password(void) {
     return u ? u->must_change_password : false;
 }
 
+/* Enumerator for the greeter (account-picker) UI. Only active accounts in
+ * the users[] table are enumerated; guest (uid 65534) is never a stored
+ * account so the loop already excludes it. */
+u32 user_enum_count(void) {
+    u32 n = 0;
+    for (u32 i = 0; i < user_count; i++)
+        if (users[i].active) n++;
+    return n;
+}
+
+bool user_enum_at(u32 idx, u32 *uid_out, char *name_out, u32 name_cap, bool *is_root_out) {
+    u32 seen = 0;
+    for (u32 i = 0; i < user_count; i++) {
+        if (!users[i].active) continue;
+        if (seen == idx) {
+            if (uid_out) *uid_out = users[i].uid;
+            if (is_root_out) *is_root_out = users[i].is_root;
+            if (name_out && name_cap) {
+                kstrncpy(name_out, users[i].name, name_cap - 1);
+                name_out[name_cap - 1] = '\0';
+            }
+            return true;
+        }
+        seen++;
+    }
+    return false;
+}
+
 void user_set_current_theme_preference(u32 theme) {
     user_rec_t *u = find_user_by_uid(current_uid);
     if (!u) return;

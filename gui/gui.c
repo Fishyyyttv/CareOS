@@ -213,6 +213,11 @@ static void draw_top_bar(void) {
 }
 
 typedef enum {
+    /* Distro-style greeter: pick an account before the password step. This is
+     * the first mode shown whenever at least one account exists; its numeric
+     * value is kept out of the 0..2 run so nothing that switches on the old
+     * values by arithmetic (there is none today, but better safe) shifts. */
+    LOGIN_MODE_PICK = 3,
     LOGIN_MODE_SIGNIN = 0,
     LOGIN_MODE_SIGNUP = 1,
     /* Credentials were correct, but the account still holds a shipped
@@ -231,6 +236,7 @@ typedef struct {
     u32  failed_attempts;
     u32  lock_until_tick;
     login_mode_t mode;
+    u32  picked_uid; /* uid chosen on the greeter; 0 until a row is clicked */
 
     /* MUST_CHANGE mode only. username still holds the authenticated account. */
     char newpass[64];
@@ -445,6 +451,133 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
                      "CareOS v9 secure desktop", COL_MUTED, COL_TRANSPARENT);
 }
 
+/* -- Greeter (distro-style account picker) --------------------------------
+ * Purely an added front step: it renders inside the same glass panel as
+ * draw_login_screen, lists one clickable row per active account, and on a
+ * hit hands off to the unmodified LOGIN_MODE_SIGNIN flow with the username
+ * pre-filled. */
+#define GREETER_MAX_ROWS 6
+#define GREETER_ROW_H    60
+#define GREETER_ROW_GAP  10
+
+typedef struct {
+    u32    uid;
+    char   name[32];
+    bool   is_root;
+    rect_t rect;
+} greeter_row_t;
+
+typedef struct {
+    rect_t panel;
+    rect_t avatar;
+    i32    wordmark_y;
+    i32    title_y;
+    i32    subtitle_y;
+    i32    footer_y;
+    greeter_row_t rows[GREETER_MAX_ROWS];
+    u32    row_count;
+} greeter_layout_t;
+
+/* Recomputed fresh every frame from the same panel geometry draw_login_screen
+ * uses (via login_make_layout), so drawing and hit-testing can never drift
+ * apart -- mirrors how login_make_layout itself is recomputed each frame. */
+static greeter_layout_t greeter_make_layout(const login_state_t *s) {
+    greeter_layout_t g;
+    kmemset(&g, 0, sizeof(g));
+
+    login_layout_t l = login_make_layout(s);
+    g.panel      = l.panel;
+    g.avatar     = l.avatar;
+    g.wordmark_y = l.wordmark_y;
+    g.title_y    = l.title_y;
+    g.subtitle_y = l.subtitle_y;
+    g.footer_y   = l.footer_y;
+
+    i32 lh      = FONT_H * (i32)GFX_FONT_SCALE;
+    i32 row_x   = g.panel.x + 42;
+    i32 row_w   = g.panel.w - 84;
+    i32 row_top = g.subtitle_y + lh + 24;
+
+    u32 n = user_enum_count();
+    if (n > GREETER_MAX_ROWS) n = GREETER_MAX_ROWS;
+
+    for (u32 i = 0; i < n; i++) {
+        u32  uid;
+        char name[32];
+        bool is_root;
+        if (!user_enum_at(i, &uid, name, sizeof(name), &is_root)) break;
+
+        greeter_row_t *row = &g.rows[g.row_count++];
+        row->uid = uid;
+        kstrncpy(row->name, name, sizeof(row->name) - 1);
+        row->name[sizeof(row->name) - 1] = '\0';
+        row->is_root = is_root;
+        row->rect = rect_make(row_x,
+                               row_top + (i32)i * (GREETER_ROW_H + GREETER_ROW_GAP),
+                               row_w, GREETER_ROW_H);
+    }
+    return g;
+}
+
+static void draw_greeter(const login_state_t *s, mouse_t *mouse) {
+    i32 sw = (i32)SCREEN_W;
+    i32 sh = (i32)SCREEN_H;
+    greeter_layout_t g = greeter_make_layout(s);
+
+    draw_elite_wallpaper();
+    gfx_rect_blend(0, 0, sw, sh, COL_BLACK, 96);
+
+    draw_glass_panel(g.panel, 18);
+
+    /* Branding header, identical to draw_login_screen's. */
+    gfx_circle_fill(g.avatar.x + g.avatar.w / 2, g.avatar.y + g.avatar.h / 2, g.avatar.w / 2, COL_PRIMARY);
+    gfx_circle_fill(g.avatar.x + g.avatar.w / 2 + 4, g.avatar.y + g.avatar.h / 2,
+                    g.avatar.w / 2 - 12, COL_SURFACE);
+    gfx_str_centered_ex(g.avatar.x, g.avatar.y + 15, g.avatar.w, "C", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
+    gfx_str_centered_ex(g.panel.x, g.wordmark_y, g.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+
+    gfx_str_centered(g.panel.x, g.title_y, g.panel.w, "Who's signing in?", COL_TEXT, COL_TRANSPARENT);
+    gfx_str_centered(g.panel.x, g.subtitle_y, g.panel.w,
+                     "Choose an account to continue", COL_DIM, COL_TRANSPARENT);
+
+    i32 lh = FONT_H * (i32)GFX_FONT_SCALE;
+
+    for (u32 i = 0; i < g.row_count; i++) {
+        const greeter_row_t *row = &g.rows[i];
+        bool hover = rect_contains(row->rect, mouse->x, mouse->y);
+
+        gfx_rect_rounded(row->rect.x, row->rect.y, row->rect.w, row->rect.h, 12,
+                         hover ? COL_SURFACE2 : COL_SURFACE);
+        if (hover)
+            gfx_rect_rounded_outline(row->rect.x, row->rect.y, row->rect.w, row->rect.h, 12, COL_BORDER);
+
+        /* Distinct per-account color, derived deterministically from the uid. */
+        u32 col = (0x4a6fffu ^ (row->uid * 0x9E3779B1u)) & 0xFFFFFFu;
+        i32 cy = row->rect.y + row->rect.h / 2;
+        i32 cx = row->rect.x + 30;
+        gfx_circle_fill(cx, cy, 22, col);
+
+        char initial[2];
+        initial[0] = row->name[0];
+        if (initial[0] >= 'a' && initial[0] <= 'z') initial[0] = (char)(initial[0] - 32);
+        initial[1] = '\0';
+        gfx_str_centered_ex(cx - 22, cy - 8, 44, initial, COL_WHITE, COL_TRANSPARENT, FONT_H2);
+
+        i32 name_x = cx + 40;
+        i32 name_y = cy - lh / 2;
+        gfx_str(name_x, name_y, row->name, COL_TEXT, COL_TRANSPARENT);
+        if (row->is_root)
+            gfx_str(name_x, name_y + lh, "Administrator", COL_MUTED, COL_TRANSPARENT);
+    }
+
+    if (g.row_count == 0)
+        gfx_str_centered(g.panel.x, g.subtitle_y + lh + 24, g.panel.w,
+                         "No accounts found", COL_MUTED, COL_TRANSPARENT);
+
+    gfx_str_centered(g.panel.x, g.footer_y, g.panel.w,
+                     "CareOS v9 secure desktop", COL_MUTED, COL_TRANSPARENT);
+}
+
 static bool login_try(login_state_t *s) {
     u32 now = timer_get_ticks();
     if (s->lock_until_tick > now) {
@@ -641,8 +774,11 @@ static bool run_login_flow(mouse_t *mouse) {
     login_state_t login;
     kmemset(&login, 0, sizeof(login));
     login.field = 0;
-    login.mode = LOGIN_MODE_SIGNIN;
-    login_set_status(&login, "Sign in to continue", COL_DIM);
+    login.mode = (user_enum_count() > 0) ? LOGIN_MODE_PICK : LOGIN_MODE_SIGNUP;
+    if (login.mode == LOGIN_MODE_PICK)
+        login_set_status(&login, "Choose an account to continue", COL_DIM);
+    else
+        login_set_status(&login, "Create a strong local account", COL_DIM);
 
     keyboard_flush();
     mouse->x = (i32)SCREEN_W / 2;
@@ -651,9 +787,12 @@ static bool run_login_flow(mouse_t *mouse) {
 
     while (1) {
         login_layout_t layout = login_make_layout(&login);
+        greeter_layout_t glayout = greeter_make_layout(&login);
 
         while (keyboard_haschar()) {
             char c = keyboard_getchar();
+
+            if (login.mode == LOGIN_MODE_PICK) continue; /* greeter is mouse-only */
 
             if (c == '\t') {
                 login.field = 1 - login.field;
@@ -723,11 +862,36 @@ static bool run_login_flow(mouse_t *mouse) {
         mouse_update(mouse);
 
         if (mouse->left_clicked) {
-            if (rect_contains(layout.user_field, mouse->x, mouse->y))
+            if (login.mode == LOGIN_MODE_PICK) {
+                for (u32 i = 0; i < glayout.row_count; i++) {
+                    if (!rect_contains(glayout.rows[i].rect, mouse->x, mouse->y)) continue;
+
+                    login.picked_uid = glayout.rows[i].uid;
+                    kstrncpy(login.username, glayout.rows[i].name, sizeof(login.username) - 1);
+                    login.username[sizeof(login.username) - 1] = '\0';
+                    login.user_len = (u32)kstrlen(login.username);
+                    login.pass_len = 0;
+                    login.password[0] = '\0';
+                    login.mode = LOGIN_MODE_SIGNIN;
+                    login.field = 1;
+
+                    char msg[96] = "Enter password for ";
+                    kstrcat(msg, login.username);
+                    login_set_status(&login, msg, COL_DIM);
+                    break;
+                }
+            } else if (rect_contains(layout.user_field, mouse->x, mouse->y))
                 login.field = 0;
             else if (rect_contains(layout.pass_field, mouse->x, mouse->y))
                 login.field = 1;
-            else if (button_take_click(&layout.primary_btn, mouse)) {
+            else if (login.mode == LOGIN_MODE_SIGNIN && user_enum_count() > 0 &&
+                     rect_contains(layout.avatar, mouse->x, mouse->y)) {
+                /* Back affordance: the avatar returns to the greeter. */
+                login.mode = LOGIN_MODE_PICK;
+                login.pass_len = 0;
+                login.password[0] = '\0';
+                login_set_status(&login, "Choose an account to continue", COL_DIM);
+            } else if (button_take_click(&layout.primary_btn, mouse)) {
                 if (login.mode == LOGIN_MODE_MUST_CHANGE) {
                     if (login_apply_password_change(&login)) {
                         login_fade_out(&login, mouse);
@@ -770,7 +934,10 @@ static bool run_login_flow(mouse_t *mouse) {
             }
         }
 
-        draw_login_screen(&login, mouse);
+        if (login.mode == LOGIN_MODE_PICK)
+            draw_greeter(&login, mouse);
+        else
+            draw_login_screen(&login, mouse);
         mouse_draw_cursor(mouse->x, mouse->y);
         gfx_flip();
         __asm__ volatile("sti; hlt");

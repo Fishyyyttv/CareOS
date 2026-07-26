@@ -468,6 +468,12 @@ void        user_set_current_font_preference(u32 index);
  * must set a new one before reaching the desktop. */
 bool        user_must_change_password(void);
 
+/* Account enumerator for the greeter (account-picker) UI. Iterates active
+ * accounts only -- guest (uid 65534) is not a stored account and is never
+ * enumerated. */
+u32         user_enum_count(void);
+bool        user_enum_at(u32 idx, u32 *uid_out, char *name_out, u32 name_cap, bool *is_root_out);
+
 /* VFS path helper (implemented in users.c) */
 void vfs_get_path(fs_node_t *node, char *buf, u32 max);
 
