@@ -301,6 +301,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
     }
 
     users_init();        slog_ok("Users");
+    users_selftest();
 
     carepkg_init();      slog_ok("CarePackage manager");
     serial_write("[boot] Initializing scheduler...\n");

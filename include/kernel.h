@@ -416,6 +416,10 @@ typedef struct {
     u32  lock_until_tick;
     u32  theme_pref;
     u32  font_pref;
+    u32  wallpaper_pref;
+    u32  mouse_pref;
+    u32  clock24_pref;
+    u32  taskbar_pref;
     u16  last_login_year;
     u8   last_login_month;
     u8   last_login_day;
@@ -424,6 +428,19 @@ typedef struct {
     u8   hash_algo;
     bool must_change_password;
 } user_t;
+
+#define USER_PREF_UNSET 0xFFFFFFFFu
+typedef struct {
+    u32 theme;
+    u32 font;
+    u32 wallpaper;
+    u32 mouse_sensitivity;
+    u32 clock_24h;
+    u32 taskbar_centered;
+} user_prefs_t;
+void user_prefs_get(u32 uid, user_prefs_t *out);
+void user_prefs_set_current(const user_prefs_t *p);
+void users_selftest(void);
 
 void *user_get_by_uid(u32 uid);
 void        users_init(void);

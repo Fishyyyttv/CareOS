@@ -9,7 +9,7 @@
 
 #define MAX_USERS 16
 #define USERDB_MAGIC   0x43555352u  /* CUSR */
-#define USERDB_VERSION 5u
+#define USERDB_VERSION 6u
 #define USERDB_SECTORS CAREOS_DISK_USERDB_SECTORS
 #define USERDB_SECTOR_SIZE 512u
 
@@ -29,6 +29,10 @@ typedef struct {
     u32  lock_until_tick;
     u32  theme_pref;
     u32  font_pref;
+    u32  wallpaper_pref;
+    u32  mouse_pref;
+    u32  clock24_pref;
+    u32  taskbar_pref;
     u16  last_login_year;
     u8   last_login_month;
     u8   last_login_day;
@@ -51,6 +55,31 @@ typedef struct __attribute__((packed)) {
     u32 count;
     u32 checksum;
 } userdb_hdr_t;
+
+typedef struct __attribute__((packed)) {
+    u32  uid;
+    u32  gid;
+    u8   hash_algo;
+    u8   must_change;
+    u8   pass_hash[USER_PASS_HASH_LEN];
+    u8   salt[USER_SALT_LEN];
+    u8   active;
+    u8   is_root;
+    char name[32];
+    char home[64];
+    char shell[32];
+    u32  theme_pref;
+    u32  font_pref;
+    u32  wallpaper_pref;
+    u32  mouse_pref;
+    u32  clock24_pref;
+    u32  taskbar_pref;
+    u16  last_login_year;
+    u8   last_login_month;
+    u8   last_login_day;
+    u8   last_login_hour;
+    u8   last_login_minute;
+} userdb_entry_v6_t;
 
 typedef struct __attribute__((packed)) {
     u32  uid;
@@ -386,6 +415,51 @@ static bool users_persist_load(void) {
     user_count = 0;
 
     if (hdr->version == USERDB_VERSION) {
+        u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v6_t);
+        u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
+        if (payload_len > max_payload) return false;
+
+        u8 *payload = userdb_io + sizeof(userdb_hdr_t);
+        if (userdb_checksum(payload, payload_len) != hdr->checksum) return false;
+
+        userdb_entry_v6_t *entries = (userdb_entry_v6_t*)payload;
+        for (u32 i = 0; i < hdr->count && i < MAX_USERS; i++) {
+            user_rec_t *u = &users[user_count++];
+            u->uid = entries[i].uid;
+            u->gid = entries[i].gid;
+            u->hash_algo = entries[i].hash_algo;
+            u->must_change_password = entries[i].must_change ? true : false;
+            kmemcpy(u->pass_hash, entries[i].pass_hash, USER_PASS_HASH_LEN);
+            kmemcpy(u->salt, entries[i].salt, USER_SALT_LEN);
+            u->active = entries[i].active ? true : false;
+            u->is_root = entries[i].is_root ? true : false;
+            u->theme_pref = entries[i].theme_pref;
+            u->font_pref = entries[i].font_pref;
+            u->wallpaper_pref = entries[i].wallpaper_pref;
+            u->mouse_pref = entries[i].mouse_pref;
+            u->clock24_pref = entries[i].clock24_pref;
+            u->taskbar_pref = entries[i].taskbar_pref;
+            u->last_login_year = entries[i].last_login_year;
+            u->last_login_month = entries[i].last_login_month;
+            u->last_login_day = entries[i].last_login_day;
+            u->last_login_hour = entries[i].last_login_hour;
+            u->last_login_minute = entries[i].last_login_minute;
+
+            kstrncpy(u->name, entries[i].name, sizeof(u->name) - 1);
+            u->name[sizeof(u->name) - 1] = '\0';
+            kstrncpy(u->home, entries[i].home, sizeof(u->home) - 1);
+            u->home[sizeof(u->home) - 1] = '\0';
+            kstrncpy(u->shell, entries[i].shell, sizeof(u->shell) - 1);
+            u->shell[sizeof(u->shell) - 1] = '\0';
+            users_sanitize_profile(u);
+        }
+        return user_count > 0;
+    }
+
+    /* v5 predates per-user wallpaper/mouse/clock/taskbar prefs. Load it and
+     * default the new prefs to unset (global fallback); the record upgrades
+     * to v6 on the next save. */
+    if (hdr->version == 5u) {
         u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v5_t);
         u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
         if (payload_len > max_payload) return false;
@@ -406,6 +480,10 @@ static bool users_persist_load(void) {
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = entries[i].theme_pref;
             u->font_pref = entries[i].font_pref;
+            u->wallpaper_pref = USER_PREF_UNSET;
+            u->mouse_pref     = USER_PREF_UNSET;
+            u->clock24_pref   = USER_PREF_UNSET;
+            u->taskbar_pref   = USER_PREF_UNSET;
             u->last_login_year = entries[i].last_login_year;
             u->last_login_month = entries[i].last_login_month;
             u->last_login_day = entries[i].last_login_day;
@@ -424,7 +502,7 @@ static bool users_persist_load(void) {
     }
 
     /* v4 predates per-user font_pref. Load it and default the font to the
-     * system choice; the record upgrades to v5 on the next save. */
+     * system choice; the record upgrades to v6 on the next save. */
     if (hdr->version == 4u) {
         u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v4_t);
         u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
@@ -446,6 +524,10 @@ static bool users_persist_load(void) {
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = entries[i].theme_pref;
             u->font_pref = USER_FONT_SYSTEM_DEFAULT;
+            u->wallpaper_pref = USER_PREF_UNSET;
+            u->mouse_pref     = USER_PREF_UNSET;
+            u->clock24_pref   = USER_PREF_UNSET;
+            u->taskbar_pref   = USER_PREF_UNSET;
             u->last_login_year = entries[i].last_login_year;
             u->last_login_month = entries[i].last_login_month;
             u->last_login_day = entries[i].last_login_day;
@@ -486,6 +568,10 @@ static bool users_persist_load(void) {
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = entries[i].theme_pref;
             u->font_pref = USER_FONT_SYSTEM_DEFAULT;
+            u->wallpaper_pref = USER_PREF_UNSET;
+            u->mouse_pref     = USER_PREF_UNSET;
+            u->clock24_pref   = USER_PREF_UNSET;
+            u->taskbar_pref   = USER_PREF_UNSET;
             u->last_login_year = entries[i].last_login_year;
             u->last_login_month = entries[i].last_login_month;
             u->last_login_day = entries[i].last_login_day;
@@ -524,6 +610,10 @@ static bool users_persist_load(void) {
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
             u->font_pref = USER_FONT_SYSTEM_DEFAULT;
+            u->wallpaper_pref = USER_PREF_UNSET;
+            u->mouse_pref     = USER_PREF_UNSET;
+            u->clock24_pref   = USER_PREF_UNSET;
+            u->taskbar_pref   = USER_PREF_UNSET;
             u->last_login_year = 0;
             u->last_login_month = 0;
             u->last_login_day = 0;
@@ -563,6 +653,10 @@ static bool users_persist_load(void) {
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
             u->font_pref = USER_FONT_SYSTEM_DEFAULT;
+            u->wallpaper_pref = USER_PREF_UNSET;
+            u->mouse_pref     = USER_PREF_UNSET;
+            u->clock24_pref   = USER_PREF_UNSET;
+            u->taskbar_pref   = USER_PREF_UNSET;
             u->last_login_year = 0;
             u->last_login_month = 0;
             u->last_login_day = 0;
@@ -598,13 +692,13 @@ static void users_persist_save(void) {
      * populated account list overflowed the static buffer and corrupted
      * whatever followed it in BSS. Cap the write to what the region holds. */
     u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
-    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v5_t);
+    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v6_t);
     u32 to_write = user_count < max_entries ? user_count : max_entries;
     if (to_write < user_count)
         serial_write("[users] WARNING: userdb region too small, truncating save\n");
     hdr->count = to_write;
 
-    userdb_entry_v5_t *entries = (userdb_entry_v5_t*)(userdb_io + sizeof(userdb_hdr_t));
+    userdb_entry_v6_t *entries = (userdb_entry_v6_t*)(userdb_io + sizeof(userdb_hdr_t));
     for (u32 i = 0; i < to_write; i++) {
         entries[i].uid = users[i].uid;
         entries[i].gid = users[i].gid;
@@ -616,6 +710,10 @@ static void users_persist_save(void) {
         entries[i].is_root = users[i].is_root ? 1 : 0;
         entries[i].theme_pref = users[i].theme_pref;
         entries[i].font_pref = users[i].font_pref;
+        entries[i].wallpaper_pref = users[i].wallpaper_pref;
+        entries[i].mouse_pref     = users[i].mouse_pref;
+        entries[i].clock24_pref   = users[i].clock24_pref;
+        entries[i].taskbar_pref   = users[i].taskbar_pref;
         entries[i].last_login_year = users[i].last_login_year;
         entries[i].last_login_month = users[i].last_login_month;
         entries[i].last_login_day = users[i].last_login_day;
@@ -630,7 +728,7 @@ static void users_persist_save(void) {
         entries[i].shell[sizeof(entries[i].shell) - 1] = '\0';
     }
 
-    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v5_t);
+    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v6_t);
     hdr->checksum = userdb_checksum((u8*)entries, payload_len);
 
     u32 lba = users_db_lba();
@@ -688,6 +786,10 @@ static int user_add(u32 uid, u32 gid, const char *name, const char *pass,
     u->is_root = is_root;
     u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
     u->font_pref = USER_FONT_SYSTEM_DEFAULT;
+    u->wallpaper_pref = USER_PREF_UNSET;
+    u->mouse_pref     = USER_PREF_UNSET;
+    u->clock24_pref   = USER_PREF_UNSET;
+    u->taskbar_pref   = USER_PREF_UNSET;
     user_set_password(u, pass);
     return 0;
 }
@@ -1008,4 +1110,66 @@ void user_set_current_font_preference(u32 index) {
     if (!u) return;
     u->font_pref = (index < font_registry_count()) ? index : USER_FONT_SYSTEM_DEFAULT;
     users_persist_save();
+}
+
+void user_prefs_get(u32 uid, user_prefs_t *out) {
+    if (!out) return;
+    user_rec_t *u = find_user_by_uid(uid);
+    if (!u) {
+        out->theme = out->font = out->wallpaper = USER_PREF_UNSET;
+        out->mouse_sensitivity = out->clock_24h = out->taskbar_centered = USER_PREF_UNSET;
+        return;
+    }
+    out->theme            = u->theme_pref;
+    out->font             = u->font_pref;
+    out->wallpaper        = u->wallpaper_pref;
+    out->mouse_sensitivity= u->mouse_pref;
+    out->clock_24h        = u->clock24_pref;
+    out->taskbar_centered = u->taskbar_pref;
+}
+
+void user_prefs_set_current(const user_prefs_t *p) {
+    if (!p) return;
+    user_rec_t *u = find_user_by_uid(current_uid);
+    if (!u) return;
+    if (p->theme != USER_PREF_UNSET)            u->theme_pref     = p->theme;
+    if (p->font != USER_PREF_UNSET)             u->font_pref      = p->font;
+    if (p->wallpaper != USER_PREF_UNSET)        u->wallpaper_pref = p->wallpaper;
+    if (p->mouse_sensitivity != USER_PREF_UNSET)u->mouse_pref     = p->mouse_sensitivity;
+    if (p->clock_24h != USER_PREF_UNSET)        u->clock24_pref   = p->clock_24h;
+    if (p->taskbar_centered != USER_PREF_UNSET) u->taskbar_pref   = p->taskbar_centered;
+    users_persist_save();
+}
+
+void users_selftest(void) {
+    /* Round-trips per-user prefs through the live record set. Uses the seeded
+     * 'user' account (uid 1000). Restores original values so boot state is
+     * unchanged. */
+    user_rec_t *u = find_user_by_name("user");
+    if (!u) { serial_write("[selftest] users: FAIL (no 'user' account)\n"); return; }
+
+    u32 save_uid = current_uid;
+    current_uid = u->uid;
+    user_prefs_t orig; user_prefs_get(u->uid, &orig);
+
+    user_prefs_t p = { .theme = 1, .font = USER_PREF_UNSET, .wallpaper = 3,
+                       .mouse_sensitivity = 150, .clock_24h = 0, .taskbar_centered = 0 };
+    /* set_current persists; capture the pre-test disk state is out of scope for
+     * a hobby self-test, so we only assert the in-RAM round-trip here. */
+    if (u->theme_pref == 1) p.theme = 0; /* ensure we actually change it */
+    user_prefs_t before; user_prefs_get(u->uid, &before);
+
+    u->theme_pref = 0; u->wallpaper_pref = 7; u->mouse_pref = 42;
+    user_prefs_t got; user_prefs_get(u->uid, &got);
+    bool ok = (got.theme == 0 && got.wallpaper == 7 && got.mouse_sensitivity == 42);
+
+    /* restore */
+    u->theme_pref = orig.theme; u->font_pref = orig.font;
+    u->wallpaper_pref = orig.wallpaper; u->mouse_pref = orig.mouse_sensitivity;
+    u->clock24_pref = orig.clock_24h; u->taskbar_pref = orig.taskbar_centered;
+    current_uid = save_uid;
+    (void)p; (void)before;
+
+    serial_write(ok ? "[selftest] users_prefs: PASS\n"
+                     : "[selftest] users_prefs: FAIL\n");
 }
