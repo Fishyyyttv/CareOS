@@ -1237,18 +1237,25 @@ void users_selftest(void) {
                      : "[selftest] users_prefs: FAIL\n");
 
     /* apply/capture round-trip via the live settings blob */
-    user_rec_t *su = find_user_by_name("user");
-    if (su) {
-        u32 sv = current_uid; current_uid = su->uid;
+    if (u) {
+        careos_settings_t saved = *settings_get();
+        u32 sv = current_uid; current_uid = u->uid;
         user_prefs_t ap = { .theme = 1, .font = USER_PREF_UNSET, .wallpaper = 2,
                             .mouse_sensitivity = 120, .clock_24h = 0, .taskbar_centered = 0 };
         settings_apply_prefs(&ap);
         const careos_settings_t *cs = settings_get();
-        bool ok2 = (cs->theme == 1 && cs->wallpaper == 2 &&
+        bool ok3 = (cs->theme == 1 && cs->wallpaper == 2 &&
                     cs->mouse_sensitivity == 120 && cs->clock_24h == 0 &&
                     cs->taskbar_centered == 0);
-        serial_write(ok2 ? "[selftest] settings_apply: PASS\n"
+        serial_write(ok3 ? "[selftest] settings_apply: PASS\n"
                          : "[selftest] settings_apply: FAIL\n");
+
+        /* restore live settings that settings_apply_prefs perturbed above,
+         * so a fresh boot's first login doesn't inherit these test values */
+        user_prefs_t restore_prefs = { saved.theme, saved.font_family, saved.wallpaper,
+                                       saved.mouse_sensitivity, saved.clock_24h, saved.taskbar_centered };
+        settings_apply_prefs(&restore_prefs);
+
         current_uid = sv;
     }
 }

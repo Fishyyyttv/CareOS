@@ -307,6 +307,10 @@ window_t *wm_open(app_id_t app, const char *title,
 
 void wm_close(window_t *w) {
     if (!w) return;
+    /* Free the offscreen buffer allocated in wm_open -- otherwise every
+       Log Out / Switch User (which closes all windows via wm_close_all)
+       leaks it. */
+    if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
     /* Clear app state before freeing slot */
     w->active  = false;
     w->focused = false;
