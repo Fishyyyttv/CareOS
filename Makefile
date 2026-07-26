@@ -96,6 +96,10 @@ C_SRC     := kernel/kernel.c       \
              net/tls.c             \
              shell/shell.c         \
              gui/gfx.c             \
+             gui/font.c            \
+             gui/fonts/font_jetbrains_mono.c \
+             gui/fonts/font_jetbrains_mono_bold.c \
+             gui/fonts/font_classic.c \
              gui/theme.c           \
              gui/launcher.c        \
              gui/mouse.c           \

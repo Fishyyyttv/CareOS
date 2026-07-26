@@ -14,6 +14,8 @@ extern u32 SCREEN_H;
 extern u32 SCREEN_PITCH;    /* bytes per row */
 extern u32 *FRAMEBUFFER;    /* linear framebuffer pointer */
 extern u32 GFX_FONT_SCALE;   /* Bitmap text scale; kept 1 at 1080p for crisp UI text */
+extern u32 GFX_FONT_W;   /* active family's BODY advance  */
+extern u32 GFX_FONT_H;   /* active family's BODY line height */
 
 /* -- Geometry ------------------------------------------------------------- */
 typedef struct { i32 x, y; }         point_t;
