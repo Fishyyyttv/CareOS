@@ -236,7 +236,9 @@ typedef struct {
     u32  failed_attempts;
     u32  lock_until_tick;
     login_mode_t mode;
-    u32  picked_uid; /* uid chosen on the greeter; 0 until a row is clicked */
+    u32  picked_uid; /* uid of the account row clicked on the greeter, if any.
+                       * Not a sentinel -- 0 is root's real uid, so this field
+                       * is informational only and nothing branches on it. */
 
     /* MUST_CHANGE mode only. username still holds the authenticated account. */
     char newpass[64];
@@ -476,6 +478,10 @@ typedef struct {
     i32    footer_y;
     greeter_row_t rows[GREETER_MAX_ROWS];
     u32    row_count;
+    /* Escape hatch: the row cap (GREETER_MAX_ROWS) is only a display limit --
+     * MAX_USERS (16) can exceed it, so this manual-entry row is always
+     * present and reachable, keeping every account clickable-or-typeable. */
+    rect_t other_row;
 } greeter_layout_t;
 
 /* Recomputed fresh every frame from the same panel geometry draw_login_screen
@@ -515,6 +521,11 @@ static greeter_layout_t greeter_make_layout(const login_state_t *s) {
         row->rect = rect_make(row_x,
                                row_top + (i32)i * (GREETER_ROW_H + GREETER_ROW_GAP),
                                row_w, GREETER_ROW_H);
+    }
+
+    {
+        i32 other_y = row_top + (i32)g.row_count * (GREETER_ROW_H + GREETER_ROW_GAP);
+        g.other_row = rect_make(row_x, other_y, row_w, 34);
     }
     return g;
 }
@@ -573,6 +584,16 @@ static void draw_greeter(const login_state_t *s, mouse_t *mouse) {
     if (g.row_count == 0)
         gfx_str_centered(g.panel.x, g.subtitle_y + lh + 24, g.panel.w,
                          "No accounts found", COL_MUTED, COL_TRANSPARENT);
+
+    /* Manual-entry escape hatch: always present so any account -- not just
+     * the first GREETER_MAX_ROWS -- is reachable. */
+    {
+        bool hover = rect_contains(g.other_row, mouse->x, mouse->y);
+        i32 ty = g.other_row.y + (g.other_row.h - lh) / 2;
+        gfx_str_centered(g.other_row.x, ty, g.other_row.w,
+                         "Other user... (type a username)",
+                         hover ? COL_TEXT : COL_DIM, COL_TRANSPARENT);
+    }
 
     gfx_str_centered(g.panel.x, g.footer_y, g.panel.w,
                      "CareOS v9 secure desktop", COL_MUTED, COL_TRANSPARENT);
@@ -787,12 +808,38 @@ static bool run_login_flow(mouse_t *mouse) {
 
     while (1) {
         login_layout_t layout = login_make_layout(&login);
-        greeter_layout_t glayout = greeter_make_layout(&login);
+        /* Only computed in PICK mode -- greeter_make_layout() calls
+         * user_enum_at() up to GREETER_MAX_ROWS times, no need to pay that
+         * every frame once past the picker. */
+        greeter_layout_t glayout;
+        kmemset(&glayout, 0, sizeof(glayout));
+        if (login.mode == LOGIN_MODE_PICK)
+            glayout = greeter_make_layout(&login);
 
         while (keyboard_haschar()) {
             char c = keyboard_getchar();
 
-            if (login.mode == LOGIN_MODE_PICK) continue; /* greeter is mouse-only */
+            if (login.mode == LOGIN_MODE_PICK) {
+                /* Rows only cover the first GREETER_MAX_ROWS accounts, so
+                 * typing is the escape hatch that makes every account (up to
+                 * MAX_USERS) reachable: any printable key drops straight to
+                 * the password screen with an empty, editable username and
+                 * feeds that keystroke in as its first character. Enter,
+                 * Tab, and Backspace are no-ops here -- there is no field to
+                 * act on yet. */
+                if (c == '\n' || c == '\t' || c == '\b') continue;
+                if (c < 32 || c > 126) continue;
+
+                login.username[0] = c;
+                login.username[1] = '\0';
+                login.user_len = 1;
+                login.pass_len = 0;
+                login.password[0] = '\0';
+                login.mode = LOGIN_MODE_SIGNIN;
+                login.field = 0;
+                login_set_status(&login, "Enter your username and password", COL_DIM);
+                continue;
+            }
 
             if (c == '\t') {
                 login.field = 1 - login.field;
@@ -863,6 +910,7 @@ static bool run_login_flow(mouse_t *mouse) {
 
         if (mouse->left_clicked) {
             if (login.mode == LOGIN_MODE_PICK) {
+                bool hit = false;
                 for (u32 i = 0; i < glayout.row_count; i++) {
                     if (!rect_contains(glayout.rows[i].rect, mouse->x, mouse->y)) continue;
 
@@ -878,7 +926,20 @@ static bool run_login_flow(mouse_t *mouse) {
                     char msg[96] = "Enter password for ";
                     kstrcat(msg, login.username);
                     login_set_status(&login, msg, COL_DIM);
+                    hit = true;
                     break;
+                }
+                /* Escape hatch: same destination as typing directly -- an
+                 * empty, editable username -- so every account beyond the
+                 * GREETER_MAX_ROWS display cap stays reachable by mouse too. */
+                if (!hit && rect_contains(glayout.other_row, mouse->x, mouse->y)) {
+                    login.username[0] = '\0';
+                    login.user_len = 0;
+                    login.pass_len = 0;
+                    login.password[0] = '\0';
+                    login.mode = LOGIN_MODE_SIGNIN;
+                    login.field = 0;
+                    login_set_status(&login, "Enter your username and password", COL_DIM);
                 }
             } else if (rect_contains(layout.user_field, mouse->x, mouse->y))
                 login.field = 0;
