@@ -800,6 +800,8 @@ void gui_run(void) {
     if (!run_login_flow(&mouse)) {
         serial_write("  [gui_run] login flow returned failure\n");
     }
+    session_begin(user_current_uid());
+    theme_switch(settings_get()->theme == 0);
 
     rc_care_run_startup();
 

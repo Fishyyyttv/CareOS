@@ -450,6 +450,8 @@ const char *user_current_name(void);
 u32         user_current_uid(void);
 bool        user_session_active(void);
 bool        user_is_root(void);
+void        session_begin(u32 uid);
+void        session_end(void);
 bool        user_can_read(fs_node_t *node);
 bool        user_can_write(fs_node_t *node);
 int         user_create(const char *name, const char *pass);

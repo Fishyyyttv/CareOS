@@ -875,6 +875,18 @@ void user_logout(void) {
     users_set_guest_session();
 }
 
+void session_begin(u32 uid) {
+    user_prefs_t p;
+    user_prefs_get(uid, &p);
+    settings_apply_prefs(&p);
+    serial_write("[session] begin for uid, prefs applied\n");
+}
+
+void session_end(void) {
+    user_logout();
+    serial_write("[session] end\n");
+}
+
 const char *user_current_name(void) {
     return session.logged_in ? session.name : "guest";
 }
