@@ -448,6 +448,7 @@ int         user_login(const char *name, const char *pass);
 void        user_logout(void);
 const char *user_current_name(void);
 u32         user_current_uid(void);
+bool        user_session_active(void);
 bool        user_is_root(void);
 bool        user_can_read(fs_node_t *node);
 bool        user_can_write(fs_node_t *node);
@@ -653,6 +654,8 @@ void settings_set_taskbar_centered(bool centered);
 void settings_set_wifi_profile(const char *ssid, const char *pass, bool connected);
 void settings_set_vesa_mode(u32 w, u32 h);
 void settings_set_font_family(u32 index);
+void settings_apply_prefs(const user_prefs_t *p);
+void settings_capture_to_current_user(void);
 
 /* -- Pipes ---------------------------------------------------------------- */
 #define PIPE_BUF_SIZE 4096

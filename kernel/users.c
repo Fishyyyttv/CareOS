@@ -860,10 +860,6 @@ int user_login(const char *name, const char *pass) {
     current_uid = u->uid;
     users_stamp_login(u);
 
-    if (u->theme_pref != USER_THEME_SYSTEM_DEFAULT)
-        settings_set_theme(u->theme_pref);
-    if (u->font_pref != USER_FONT_SYSTEM_DEFAULT)
-        settings_set_font_family(u->font_pref);
     users_persist_save();
 
     serial_write("[users] login: ");
@@ -885,6 +881,10 @@ const char *user_current_name(void) {
 
 u32 user_current_uid(void) {
     return current_uid;
+}
+
+bool user_session_active(void) {
+    return session.logged_in && current_uid != 65534;
 }
 
 bool user_is_root(void) {
@@ -1195,4 +1195,20 @@ void users_selftest(void) {
 
     serial_write(ok ? "[selftest] users_prefs: PASS\n"
                      : "[selftest] users_prefs: FAIL\n");
+
+    /* apply/capture round-trip via the live settings blob */
+    user_rec_t *su = find_user_by_name("user");
+    if (su) {
+        u32 sv = current_uid; current_uid = su->uid;
+        user_prefs_t ap = { .theme = 1, .font = USER_PREF_UNSET, .wallpaper = 2,
+                            .mouse_sensitivity = 120, .clock_24h = 0, .taskbar_centered = 0 };
+        settings_apply_prefs(&ap);
+        const careos_settings_t *cs = settings_get();
+        bool ok2 = (cs->theme == 1 && cs->wallpaper == 2 &&
+                    cs->mouse_sensitivity == 120 && cs->clock_24h == 0 &&
+                    cs->taskbar_centered == 0);
+        serial_write(ok2 ? "[selftest] settings_apply: PASS\n"
+                         : "[selftest] settings_apply: FAIL\n");
+        current_uid = sv;
+    }
 }

@@ -302,13 +302,15 @@ const careos_settings_t *settings_get(void) {
 void settings_set_theme(u32 theme) {
     g_settings.theme = theme;
     settings_clamp();
-    settings_save();
+    if (user_session_active()) settings_capture_to_current_user();
+    else settings_save();
 }
 
 void settings_set_mouse_sensitivity(u32 pct) {
     g_settings.mouse_sensitivity = pct;
     settings_clamp();
-    settings_save();
+    if (user_session_active()) settings_capture_to_current_user();
+    else settings_save();
 }
 
 void settings_set_boot_fast(bool enabled) {
@@ -318,18 +320,21 @@ void settings_set_boot_fast(bool enabled) {
 
 void settings_set_clock_24h(bool enabled) {
     g_settings.clock_24h = enabled ? 1u : 0u;
-    settings_save();
+    if (user_session_active()) settings_capture_to_current_user();
+    else settings_save();
 }
 
 void settings_set_wallpaper(u32 wallpaper) {
     g_settings.wallpaper = wallpaper;
     settings_clamp();
-    settings_save();
+    if (user_session_active()) settings_capture_to_current_user();
+    else settings_save();
 }
 
 void settings_set_taskbar_centered(bool centered) {
     g_settings.taskbar_centered = centered ? 1u : 0u;
-    settings_save();
+    if (user_session_active()) settings_capture_to_current_user();
+    else settings_save();
 }
 
 void settings_set_wifi_profile(const char *ssid, const char *pass, bool connected) {
@@ -353,5 +358,34 @@ void settings_set_font_family(u32 index) {
     if (index >= font_registry_count()) return;
     g_settings.font_family = index;
     font_set_family(index);
-    settings_save();
+    if (user_session_active()) settings_capture_to_current_user();
+    else settings_save();
+}
+
+void settings_apply_prefs(const user_prefs_t *p) {
+    if (!p) return;
+    if (p->theme != USER_PREF_UNSET)             g_settings.theme = p->theme;
+    if (p->wallpaper != USER_PREF_UNSET)         g_settings.wallpaper = p->wallpaper;
+    if (p->mouse_sensitivity != USER_PREF_UNSET) g_settings.mouse_sensitivity = p->mouse_sensitivity;
+    if (p->clock_24h != USER_PREF_UNSET)         g_settings.clock_24h = p->clock_24h ? 1u : 0u;
+    if (p->taskbar_centered != USER_PREF_UNSET)  g_settings.taskbar_centered = p->taskbar_centered ? 1u : 0u;
+    settings_clamp();
+    if (p->font != USER_PREF_UNSET && p->font < font_registry_count()) {
+        g_settings.font_family = p->font;
+        font_set_family(p->font);
+    }
+    /* NOTE: no settings_save() -- per-user prefs must not touch the global blob.
+     * The live theme switch (g_theme) is done by the GUI session path via
+     * theme_switch(), mirroring gui.c's boot-time theme selection. */
+}
+
+void settings_capture_to_current_user(void) {
+    user_prefs_t p;
+    p.theme            = g_settings.theme;
+    p.font             = g_settings.font_family;
+    p.wallpaper        = g_settings.wallpaper;
+    p.mouse_sensitivity= g_settings.mouse_sensitivity;
+    p.clock_24h        = g_settings.clock_24h;
+    p.taskbar_centered = g_settings.taskbar_centered;
+    user_prefs_set_current(&p);
 }
