@@ -39,10 +39,12 @@ void app_about_draw(window_t *w) {
         { "Network:",  "TCP/IP + e1000 driver",         COL_ACCENT },
         { "Storage:",  "ATA PIO + ext2",                COL_ACCENT },
         { "Auth:",     "bcrypt-style local accounts",   COL_ACCENT },
+        { "Typeface:", "JetBrains Mono (OFL 1.1)",      COL_ACCENT },
     };
+    int row_count = (int)(sizeof(rows) / sizeof(rows[0]));
     i32 lw = gfx_str_width("Graphics:");
     i32 lh = FONT_H * sc + 8;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < row_count; i++) {
         i32 rx = cr.x + 24;
         gfx_str(rx, y, rows[i].label, COL_MUTED, COL_TRANSPARENT);
         gfx_str(rx + lw + FONT_W * sc * 2, y, rows[i].value, rows[i].vcol, COL_TRANSPARENT);

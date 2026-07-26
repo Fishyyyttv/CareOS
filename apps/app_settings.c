@@ -1,5 +1,6 @@
 /* CareOS v9 -- apps/app_settings.c -- functional settings suite */
 #include "apps_common.h"
+#include "font.h"
 
 extern void term_ip_to_str(u32 ip, char *out);
 
@@ -250,6 +251,19 @@ void app_settings_draw(window_t *w){
             button_t center = settings_button(rect_make(cx, cy + 20, 180, 34), cfg->taskbar_centered ? "Centered Icons" : "Left Aligned Icons", cfg->taskbar_centered, cfg->taskbar_centered ? COL_PRIMARY : COL_SURFACE3, cfg->taskbar_centered ? COL_WHITE : COL_TEXT);
             button_draw(&center);
         }
+
+        /* Font family. Buttons are absolute-offset from the tab content top so
+         * the click handler (which cannot see this running cy) stays in sync;
+         * see the matching loop in app_settings_click case 2. */
+        cy += 74;
+        gfx_str(cx, cy, "Font", COL_TEXT, COL_TRANSPARENT);
+        for (u32 i = 0; i < font_registry_count(); i++) {
+            bool active = (i == font_active_index());
+            button_t fb = settings_button(rect_make(cx, cy + 20 + (i32)i * 40, 240, 34),
+                font_registry_name(i), active,
+                active ? COL_PRIMARY : COL_SURFACE3, active ? COL_WHITE : COL_TEXT);
+            button_draw(&fb);
+        }
         break;
     }
 
@@ -434,6 +448,16 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
         if (rect_contains(rect_make(cx, cy + 292, 180, 34), x, y)) {
             settings_set_taskbar_centered(!cfg->taskbar_centered);
             settings_set_status(w, cfg->taskbar_centered ? "Taskbar moved left" : "Taskbar centered", COL_GREEN);
+        }
+        /* Font buttons: cy + 366 + i*40 mirrors the draw offset (cy + 346 header
+         * + 20). Switching updates the live metrics, so redraw everything. */
+        for (u32 i = 0; i < font_registry_count(); i++) {
+            if (rect_contains(rect_make(cx, cy + 366 + (i32)i * 40, 240, 34), x, y)) {
+                settings_set_font_family(i);
+                user_set_current_font_preference(i);
+                settings_set_status(w, "Font updated", COL_GREEN);
+                gfx_dirty(0, 0, (i32)SCREEN_W, (i32)SCREEN_H);
+            }
         }
         break;
 

@@ -183,7 +183,7 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     case APP_CLOCK:    *w = 280; *h = 240; return;
     case APP_ABOUT: {
         /* app_about_draw stacks a logo, an H2 wordmark, a version line, a
-         * rule, six info rows and a footer, all on the live line height. A
+         * rule, seven info rows and a footer, all on the live line height. A
          * flat 340 already truncated the last rows and gets worse the taller
          * the face, so mirror that stack here. */
         i32 lh   = FONT_H * (i32)GFX_FONT_SCALE;
@@ -192,7 +192,7 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
         *h = TITLEBAR_H + 24 + 2 * logo + 18   /* logo block + gap */
            + 2 * lh + 4                        /* H2 wordmark row */
            + lh + 16                           /* version line + gap */
-           + 14 + 6 * (lh + 8)                 /* rule + six info rows */
+           + 14 + 7 * (lh + 8)                 /* rule + seven info rows */
            + 8 + 12 + lh + 20;                 /* rule + footer + padding */
         return;
     }
