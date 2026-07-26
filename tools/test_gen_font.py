@@ -72,6 +72,47 @@ def test_cli_requires_exactly_five_sizes(tmp_path):
     assert "exactly 5" in (r.stderr + r.stdout)
 
 
+def test_cli_rejects_non_ascending_sizes(tmp_path):
+    """Slot order maps directly to font_size_t (CAPTION..H1); an inverted
+    or non-strictly-increasing list must be rejected, not silently accepted."""
+    out = tmp_path / "f.c"
+    r = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).parent / "gen-font.py"),
+         str(TTF), "--name", "X", "--symbol", "x",
+         "--sizes", "28,20,16,13,11", "--out", str(out)],
+        capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "ascending" in (r.stderr + r.stdout)
+
+
+def test_cli_rejects_out_of_range_px(tmp_path):
+    """f.px is emitted into a u8 struct field and comes straight from
+    unvalidated CLI input; an oversized size must not silently truncate."""
+    out = tmp_path / "f.c"
+    r = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).parent / "gen-font.py"),
+         str(TTF), "--name", "X", "--symbol", "x",
+         "--sizes", "11,13,16,20,300", "--out", str(out)],
+        capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "does not fit in u8" in (r.stderr + r.stdout)
+
+
+def test_glyph_bearing_out_of_i8_range_is_rejected(tmp_path, monkeypatch):
+    """bearing_x/bearing_y are i8 struct fields and can legitimately be
+    negative; emit_c must range-check them signed, not with _fits_u8."""
+    # bitmap_left/bitmap_top are read-only properties on GlyphSlot backed
+    # directly by the ctypes struct field (unlike advance, which returns a
+    # mutable Vector wrapper) -- so the class-level property itself must be
+    # overridden to fake an out-of-range bearing, the same way
+    # test_non_monospace_font_is_rejected fakes load_char.
+    monkeypatch.setattr(gen.freetype.GlyphSlot, "bitmap_left",
+                         property(lambda self: 200))
+    face = gen.build_face(str(TTF), 13)
+    with pytest.raises(SystemExit):
+        gen.emit_c("Test", "test_i8", [face], str(tmp_path / "f.c"), str(TTF))
+
+
 def test_cli_emits_expected_c_symbols(tmp_path):
     out = tmp_path / "font_x.c"
     r = subprocess.run(

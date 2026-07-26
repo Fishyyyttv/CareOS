@@ -79,6 +79,16 @@ def _fits_u8(name, value):
         sys.exit(f"error: {name}={value} does not fit in u8")
 
 
+def _fits_i8(name, value):
+    if not (-128 <= value <= 127):
+        sys.exit(f"error: {name}={value} does not fit in i8")
+
+
+def _fits_u32(name, value):
+    if not (0 <= value <= 0xFFFFFFFF):
+        sys.exit(f"error: {name}={value} does not fit in u32")
+
+
 def emit_c(name: str, symbol: str, faces: List[Face], out_path: str, src_note: str) -> None:
     lines = []
     a = lines.append
@@ -92,6 +102,7 @@ def emit_c(name: str, symbol: str, faces: List[Face], out_path: str, src_note: s
     a("")
 
     for f in faces:
+        _fits_u8("px", f.px)
         _fits_u8("advance", f.advance)
         _fits_u8("line_h", f.line_h)
         _fits_u8("baseline", f.baseline)
@@ -106,6 +117,9 @@ def emit_c(name: str, symbol: str, faces: List[Face], out_path: str, src_note: s
         for g in f.glyphs:
             _fits_u8("glyph.w", g.w)
             _fits_u8("glyph.h", g.h)
+            _fits_i8("glyph.bearing_x", g.bearing_x)
+            _fits_i8("glyph.bearing_y", g.bearing_y)
+            _fits_u32("glyph.offset", g.offset)
             a(f"    {{ {g.w},{g.h},{g.bearing_x},{g.bearing_y},{g.offset} }},")
         a("};")
         a("")
@@ -162,6 +176,9 @@ def main() -> None:
     if len(sizes) != 5:
         sys.exit("error: --sizes must list exactly 5 sizes, one per font_size_t "
                  "(CAPTION,BODY,H3,H2,H1)")
+    if any(sizes[i] >= sizes[i + 1] for i in range(len(sizes) - 1)):
+        sys.exit("error: --sizes must be strictly ascending, smallest (CAPTION) "
+                 f"to largest (H1); got {args.sizes}")
 
     faces = [build_face(args.ttf, px) for px in sizes]
     emit_c(args.name, args.symbol, faces, args.out, args.ttf)
