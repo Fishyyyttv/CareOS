@@ -26,3 +26,6 @@ boot.log
 
 # Claude Code worktrees and local settings
 .claude/
+
+# Python font-tooling venv
+tools/.venv/
