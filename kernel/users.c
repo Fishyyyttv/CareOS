@@ -1132,12 +1132,18 @@ void user_prefs_set_current(const user_prefs_t *p) {
     if (!p) return;
     user_rec_t *u = find_user_by_uid(current_uid);
     if (!u) return;
-    if (p->theme != USER_PREF_UNSET)            u->theme_pref     = p->theme;
-    if (p->font != USER_PREF_UNSET)             u->font_pref      = p->font;
-    if (p->wallpaper != USER_PREF_UNSET)        u->wallpaper_pref = p->wallpaper;
-    if (p->mouse_sensitivity != USER_PREF_UNSET)u->mouse_pref     = p->mouse_sensitivity;
-    if (p->clock_24h != USER_PREF_UNSET)        u->clock24_pref   = p->clock_24h;
-    if (p->taskbar_centered != USER_PREF_UNSET) u->taskbar_pref   = p->taskbar_centered;
+    /* theme/font are clamped the same way the dedicated setters above
+     * (user_set_current_theme_preference / user_set_current_font_preference)
+     * clamp them, so an out-of-range value can never be persisted and left
+     * live until the next reboot re-sanitizes it. */
+    if (p->theme != USER_PREF_UNSET)
+        u->theme_pref = (p->theme <= 1) ? p->theme : USER_THEME_SYSTEM_DEFAULT;
+    if (p->font != USER_PREF_UNSET)
+        u->font_pref = (p->font < font_registry_count()) ? p->font : USER_FONT_SYSTEM_DEFAULT;
+    if (p->wallpaper != USER_PREF_UNSET)         u->wallpaper_pref = p->wallpaper;
+    if (p->mouse_sensitivity != USER_PREF_UNSET) u->mouse_pref     = p->mouse_sensitivity;
+    if (p->clock_24h != USER_PREF_UNSET)         u->clock24_pref   = p->clock_24h;
+    if (p->taskbar_centered != USER_PREF_UNSET)  u->taskbar_pref   = p->taskbar_centered;
     users_persist_save();
 }
 
@@ -1152,23 +1158,40 @@ void users_selftest(void) {
     current_uid = u->uid;
     user_prefs_t orig; user_prefs_get(u->uid, &orig);
 
-    user_prefs_t p = { .theme = 1, .font = USER_PREF_UNSET, .wallpaper = 3,
-                       .mouse_sensitivity = 150, .clock_24h = 0, .taskbar_centered = 0 };
-    /* set_current persists; capture the pre-test disk state is out of scope for
-     * a hobby self-test, so we only assert the in-RAM round-trip here. */
-    if (u->theme_pref == 1) p.theme = 0; /* ensure we actually change it */
-    user_prefs_t before; user_prefs_get(u->uid, &before);
-
+    /* Part 1: direct record round-trip through user_prefs_get. */
     u->theme_pref = 0; u->wallpaper_pref = 7; u->mouse_pref = 42;
     user_prefs_t got; user_prefs_get(u->uid, &got);
     bool ok = (got.theme == 0 && got.wallpaper == 7 && got.mouse_sensitivity == 42);
+
+    /* Part 2: user_prefs_set_current -- a USER_PREF_UNSET field (wallpaper)
+     * must be skipped and left untouched, in-range fields must be written,
+     * and an out-of-range theme/font must be clamped exactly like
+     * user_set_current_theme_preference / user_set_current_font_preference
+     * clamp them (regression check for the missing-clamp finding). */
+    user_prefs_t before2; user_prefs_get(u->uid, &before2);
+    user_prefs_t p2 = {
+        .theme = 99,                    /* out of range -> must clamp */
+        .font = 99999,                  /* out of range -> must clamp */
+        .wallpaper = USER_PREF_UNSET,   /* left unset -> must not change */
+        .mouse_sensitivity = 77,
+        .clock_24h = 1,
+        .taskbar_centered = 1,
+    };
+    user_prefs_set_current(&p2);
+    user_prefs_t after2; user_prefs_get(u->uid, &after2);
+    bool ok2 = (after2.theme == USER_THEME_SYSTEM_DEFAULT &&
+                after2.font == USER_FONT_SYSTEM_DEFAULT &&
+                after2.wallpaper == before2.wallpaper &&
+                after2.mouse_sensitivity == 77 &&
+                after2.clock_24h == 1 &&
+                after2.taskbar_centered == 1);
+    ok = ok && ok2;
 
     /* restore */
     u->theme_pref = orig.theme; u->font_pref = orig.font;
     u->wallpaper_pref = orig.wallpaper; u->mouse_pref = orig.mouse_sensitivity;
     u->clock24_pref = orig.clock_24h; u->taskbar_pref = orig.taskbar_centered;
     current_uid = save_uid;
-    (void)p; (void)before;
 
     serial_write(ok ? "[selftest] users_prefs: PASS\n"
                      : "[selftest] users_prefs: FAIL\n");
