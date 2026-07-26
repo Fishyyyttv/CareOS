@@ -243,6 +243,9 @@ typedef struct {
     u32  picked_uid; /* uid of the account row clicked on the greeter, if any.
                        * Not a sentinel -- 0 is root's real uid, so this field
                        * is informational only and nothing branches on it. */
+    bool locked; /* Lock-screen mode: re-authenticate the current user only.
+                  * Username is pinned, the greeter/signup/back-to-picker
+                  * paths are all disabled -- password is the only input. */
 
     /* MUST_CHANGE mode only. username still holds the authenticated account. */
     char newpass[64];
@@ -387,6 +390,9 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     if (s->mode == LOGIN_MODE_MUST_CHANGE) {
         kstrcpy(title, "Change Your Password");
         kstrcpy(subtitle, "This account uses a default password");
+    } else if (s->locked) {
+        kstrcpy(title, "Locked");
+        kstrcpy(subtitle, "Enter your password to continue");
     } else {
         kstrcpy(title, s->mode == LOGIN_MODE_SIGNIN ? "Welcome Back" : "Create Account");
         kstrcpy(subtitle, s->mode == LOGIN_MODE_SIGNIN
@@ -445,9 +451,13 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     }
 
     button_update(&l.primary_btn, mouse);
-    button_update(&l.secondary_btn, mouse);
     button_draw(&l.primary_btn);
-    button_draw(&l.secondary_btn);
+    if (!s->locked) {
+        /* Locked mode has no "Create Account" escape hatch -- the current
+         * user's password is the only way past this screen. */
+        button_update(&l.secondary_btn, mouse);
+        button_draw(&l.secondary_btn);
+    }
 
     /* Footer / Status */
     gfx_rect_rounded(l.status_bar.x, l.status_bar.y, l.status_bar.w, l.status_bar.h, 12, COL_SURFACE2);
@@ -795,15 +805,31 @@ static void run_matrix_screensaver(mouse_t *mouse) {
     }
 }
 
-static bool run_login_flow(mouse_t *mouse) {
+static bool run_login_flow(mouse_t *mouse, bool lock_mode) {
     login_state_t login;
     kmemset(&login, 0, sizeof(login));
-    login.field = 0;
-    login.mode = (user_enum_count() > 0) ? LOGIN_MODE_PICK : LOGIN_MODE_SIGNUP;
-    if (login.mode == LOGIN_MODE_PICK)
-        login_set_status(&login, "Choose an account to continue", COL_DIM);
-    else
-        login_set_status(&login, "Create a strong local account", COL_DIM);
+    login.locked = lock_mode;
+
+    if (lock_mode) {
+        /* Re-authenticate the current user only: pin the username, skip the
+         * greeter entirely, and land straight on the password field. */
+        login.mode = LOGIN_MODE_SIGNIN;
+        const char *cur = user_current_name();
+        if (cur) {
+            kstrncpy(login.username, cur, sizeof(login.username) - 1);
+            login.username[sizeof(login.username) - 1] = '\0';
+            login.user_len = (u32)kstrlen(login.username);
+        }
+        login.field = 1;
+        login_set_status(&login, "Enter your password to unlock", COL_DIM);
+    } else {
+        login.field = 0;
+        login.mode = (user_enum_count() > 0) ? LOGIN_MODE_PICK : LOGIN_MODE_SIGNUP;
+        if (login.mode == LOGIN_MODE_PICK)
+            login_set_status(&login, "Choose an account to continue", COL_DIM);
+        else
+            login_set_status(&login, "Create a strong local account", COL_DIM);
+    }
 
     keyboard_flush();
     mouse->x = (i32)SCREEN_W / 2;
@@ -846,7 +872,8 @@ static bool run_login_flow(mouse_t *mouse) {
             }
 
             if (c == '\t') {
-                login.field = 1 - login.field;
+                /* Locked mode has no username field to tab into. */
+                if (!login.locked) login.field = 1 - login.field;
                 continue;
             }
             if (c == '\n') {
@@ -874,7 +901,7 @@ static bool run_login_flow(mouse_t *mouse) {
                         login.confirm_len--;
                         login.confirm[login.confirm_len] = '\0';
                     }
-                } else if (login.field == 0 && login.user_len > 0) {
+                } else if (!login.locked && login.field == 0 && login.user_len > 0) {
                     login.user_len--;
                     login.username[login.user_len] = '\0';
                 } else if (login.field == 1 && login.pass_len > 0) {
@@ -897,7 +924,7 @@ static bool run_login_flow(mouse_t *mouse) {
                         login.confirm[login.confirm_len] = '\0';
                     }
                 }
-            } else if (login.field == 0) {
+            } else if (!login.locked && login.field == 0) {
                 if (login.user_len < sizeof(login.username) - 1) {
                     login.username[login.user_len++] = c;
                     login.username[login.user_len] = '\0';
@@ -945,13 +972,14 @@ static bool run_login_flow(mouse_t *mouse) {
                     login.field = 0;
                     login_set_status(&login, "Enter your username and password", COL_DIM);
                 }
-            } else if (rect_contains(layout.user_field, mouse->x, mouse->y))
+            } else if (!login.locked && rect_contains(layout.user_field, mouse->x, mouse->y))
                 login.field = 0;
             else if (rect_contains(layout.pass_field, mouse->x, mouse->y))
                 login.field = 1;
-            else if (login.mode == LOGIN_MODE_SIGNIN && user_enum_count() > 0 &&
+            else if (!login.locked && login.mode == LOGIN_MODE_SIGNIN && user_enum_count() > 0 &&
                      rect_contains(layout.avatar, mouse->x, mouse->y)) {
-                /* Back affordance: the avatar returns to the greeter. */
+                /* Back affordance: the avatar returns to the greeter. Not
+                 * offered in lock mode -- there is no picker to return to. */
                 login.mode = LOGIN_MODE_PICK;
                 login.pass_len = 0;
                 login.password[0] = '\0';
@@ -970,7 +998,7 @@ static bool run_login_flow(mouse_t *mouse) {
                 } else {
                     login_create_account(&login);
                 }
-            } else if (button_take_click(&layout.secondary_btn, mouse)) {
+            } else if (!login.locked && button_take_click(&layout.secondary_btn, mouse)) {
                 if (login.mode == LOGIN_MODE_MUST_CHANGE) {
                     /* Cancel drops the session and returns to sign-in. The
                      * must_change flag stays set, so there is no way past it. */
@@ -1046,7 +1074,7 @@ void gui_run(void) {
 
     serial_write("  [gui_run] login gate\n");
     kmemset(&mouse, 0, sizeof(mouse));
-    if (!run_login_flow(&mouse)) {
+    if (!run_login_flow(&mouse, false)) {
         serial_write("  [gui_run] login flow returned failure\n");
     }
     session_begin(user_current_uid());
@@ -1069,17 +1097,25 @@ void gui_run(void) {
                 session_action_t act = g_session_action;
                 g_session_action = SESSION_ACT_NONE;
                 launcher_open = false;
-                if (act == SESSION_ACT_LOGOUT) {
+                if (act == SESSION_ACT_LOCK) {
+                    /* Real lock screen: re-authenticate the current user only.
+                       No picker, no signup, windows/session stay exactly as
+                       they are, and there is no desktop re-entry (no startup
+                       chime replay). */
+                    run_login_flow(&mouse, true);
+                    session_begin(user_current_uid());
+                    theme_switch(settings_get()->theme == 0);
+                    needs_redraw = true;
+                } else {
+                    /* LOGOUT / Switch User: drop the session entirely and show
+                       the full greeter so a different account can sign in. */
                     wm_close_all();      /* clean desktop for the next user */
                     session_end();
+                    run_login_flow(&mouse, false);
+                    session_begin(user_current_uid());
+                    theme_switch(settings_get()->theme == 0);
+                    enter_desktop(&mouse);
                 }
-                /* LOCK keeps the current session's windows/state; LOGOUT/Switch
-                   already dropped them above. Either way, show the greeter and
-                   re-apply whichever session results (same user or a new one). */
-                run_login_flow(&mouse);
-                session_begin(user_current_uid());
-                theme_switch(settings_get()->theme == 0);
-                enter_desktop(&mouse);
                 g_last_activity_tick = timer_get_ticks();
                 needs_redraw = true;
                 continue;
@@ -1132,9 +1168,13 @@ void gui_run(void) {
             /* Idle / Screensaver Check (10 minutes = 600,000 ms, screensaver at 30,000 ms) */
             u32 now = timer_get_ticks();
             if (now - g_last_activity_tick > 600000) {
-                /* Auto-lock the screen if idle for 10 mins */
+                /* Auto-lock the screen if idle for 10 mins. Same lock screen
+                   as an explicit Lock: current user's password only, windows
+                   stay open, no picker and no startup chime replay. */
                 serial_write("  [gui] auto-locking due to idle\n");
-                run_login_flow(&mouse);
+                run_login_flow(&mouse, true);
+                session_begin(user_current_uid());
+                theme_switch(settings_get()->theme == 0);
                 g_last_activity_tick = timer_get_ticks();
                 needs_redraw = true;
             } else if (now - g_last_activity_tick > 30000) {
