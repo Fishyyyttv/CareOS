@@ -80,6 +80,10 @@ static void launcher_open_app(app_id_t app) {
     wm_open(app, title, (scrw - ww) / 2, (scrh - wh) / 2, ww, wh);
 }
 
+/* Footer session buttons: Lock / Log Out / Switch, laid out right-to-left. */
+typedef enum { FOOTER_BTN_NONE, FOOTER_BTN_LOCK, FOOTER_BTN_LOGOUT, FOOTER_BTN_SWITCH } footer_btn_t;
+static const char *footer_btn_labels[3] = { "Lock", "Log Out", "Switch" };
+
 static app_id_t launcher_render(mouse_t *m, bool draw) {
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
@@ -164,14 +168,43 @@ static app_id_t launcher_render(mouse_t *m, bool draw) {
         gfx_str(px + 30, fy + 22, "?", COL_WHITE, COL_TRANSPARENT);
         gfx_str(px + 60, fy + 22, user_current_name(), COL_TEXT, COL_TRANSPARENT);
 
-        /* Power Button */
-        i32 pwr_x = px + pw - 50;
-        bool pwr_hover = rect_contains(rect_make(pwr_x - 5, fy + 15, 40, 40), m->x, m->y);
-        gfx_rect_rounded(pwr_x - 5, fy + 15, 40, 40, 8, pwr_hover ? COL_RED : COL_SURFACE2);
-        gfx_str(pwr_x + 8, fy + 26, "!", COL_WHITE, COL_TRANSPARENT);
+        /* Session buttons: Lock / Log Out / Switch, right-to-left from px+pw-20 */
+        i32 bx = px + pw - 20;
+        i32 by = fy + 15;
+        i32 bh = 30;
+        for (int bi = 0; bi < 3; bi++) {
+            const char *label = footer_btn_labels[bi];
+            i32 bw = (i32)kstrlen(label) * FONT_W * sc + 16;
+            bx -= bw;
+            bool hover = rect_contains(rect_make(bx, by, bw, bh), m->x, m->y);
+            gfx_rect_rounded(bx, by, bw, bh, 8, hover ? COL_RED : COL_SURFACE2);
+            gfx_str_centered(bx, by + (bh - FONT_H * sc) / 2, bw, label, COL_TEXT, COL_TRANSPARENT);
+            bx -= 8; /* gap between buttons */
+        }
     }
 
     return hit;
+}
+
+/* Recomputes footer button geometry (mirrors the draw pass above) and
+   returns which one, if any, the mouse is over. Used by both the click
+   handler and the outside-click-to-close check. */
+static footer_btn_t launcher_footer_hit(mouse_t *m, i32 px, i32 py, i32 pw, i32 ph) {
+    i32 footer_h = 60;
+    i32 fy = py + ph - footer_h;
+    i32 sc = (i32)GFX_FONT_SCALE;
+    i32 bx = px + pw - 20;
+    i32 by = fy + 15;
+    i32 bh = 30;
+    footer_btn_t types[3] = { FOOTER_BTN_LOCK, FOOTER_BTN_LOGOUT, FOOTER_BTN_SWITCH };
+    for (int bi = 0; bi < 3; bi++) {
+        const char *label = footer_btn_labels[bi];
+        i32 bw = (i32)kstrlen(label) * FONT_W * sc + 16;
+        bx -= bw;
+        if (rect_contains(rect_make(bx, by, bw, bh), m->x, m->y)) return types[bi];
+        bx -= 8;
+    }
+    return FOOTER_BTN_NONE;
 }
 
 void launcher_draw(mouse_t *m) {
@@ -181,15 +214,32 @@ void launcher_draw(mouse_t *m) {
 
 void launcher_handle_mouse(mouse_t *m) {
     if (!launcher_open || !m->left_clicked) return;
-    
+
+    /* Same panel geometry as launcher_render()'s fixed-size layout. */
+    i32 sw = (i32)SCREEN_W, sh = (i32)SCREEN_H;
+    i32 pw = 640, ph = 520;
+    if (sw < 700) pw = sw - 40;
+    if (sh < 600) ph = sh - 100;
+    i32 px = (sw - pw) / 2, py = (sh - ph) / 2 - 20;
+
+    footer_btn_t fbtn = launcher_footer_hit(m, px, py, pw, ph);
+    if (fbtn != FOOTER_BTN_NONE) {
+        if (fbtn == FOOTER_BTN_LOCK) {
+            g_session_action = SESSION_ACT_LOCK;
+        } else {
+            /* Log Out and Switch both drop the session and return to the
+               greeter -- the greeter is the switch-user surface. */
+            g_session_action = SESSION_ACT_LOGOUT;
+        }
+        launcher_open = false;
+        return;
+    }
+
     app_id_t hit = launcher_render(m, false);
     if (hit != APP_NONE) {
         launcher_open_app(hit);
     } else {
         /* Check if clicked outside to close */
-        i32 sw = (i32)SCREEN_W, sh = (i32)SCREEN_H;
-        i32 pw = 640, ph = 520;
-        i32 px = (sw - pw) / 2, py = (sh - ph) / 2 - 20;
         if (!rect_contains(rect_make(px, py, pw, ph), m->x, m->y)) {
             launcher_open = false;
         }

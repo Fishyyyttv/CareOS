@@ -4,6 +4,10 @@
 #include "kernel.h"
 #include "gui.h"
 
+/* Set by the launcher's footer session buttons (Lock / Log Out / Switch);
+   consumed once per frame at the top of gui_run()'s main loop. */
+volatile session_action_t g_session_action = SESSION_ACT_NONE;
+
 static i32 ui_clampi(i32 v, i32 lo, i32 hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -1005,11 +1009,28 @@ static bool run_login_flow(mouse_t *mouse) {
     }
 }
 
+/* Post-login desktop setup, shared between the initial boot-to-desktop path
+   and re-entry after Lock / Log Out / Switch User. Only opens a fresh
+   Terminal if one isn't already open (Lock returns to an existing session). */
+static void enter_desktop(mouse_t *mouse) {
+    rc_care_run_startup();
+
+    i32 sw = (i32)SCREEN_W;
+    i32 sh = (i32)SCREEN_H;
+    i32 tw = sw * 62 / 100;
+    i32 th = sh * 66 / 100;
+
+    if (!wm_find_app(APP_TERMINAL))
+        wm_open(APP_TERMINAL, "Terminal", (sw - tw) / 2, (sh - th) / 2 - 24, tw, th);
+    notify_push("CareOS", "Desktop ready.", COL_PRIMARY);
+    speaker_startup(); /* Audible startup melody */
+    desktop_fade_in(mouse);
+}
+
 void gui_run(void) {
     const careos_settings_t *cfg = settings_get();
     bool fast_boot = cfg && cfg->boot_fast;
     mouse_t mouse;
-    i32 sw, sh, tw, th;
 
     serial_write("  [gui_run] splash start\n");
     if (fast_boot) {
@@ -1031,22 +1052,12 @@ void gui_run(void) {
     session_begin(user_current_uid());
     theme_switch(settings_get()->theme == 0);
 
-    rc_care_run_startup();
-
-    sw = (i32)SCREEN_W;
-    sh = (i32)SCREEN_H;
-    tw = sw * 62 / 100;
-    th = sh * 66 / 100;
-
-    wm_open(APP_TERMINAL, "Terminal", (sw - tw) / 2, (sh - th) / 2 - 24, tw, th);
-    notify_push("CareOS", "Desktop ready.", COL_PRIMARY);
-    speaker_startup(); /* Audible startup melody */
-    desktop_fade_in(&mouse);
+    enter_desktop(&mouse);
 
     serial_write("  [gui_run] entering main loop\n");
 
-    mouse.x = sw / 2;
-    mouse.y = sh / 2;
+    mouse.x = (i32)SCREEN_W / 2;
+    mouse.y = (i32)SCREEN_H / 2;
 
     u32 last_sysmon = 0, last_netmon = 0, last_notify = 0;
     bool needs_redraw = true;
@@ -1054,6 +1065,26 @@ void gui_run(void) {
     bool lb = false;
 
     while (1) {
+            if (g_session_action != SESSION_ACT_NONE) {
+                session_action_t act = g_session_action;
+                g_session_action = SESSION_ACT_NONE;
+                launcher_open = false;
+                if (act == SESSION_ACT_LOGOUT) {
+                    wm_close_all();      /* clean desktop for the next user */
+                    session_end();
+                }
+                /* LOCK keeps the current session's windows/state; LOGOUT/Switch
+                   already dropped them above. Either way, show the greeter and
+                   re-apply whichever session results (same user or a new one). */
+                run_login_flow(&mouse);
+                session_begin(user_current_uid());
+                theme_switch(settings_get()->theme == 0);
+                enter_desktop(&mouse);
+                g_last_activity_tick = timer_get_ticks();
+                needs_redraw = true;
+                continue;
+            }
+
             bool activity = false;
 
             while (keyboard_haschar()) {

@@ -327,6 +327,15 @@ void wm_close(window_t *w) {
     }
 }
 
+void wm_close_all(void) {
+    /* Close every open window (e.g. on Log Out / Switch User) so the next
+       session starts with a clean desktop. Mirrors wm_close() per-window. */
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (windows[i].active) wm_close(&windows[i]);
+    }
+    open_count = 0;
+}
+
 void wm_focus(window_t *w) {
     if (!w) return;
     for (int i = 0; i < MAX_WINDOWS; i++) windows[i].focused = false;
