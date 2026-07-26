@@ -415,6 +415,7 @@ typedef struct {
     u8   failed_attempts;
     u32  lock_until_tick;
     u32  theme_pref;
+    u32  font_pref;
     u16  last_login_year;
     u8   last_login_month;
     u8   last_login_day;
@@ -441,6 +442,8 @@ int         user_change_password(const char *name, const char *old_pass,
                                  const char *new_pass);
 void        user_list(void);
 void        user_set_current_theme_preference(u32 theme);
+#define USER_FONT_SYSTEM_DEFAULT 0xFFFFFFFFu
+void        user_set_current_font_preference(u32 index);
 /* True when the logged-in account still holds a shipped bootstrap password and
  * must set a new one before reaching the desktop. */
 bool        user_must_change_password(void);
@@ -619,6 +622,7 @@ typedef struct {
     char wifi_pass[64];
     u32  vesa_w;
     u32  vesa_h;
+    u32  font_family;
 } careos_settings_t;
 
 void settings_init(void);
@@ -631,6 +635,7 @@ void settings_set_wallpaper(u32 wallpaper);
 void settings_set_taskbar_centered(bool centered);
 void settings_set_wifi_profile(const char *ssid, const char *pass, bool connected);
 void settings_set_vesa_mode(u32 w, u32 h);
+void settings_set_font_family(u32 index);
 
 /* -- Pipes ---------------------------------------------------------------- */
 #define PIPE_BUF_SIZE 4096

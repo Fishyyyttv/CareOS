@@ -44,4 +44,7 @@ void font_set_family(u32 index) {
     GFX_FONT_H = body->line_h;
 }
 
-void font_init(void) { font_set_family(0); }
+void font_init(void) {
+    const careos_settings_t *s = settings_get();
+    font_set_family(s->font_family < REGISTRY_COUNT ? s->font_family : 0u);
+}

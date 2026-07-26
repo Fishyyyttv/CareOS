@@ -5,10 +5,11 @@
 
 #include "kernel.h"
 #include "ext2.h"
+#include "font.h"
 
 #define MAX_USERS 16
 #define USERDB_MAGIC   0x43555352u  /* CUSR */
-#define USERDB_VERSION 4u
+#define USERDB_VERSION 5u
 #define USERDB_SECTORS CAREOS_DISK_USERDB_SECTORS
 #define USERDB_SECTOR_SIZE 512u
 
@@ -27,6 +28,7 @@ typedef struct {
     u8   failed_attempts;
     u32  lock_until_tick;
     u32  theme_pref;
+    u32  font_pref;
     u16  last_login_year;
     u8   last_login_month;
     u8   last_login_day;
@@ -49,6 +51,27 @@ typedef struct __attribute__((packed)) {
     u32 count;
     u32 checksum;
 } userdb_hdr_t;
+
+typedef struct __attribute__((packed)) {
+    u32  uid;
+    u32  gid;
+    u8   hash_algo;
+    u8   must_change;
+    u8   pass_hash[USER_PASS_HASH_LEN];
+    u8   salt[USER_SALT_LEN];
+    u8   active;
+    u8   is_root;
+    char name[32];
+    char home[64];
+    char shell[32];
+    u32  theme_pref;
+    u32  font_pref;
+    u16  last_login_year;
+    u8   last_login_month;
+    u8   last_login_day;
+    u8   last_login_hour;
+    u8   last_login_minute;
+} userdb_entry_v5_t;
 
 typedef struct __attribute__((packed)) {
     u32  uid;
@@ -308,6 +331,8 @@ static void users_sanitize_profile(user_rec_t *u) {
     u->lock_until_tick = 0;
     if (u->theme_pref != USER_THEME_SYSTEM_DEFAULT && u->theme_pref > 1)
         u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
+    if (u->font_pref != USER_FONT_SYSTEM_DEFAULT && u->font_pref >= font_registry_count())
+        u->font_pref = USER_FONT_SYSTEM_DEFAULT;
 }
 
 static void rebuild_passwd_file(void) {
@@ -361,6 +386,46 @@ static bool users_persist_load(void) {
     user_count = 0;
 
     if (hdr->version == USERDB_VERSION) {
+        u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v5_t);
+        u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
+        if (payload_len > max_payload) return false;
+
+        u8 *payload = userdb_io + sizeof(userdb_hdr_t);
+        if (userdb_checksum(payload, payload_len) != hdr->checksum) return false;
+
+        userdb_entry_v5_t *entries = (userdb_entry_v5_t*)payload;
+        for (u32 i = 0; i < hdr->count && i < MAX_USERS; i++) {
+            user_rec_t *u = &users[user_count++];
+            u->uid = entries[i].uid;
+            u->gid = entries[i].gid;
+            u->hash_algo = entries[i].hash_algo;
+            u->must_change_password = entries[i].must_change ? true : false;
+            kmemcpy(u->pass_hash, entries[i].pass_hash, USER_PASS_HASH_LEN);
+            kmemcpy(u->salt, entries[i].salt, USER_SALT_LEN);
+            u->active = entries[i].active ? true : false;
+            u->is_root = entries[i].is_root ? true : false;
+            u->theme_pref = entries[i].theme_pref;
+            u->font_pref = entries[i].font_pref;
+            u->last_login_year = entries[i].last_login_year;
+            u->last_login_month = entries[i].last_login_month;
+            u->last_login_day = entries[i].last_login_day;
+            u->last_login_hour = entries[i].last_login_hour;
+            u->last_login_minute = entries[i].last_login_minute;
+
+            kstrncpy(u->name, entries[i].name, sizeof(u->name) - 1);
+            u->name[sizeof(u->name) - 1] = '\0';
+            kstrncpy(u->home, entries[i].home, sizeof(u->home) - 1);
+            u->home[sizeof(u->home) - 1] = '\0';
+            kstrncpy(u->shell, entries[i].shell, sizeof(u->shell) - 1);
+            u->shell[sizeof(u->shell) - 1] = '\0';
+            users_sanitize_profile(u);
+        }
+        return user_count > 0;
+    }
+
+    /* v4 predates per-user font_pref. Load it and default the font to the
+     * system choice; the record upgrades to v5 on the next save. */
+    if (hdr->version == 4u) {
         u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v4_t);
         u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
         if (payload_len > max_payload) return false;
@@ -380,6 +445,7 @@ static bool users_persist_load(void) {
             u->active = entries[i].active ? true : false;
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = entries[i].theme_pref;
+            u->font_pref = USER_FONT_SYSTEM_DEFAULT;
             u->last_login_year = entries[i].last_login_year;
             u->last_login_month = entries[i].last_login_month;
             u->last_login_day = entries[i].last_login_day;
@@ -419,6 +485,7 @@ static bool users_persist_load(void) {
             u->active = entries[i].active ? true : false;
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = entries[i].theme_pref;
+            u->font_pref = USER_FONT_SYSTEM_DEFAULT;
             u->last_login_year = entries[i].last_login_year;
             u->last_login_month = entries[i].last_login_month;
             u->last_login_day = entries[i].last_login_day;
@@ -456,6 +523,7 @@ static bool users_persist_load(void) {
             u->active = entries[i].active ? true : false;
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
+            u->font_pref = USER_FONT_SYSTEM_DEFAULT;
             u->last_login_year = 0;
             u->last_login_month = 0;
             u->last_login_day = 0;
@@ -494,6 +562,7 @@ static bool users_persist_load(void) {
             u->active = entries[i].active ? true : false;
             u->is_root = entries[i].is_root ? true : false;
             u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
+            u->font_pref = USER_FONT_SYSTEM_DEFAULT;
             u->last_login_year = 0;
             u->last_login_month = 0;
             u->last_login_day = 0;
@@ -529,13 +598,13 @@ static void users_persist_save(void) {
      * populated account list overflowed the static buffer and corrupted
      * whatever followed it in BSS. Cap the write to what the region holds. */
     u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
-    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v4_t);
+    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v5_t);
     u32 to_write = user_count < max_entries ? user_count : max_entries;
     if (to_write < user_count)
         serial_write("[users] WARNING: userdb region too small, truncating save\n");
     hdr->count = to_write;
 
-    userdb_entry_v4_t *entries = (userdb_entry_v4_t*)(userdb_io + sizeof(userdb_hdr_t));
+    userdb_entry_v5_t *entries = (userdb_entry_v5_t*)(userdb_io + sizeof(userdb_hdr_t));
     for (u32 i = 0; i < to_write; i++) {
         entries[i].uid = users[i].uid;
         entries[i].gid = users[i].gid;
@@ -546,6 +615,7 @@ static void users_persist_save(void) {
         entries[i].active = users[i].active ? 1 : 0;
         entries[i].is_root = users[i].is_root ? 1 : 0;
         entries[i].theme_pref = users[i].theme_pref;
+        entries[i].font_pref = users[i].font_pref;
         entries[i].last_login_year = users[i].last_login_year;
         entries[i].last_login_month = users[i].last_login_month;
         entries[i].last_login_day = users[i].last_login_day;
@@ -560,7 +630,7 @@ static void users_persist_save(void) {
         entries[i].shell[sizeof(entries[i].shell) - 1] = '\0';
     }
 
-    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v4_t);
+    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v5_t);
     hdr->checksum = userdb_checksum((u8*)entries, payload_len);
 
     u32 lba = users_db_lba();
@@ -617,6 +687,7 @@ static int user_add(u32 uid, u32 gid, const char *name, const char *pass,
     u->active = true;
     u->is_root = is_root;
     u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
+    u->font_pref = USER_FONT_SYSTEM_DEFAULT;
     user_set_password(u, pass);
     return 0;
 }
@@ -689,6 +760,8 @@ int user_login(const char *name, const char *pass) {
 
     if (u->theme_pref != USER_THEME_SYSTEM_DEFAULT)
         settings_set_theme(u->theme_pref);
+    if (u->font_pref != USER_FONT_SYSTEM_DEFAULT)
+        settings_set_font_family(u->font_pref);
     users_persist_save();
 
     serial_write("[users] login: ");
@@ -927,5 +1000,12 @@ void user_set_current_theme_preference(u32 theme) {
     user_rec_t *u = find_user_by_uid(current_uid);
     if (!u) return;
     u->theme_pref = (theme <= 1) ? theme : USER_THEME_SYSTEM_DEFAULT;
+    users_persist_save();
+}
+
+void user_set_current_font_preference(u32 index) {
+    user_rec_t *u = find_user_by_uid(current_uid);
+    if (!u) return;
+    u->font_pref = (index < font_registry_count()) ? index : USER_FONT_SYSTEM_DEFAULT;
     users_persist_save();
 }
