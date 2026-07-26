@@ -161,12 +161,15 @@ typedef enum {
     FONT_H1       /* 28px */
 } font_size_t;
 
-#define FONT_W       8
-#define FONT_H      13
-#define FONT_SPACING 3
+/* Active font metrics. Variables, not constants -- font_set_family() updates
+ * them. No call site uses these in a constant expression, so every existing
+ * user keeps compiling unchanged. */
+#define FONT_W  GFX_FONT_W
+#define FONT_H  GFX_FONT_H
 
 void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size);
 void gfx_str_centered_ex(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg, font_size_t size);
+i32  gfx_str_width_ex(const char *s, font_size_t size);
 void gfx_rect_blend(i32 x, i32 y, i32 w, i32 h, u32 color, u8 alpha);
 void gfx_draw_icon(app_id_t app, i32 x, i32 y, i32 size, u32 color);
 

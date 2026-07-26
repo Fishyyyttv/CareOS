@@ -29,3 +29,6 @@ boot.log
 
 # Python font-tooling venv
 tools/.venv/
+
+# QEMU screenshots
+shots/
