@@ -324,6 +324,26 @@ static void glyph_blit(const font_face_t *f, const glyph_t *g,
     }
 }
 
+/* Opaque text background. gfx_rect() fills through gfx_hline_raw(), which
+ * clamps to the target but does NOT honour the clip rectangle -- the old
+ * renderer painted its background through gfx_setpixel(), which did. Intersect
+ * here so clipped text (e.g. a long filename in Files->Rename) cannot paint a
+ * band past its window edge. Kept local: gfx_hline_raw has too many callers to
+ * change safely. */
+static void text_bg_fill(i32 x, i32 y, i32 w, i32 h, u32 col) {
+    if (w <= 0 || h <= 0) return;
+    if (clip_active) {
+        i32 x2 = x + w, y2 = y + h;
+        if (x  < clip_x)          x  = clip_x;
+        if (y  < clip_y)          y  = clip_y;
+        if (x2 > clip_x + clip_w) x2 = clip_x + clip_w;
+        if (y2 > clip_y + clip_h) y2 = clip_y + clip_h;
+        if (x2 <= x || y2 <= y) return;
+        w = x2 - x; h = y2 - y;
+    }
+    gfx_rect(x, y, w, h, col);
+}
+
 static void draw_text(i32 x, i32 y, const char *s, u32 fg, u32 bg,
                       font_size_t size, bool bold) {
     const font_face_t *f = bold ? font_bold_face_at((u32)size)
@@ -331,21 +351,46 @@ static void draw_text(i32 x, i32 y, const char *s, u32 fg, u32 bg,
     i32 sc = (i32)GFX_FONT_SCALE;
     i32 adv = (i32)f->advance * sc;
     i32 lh  = (i32)f->line_h  * sc;
-    i32 cx = x, cy = y, start_x = x, start_y = y, max_x = x;
+    i32 cy = y, start_x = x, start_y = y, max_x = x;
 
     while (*s) {
-        if (*s == '\n') { if (cx > max_x) max_x = cx; cx = x; cy += lh; s++; continue; }
-        if (*s >= FONT_FIRST_CH && *s <= FONT_LAST_CH) {
-            if (bg != COL_TRANSPARENT) gfx_rect(cx, cy, adv, lh, bg);
-            glyph_blit(f, &f->glyphs[(u8)*s - FONT_FIRST_CH], cx, cy, fg, sc);
+        const char *p;
+        i32 n = 0, right = 0;
+
+        /* Measure the line: how many cells, and how far ink actually reaches.
+         * Some faces have bearing_x + w > advance, so ink can outrun the cells. */
+        for (p = s; *p && *p != '\n'; p++) {
+            if (*p >= FONT_FIRST_CH && *p <= FONT_LAST_CH) {
+                const glyph_t *g = &f->glyphs[(u8)*p - FONT_FIRST_CH];
+                i32 r = n * adv + ((i32)g->bearing_x + (i32)g->w) * sc;
+                if (r > right) right = r;
+            }
+            n++;
         }
-        cx += adv; s++;
+        if (n * adv > right) right = n * adv;
+
+        /* One background band for the whole line. Filling per character would
+         * let cell N's background erase cell N-1's rightmost antialiased
+         * column, and would emit two gfx_dirty calls per character -- enough
+         * to overrun MAX_DIRTY after ~16 characters. */
+        if (bg != COL_TRANSPARENT) text_bg_fill(x, cy, n * adv, lh, bg);
+
+        i32 cx = x;
+        for (p = s; *p && *p != '\n'; p++) {
+            if (*p >= FONT_FIRST_CH && *p <= FONT_LAST_CH)
+                glyph_blit(f, &f->glyphs[(u8)*p - FONT_FIRST_CH], cx, cy, fg, sc);
+            cx += adv;
+        }
+
+        if (x + right > max_x) max_x = x + right;
+        s = p;
+        if (*s == '\n') { s++; cy += lh; }
     }
-    if (cx > max_x) max_x = cx;
     gfx_dirty(start_x, start_y, max_x - start_x, (cy - start_y) + lh);
 }
 
 void gfx_char(i32 x, i32 y, char c, u32 fg, u32 bg) {
+    if (c < FONT_FIRST_CH || c > FONT_LAST_CH) c = '?';
     char buf[2] = { c, '\0' };
     draw_text(x, y, buf, fg, bg, FONT_BODY, false);
 }

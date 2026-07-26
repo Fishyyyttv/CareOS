@@ -163,9 +163,16 @@ typedef enum {
 
 /* Active font metrics. Variables, not constants -- font_set_family() updates
  * them. No call site uses these in a constant expression, so every existing
- * user keeps compiling unchanged. */
-#define FONT_W  GFX_FONT_W
-#define FONT_H  GFX_FONT_H
+ * user keeps compiling unchanged.
+ *
+ * The (i32) cast is load-bearing, not decoration. These were the plain-int
+ * literals 8 and 13; GFX_FONT_W/H are u32. Without the cast, any surrounding
+ * `int - FONT_H` promotes to unsigned, so a negative intermediate wraps to
+ * ~4.29e9 and a following /2 yields ~2.1e9 -- e.g. centring a text row inside
+ * a bar shorter than the line height. Casting back to i32 preserves the exact
+ * signed arithmetic every call site was written against. */
+#define FONT_W  ((i32)GFX_FONT_W)
+#define FONT_H  ((i32)GFX_FONT_H)
 
 void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size);
 void gfx_str_centered_ex(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg, font_size_t size);
