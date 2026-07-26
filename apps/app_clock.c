@@ -85,5 +85,8 @@ void app_clock_draw(window_t *w){
     const char *mn = (t.month >= 1 && t.month <= 12) ? mon_names[t.month - 1] : "---";
     char yr[6]; kutoa(t.year, yr, 10);
     ksprintf(date_str, "%s %d, %s", mn, (int)t.day, yr);
-    gfx_str_centered(cr.x, cy + r + 36, cr.w, date_str, COL_DIM, COL_TRANSPARENT);
+    /* The digital time is FONT_H3; the date has to clear that line height, not
+     * the 18px the old bitmap H3 happened to occupy. */
+    gfx_str_centered(cr.x, cy + r + 18 + gfx_line_h_ex(FONT_H3) + 2, cr.w,
+                     date_str, COL_DIM, COL_TRANSPARENT);
 }

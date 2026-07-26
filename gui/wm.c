@@ -181,7 +181,21 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     switch (app) {
     case APP_CALC:     *w = 320; *h = 440; return;
     case APP_CLOCK:    *w = 280; *h = 240; return;
-    case APP_ABOUT:    *w = 460; *h = 340; return;
+    case APP_ABOUT: {
+        /* app_about_draw stacks a logo, an H2 wordmark, a version line, a
+         * rule, six info rows and a footer, all on the live line height. A
+         * flat 340 already truncated the last rows and gets worse the taller
+         * the face, so mirror that stack here. */
+        i32 lh   = FONT_H * (i32)GFX_FONT_SCALE;
+        i32 logo = 36 * (i32)GFX_FONT_SCALE;
+        *w = 460;
+        *h = TITLEBAR_H + 24 + 2 * logo + 18   /* logo block + gap */
+           + 2 * lh + 4                        /* H2 wordmark row */
+           + lh + 16                           /* version line + gap */
+           + 14 + 6 * (lh + 8)                 /* rule + six info rows */
+           + 8 + 12 + lh + 20;                 /* rule + footer + padding */
+        return;
+    }
     case APP_PAINT:    *w = sw*75/100; *h = sh*75/100; return;
     case APP_DOOM:     *w = 640; *h = 400 + TITLEBAR_H; return; /* 640x400 client + titlebar */
     default:           *w = sw*65/100; *h = sh*70/100; return;

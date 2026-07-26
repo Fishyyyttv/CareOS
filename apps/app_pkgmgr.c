@@ -13,8 +13,11 @@
 #define PKG_SEP_Y      (PKG_TAB_Y + PKG_TAB_H + 2)
 #define PKG_CONTENT_Y  (PKG_SEP_Y + 1)
 #define PKG_ROW_H      26
-#define PKG_COL_H      20
+/* Column-header band: one body line plus padding. A flat 20 clipped the
+ * glyph bottoms as soon as the line height went past it. */
+#define PKG_COL_H      (FONT_H * (i32)GFX_FONT_SCALE + 8)
 #define PKG_SB_H       24
+#define PKG_LINE_H     (FONT_H * (i32)GFX_FONT_SCALE + 2)
 
 /* Create-tab sub-layout (relative to PKG_CONTENT_Y) */
 #define PKG_CR_TITLE_H  28
@@ -100,7 +103,7 @@ void app_pkgmgr_draw(window_t *w){
         }
         if (shown == 0) {
             gfx_str(cr.x + 14, y + 12, "No packages installed.", g_theme->muted, COL_SURFACE);
-            gfx_str(cr.x + 14, y + 28, "Switch to 'Install' tab to add packages.", g_theme->dim, COL_SURFACE);
+            gfx_str(cr.x + 14, y + 12 + PKG_LINE_H, "Switch to 'Install' tab to add packages.", g_theme->dim, COL_SURFACE);
         }
 
     } else if (w->pkgmgr_tab == PKG_TAB_INSTALL) {
@@ -165,7 +168,7 @@ void app_pkgmgr_draw(window_t *w){
         gfx_hline(cr.x + 8, y, cr.w - 16, COL_BORDER);
         y += 10;
         gfx_str(cr.x + 12, y, "Output: /tmp/<name>.care", g_theme->dim, COL_SURFACE);
-        y += 16;
+        y += PKG_LINE_H;
         gfx_str(cr.x + 12, y, "Edit in Editor app, then install from 'Install' tab.",
                 g_theme->muted, COL_SURFACE);
 
@@ -201,7 +204,7 @@ void app_pkgmgr_draw(window_t *w){
             u32 col = (lines[i][0] == '.' || lines[i][0] == 'c') ? COL_PRIMARY :
                       (lines[i][0] == ' ') ? COL_ACCENT : COL_TEXT;
             gfx_str(cr.x + 12, y, lines[i], col, COL_SURFACE);
-            y += 15;
+            y += PKG_LINE_H;
         }
     }
 

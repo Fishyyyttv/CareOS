@@ -65,7 +65,7 @@ static void draw_boot_splash(int done, u32 tick) {
     gfx_str_centered_ex(0, sh / 2 - 83, sw, "OS", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
 
     gfx_str_centered_ex(0, sh / 2 + 12, sw, "CareOS", COL_WHITE, COL_TRANSPARENT, FONT_H1);
-    gfx_str_centered(0, sh / 2 + 48, sw,
+    gfx_str_centered(0, sh / 2 + 12 + gfx_line_h_ex(FONT_H1) + 2, sw,
         "Performance focused desktop operating environment",
         COL_DIM, COL_TRANSPARENT);
 
@@ -85,15 +85,17 @@ static void draw_boot_splash(int done, u32 tick) {
         gfx_circle_fill(dx, by + bar_h / 2, 4, dc);
     }
 
-    gfx_str_centered(0, by + 20, sw,
-        (done >= BOOT_STAGE_COUNT) ? "Boot sequence complete" : BOOT_STAGES[done],
-        COL_TEXT, COL_TRANSPARENT);
-
     {
+        i32 lh      = FONT_H * (i32)GFX_FONT_SCALE;
+        i32 stage_y = by + bar_h + 11;
+        gfx_str_centered(0, stage_y, sw,
+            (done >= BOOT_STAGE_COUNT) ? "Boot sequence complete" : BOOT_STAGES[done],
+            COL_TEXT, COL_TRANSPARENT);
+
         const char spin[] = "|/-\\";
         char spin_buf[24] = "Loader: [ ]";
         spin_buf[9] = spin[tick % 4];
-        gfx_str_centered(0, by + 34, sw, spin_buf, COL_MUTED, COL_TRANSPARENT);
+        gfx_str_centered(0, stage_y + lh + 2, sw, spin_buf, COL_MUTED, COL_TRANSPARENT);
     }
 
     gfx_str_centered(0, sh - 22, sw,
@@ -246,6 +248,14 @@ typedef struct {
     rect_t status_bar;
     button_t primary_btn;
     button_t secondary_btn;
+    /* Text baselines derived from the live line height, so draw_login_screen
+     * and the hit-testing layout can never drift apart. */
+    i32 wordmark_y;
+    i32 title_y;
+    i32 subtitle_y;
+    i32 label_dy;     /* how far a field's label sits above the field top */
+    i32 status_ty;
+    i32 footer_y;
 } login_layout_t;
 
 static void login_set_status(login_state_t *s, const char *msg, u32 color) {
@@ -285,12 +295,31 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         py = 38;
     }
 
+    /* Every text row in the card is stacked from the live line heights. With
+     * the old 13px body face the numbers came out at the hand-tuned values
+     * this layout used to hardcode (188/252 fields, 136/156 headings); with a
+     * 17px face they spread instead of the subtitle descenders landing in the
+     * "Username" label and the footer sitting on the card's bottom edge. */
+    i32 lh       = FONT_H * (i32)GFX_FONT_SCALE;
+    i32 status_h = lh + 9;
+
     l.panel = rect_make(px, py, pw, ph);
     l.avatar = rect_make(px + pw / 2 - 30, py + 28, 60, 60);
-    l.user_field = rect_make(px + 42, py + 188, pw - 84, 38);
-    l.pass_field = rect_make(px + 42, py + 252, pw - 84, 38);
+
+    l.wordmark_y = py + 98;
+    l.title_y    = l.wordmark_y + gfx_line_h_ex(FONT_H2) + 12;
+    l.subtitle_y = l.title_y + lh + 3;
+    l.label_dy   = lh + 5;
+
+    l.user_field = rect_make(px + 42, l.subtitle_y + lh + 4 + l.label_dy, pw - 84, 38);
+    l.pass_field = rect_make(px + 42, l.user_field.y + 64, pw - 84, 38);
+
+    l.footer_y   = py + ph - lh - 8;
+    l.status_bar = rect_make(px + 42, l.footer_y - status_h - 8, pw - 84, status_h);
+    l.status_ty  = l.status_bar.y + (status_h - lh) / 2;
+
     l.primary_btn = (button_t){
-        .rect = rect_make(px + 42, py + ph - 98, btn_w, 36),
+        .rect = rect_make(px + 42, l.status_bar.y - 48, btn_w, 36),
         .hover = false,
         .pressed = false,
         .active = true,
@@ -298,7 +327,7 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         .fg = COL_WHITE,
     };
     l.secondary_btn = (button_t){
-        .rect = rect_make(px + 42 + btn_w + btn_gap, py + ph - 98, btn_w, 36),
+        .rect = rect_make(px + 42 + btn_w + btn_gap, l.status_bar.y - 48, btn_w, 36),
         .hover = false,
         .pressed = false,
         .active = false,
@@ -312,7 +341,6 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         kstrcpy(l.primary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Sign In" : "Create Account");
         kstrcpy(l.secondary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Create Account" : "Back To Sign In");
     }
-    l.status_bar = rect_make(px + 42, py + ph - 50, pw - 84, 26);
     return l;
 }
 
@@ -342,7 +370,7 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     gfx_circle_fill(l.avatar.x + l.avatar.w / 2 + 4, l.avatar.y + l.avatar.h / 2,
                     l.avatar.w / 2 - 12, COL_SURFACE);
     gfx_str_centered_ex(l.avatar.x, l.avatar.y + 15, l.avatar.w, "C", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
-    gfx_str_centered_ex(l.panel.x, l.panel.y + 98, l.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+    gfx_str_centered_ex(l.panel.x, l.wordmark_y, l.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
 
     if (s->mode == LOGIN_MODE_MUST_CHANGE) {
         kstrcpy(title, "Change Your Password");
@@ -354,16 +382,16 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
             : "Set up a new secure local profile");
     }
 
-    gfx_str_centered(l.panel.x, l.panel.y + 136, l.panel.w, title, COL_TEXT, COL_TRANSPARENT);
-    gfx_str_centered(l.panel.x, l.panel.y + 156, l.panel.w, subtitle, COL_DIM, COL_TRANSPARENT);
+    gfx_str_centered(l.panel.x, l.title_y, l.panel.w, title, COL_TEXT, COL_TRANSPARENT);
+    gfx_str_centered(l.panel.x, l.subtitle_y, l.panel.w, subtitle, COL_DIM, COL_TRANSPARENT);
 
     /* Inputs */
     if (s->mode == LOGIN_MODE_MUST_CHANGE) {
-        gfx_str(l.user_field.x, l.user_field.y - 20, "New Password", COL_MUTED, COL_TRANSPARENT);
-        gfx_str(l.pass_field.x, l.pass_field.y - 20, "Confirm Password", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.user_field.x, l.user_field.y - l.label_dy, "New Password", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.pass_field.x, l.pass_field.y - l.label_dy, "Confirm Password", COL_MUTED, COL_TRANSPARENT);
     } else {
-        gfx_str(l.user_field.x, l.user_field.y - 20, "Username", COL_MUTED, COL_TRANSPARENT);
-        gfx_str(l.pass_field.x, l.pass_field.y - 20, "Password", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.user_field.x, l.user_field.y - l.label_dy, "Username", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.pass_field.x, l.pass_field.y - l.label_dy, "Password", COL_MUTED, COL_TRANSPARENT);
     }
 
     {
@@ -411,9 +439,9 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
 
     /* Footer / Status */
     gfx_rect_rounded(l.status_bar.x, l.status_bar.y, l.status_bar.w, l.status_bar.h, 12, COL_SURFACE2);
-    gfx_str_centered(l.status_bar.x, l.status_bar.y + 7, l.status_bar.w, s->status, s->status_color, COL_TRANSPARENT);
+    gfx_str_centered(l.status_bar.x, l.status_ty, l.status_bar.w, s->status, s->status_color, COL_TRANSPARENT);
 
-    gfx_str_centered(l.panel.x, l.panel.y + l.panel.h - 20, l.panel.w,
+    gfx_str_centered(l.panel.x, l.footer_y, l.panel.w,
                      "CareOS v9 secure desktop", COL_MUTED, COL_TRANSPARENT);
 }
 
@@ -566,10 +594,15 @@ static void desktop_fade_in(mouse_t *mouse) {
 static void run_matrix_screensaver(mouse_t *mouse) {
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
+    /* The rain falls one text line per frame and the green trail sits exactly
+     * one line above the white head, so the vertical step is the live line
+     * height. The 14px column pitch stays put -- that is horizontal spacing
+     * and the body advance has not changed. */
+    i32 cell = FONT_H * (i32)GFX_FONT_SCALE;
     u32 cols = sw / 14;
     if (cols > 256) cols = 256;
     static i32 drops[256];
-    for (u32 i = 0; i < cols; i++) drops[i] = -((i32)((timer_get_ticks() + i * 17) % sh) / 14);
+    for (u32 i = 0; i < cols; i++) drops[i] = -((i32)((timer_get_ticks() + i * 17) % sh) / cell);
 
     mouse_update(mouse);
     keyboard_flush();
@@ -590,10 +623,10 @@ static void run_matrix_screensaver(mouse_t *mouse) {
             str[0] = 33 + (timer_get_ticks() / 10 + i * 17) % 94; 
             str[1] = 0;
             
-            i32 dy = drops[i] * 14;
+            i32 dy = drops[i] * cell;
             if (dy > 0) {
-                gfx_str_bg_none(i * 14, dy, str, COL_WHITE); /* Leading char is white */
-                gfx_str_bg_none(i * 14, dy - 14, str, COL_GREEN); /* Trail is green */
+                gfx_str_bg_none((i32)i * 14, dy, str, COL_WHITE); /* Leading char is white */
+                gfx_str_bg_none((i32)i * 14, dy - cell, str, COL_GREEN); /* Trail is green */
             }
             drops[i]++;
             if (dy > sh && ((timer_get_ticks() + i) % 100 > 95)) drops[i] = 0;

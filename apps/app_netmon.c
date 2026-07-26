@@ -25,11 +25,12 @@ void app_netmon_draw(window_t *w){
     u32 badge_col = up ? rgb(0x06, 0x2e, 0x14) : rgb(0x2e, 0x08, 0x08);
     u32 badge_txt = up ? COL_GREEN : COL_RED;
     i32 badge_w = 80 + 4 * sc;
+    i32 badge_h = FONT_H * sc + 6;
     i32 badge_x = cr.x + cr.w - badge_w - 12;
-    i32 badge_y = cr.y + hdr_h / 2 - 9;
-    gfx_rect_rounded(badge_x, badge_y, badge_w, 18, 9, badge_col);
-    gfx_set_clip(badge_x + 2, badge_y, badge_w - 4, 18);
-    gfx_str_centered(badge_x, badge_y + 4, badge_w, up ? "Connected" : "Offline",
+    i32 badge_y = cr.y + hdr_h / 2 - badge_h / 2;
+    gfx_rect_rounded(badge_x, badge_y, badge_w, badge_h, badge_h / 2, badge_col);
+    gfx_set_clip(badge_x + 2, badge_y, badge_w - 4, badge_h);
+    gfx_str_centered(badge_x, badge_y + 3, badge_w, up ? "Connected" : "Offline",
                      badge_txt, COL_TRANSPARENT);
     gfx_clear_clip();
 
@@ -55,7 +56,9 @@ void app_netmon_draw(window_t *w){
     /* Graph area: split remaining height between RX and TX */
     i32 pad = 14;
     i32 gw  = cr.w - pad * 2;
-    i32 lbl_h = 16 + 4 * sc;
+    /* The RX/TX captions are FONT_H2. A flat 16+4*sc reserved 20px for a 26px
+     * line, so the graph below sliced the descenders off both labels. */
+    i32 lbl_h = gfx_line_h_ex(FONT_H2) + 4;
     i32 remaining = cr.h - (y - cr.y) - 8;
     i32 gh  = remaining / 2 - lbl_h - 8;
     if (gh < 30) gh = 30;

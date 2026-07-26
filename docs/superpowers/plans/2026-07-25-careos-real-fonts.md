@@ -95,11 +95,15 @@ Expected: both `.ttf` files present (~200 KB each) and `OFL.txt` present.
 Create `tools/requirements.txt`:
 
 ```
-freetype-py==2.13.2
+freetype-py==2.5.1
 Pillow==10.4.0
 ```
 
 Pillow is required only by `gen-font.py --preview`; freetype-py does the rasterizing.
+
+Note: `freetype.version()` returns `(2, 13, 2)` — that is the bundled FreeType **C
+library** version, not the pip package version. The pip package is `2.5.1`. Do not
+pin `freetype-py==2.13.2`; no such release exists.
 
 Then:
 
@@ -156,7 +160,9 @@ git commit -m "feat(fonts): vendor JetBrains Mono v2.304 (OFL 1.1) and pin font 
 
 **Interfaces:**
 - Consumes: `fonts/JetBrainsMono-Regular.ttf` from Task 1
-- Produces: module-level functions `build_face(ttf_path, px) -> Face` and `emit_c(families, out_path)`; a `Face` dataclass with fields `px, advance, line_h, baseline, glyphs, coverage`; a `Glyph` dataclass with `w, h, bearing_x, bearing_y, offset`. CLI: `gen-font.py TTF --name NAME --symbol SYM --sizes 11,13,16,20,28 --out FILE [--preview PNG]`
+- Produces: module-level functions `build_face(ttf_path, px) -> Face` and `emit_c(name, symbol, faces, out_path, src_note)`; a `Face` dataclass with fields `px, advance, line_h, baseline, glyphs, coverage`; a `Glyph` dataclass with `w, h, bearing_x, bearing_y, offset`. CLI: `gen-font.py TTF --name NAME --symbol SYM --sizes 11,13,16,20,28 --out FILE [--preview PNG]`
+- Range safety: every value emitted into a `u8` struct field (`px`, `advance`, `line_h`, `baseline`, `glyph.w`, `glyph.h`) must be range-checked at generation time, and every `i8` field (`bearing_x`, `bearing_y`) checked against -128..127. Silent truncation into the C structs must be impossible.
+- `--sizes` must be exactly 5 values in strictly ascending order, so slot 0 is always the smallest (CAPTION) and slot 4 the largest (H1). The exact numbers may vary per typeface; the ordering may not.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -180,8 +186,30 @@ def test_face_has_95_glyphs():
 
 
 def test_advance_is_uniform_monospace():
+    # build_face() hard-fails on a non-monospace font, so reaching here at all
+    # proves uniformity. Pin the actual measured value so a silent metric
+    # regression (wrong size, wrong font file) is caught too: JetBrains Mono
+    # v2.304 at 13px measures advance=8, ascender=14, height=17.
     face = gen.build_face(str(TTF), 13)
-    assert face.advance > 0
+    assert face.advance == 8
+    assert face.baseline == 14
+    assert face.line_h == 17
+
+
+def test_non_monospace_font_is_rejected(tmp_path, monkeypatch):
+    """build_face must refuse a proportional font rather than silently
+    picking one glyph's advance — ~120 layout sites depend on fixed advance."""
+    real_load = gen.freetype.Face.load_char
+    calls = {"n": 0}
+
+    def fake_load(self, ch, flags):
+        real_load(self, ch, flags)
+        calls["n"] += 1
+        self.glyph.advance.x = (7 + calls["n"] % 2) << 6   # alternate 7/8
+
+    monkeypatch.setattr(gen.freetype.Face, "load_char", fake_load)
+    with pytest.raises(SystemExit):
+        gen.build_face(str(TTF), 13)
 
 
 def test_coverage_length_matches_sum_of_glyph_areas():

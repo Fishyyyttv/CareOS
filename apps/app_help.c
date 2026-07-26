@@ -1,7 +1,11 @@
 /* CareOS v9 -- apps/app_help.c -- Help viewer */
 #include "apps_common.h"
 
-#define HELP_HDR_H  46
+/* H2 title over a BODY subtitle. 46 was enough for the old 13px faces; the
+ * live line heights have to drive it or the two rows overlap. */
+#define HELP_TITLE_Y 10
+#define HELP_SUB_Y   (HELP_TITLE_Y + gfx_line_h_ex(FONT_H2) + 2)
+#define HELP_HDR_H   (HELP_SUB_Y + FONT_H * (i32)GFX_FONT_SCALE + 6)
 
 void app_help_init(window_t *w){
     win_clear(w);
@@ -79,8 +83,8 @@ void app_help_draw(window_t *w){
     /* Header */
     gfx_gradient_rect(cr.x, cr.y, cr.w, HELP_HDR_H, g_theme->surface3, COL_SURFACE);
     gfx_hline(cr.x, cr.y + HELP_HDR_H, cr.w, COL_BORDER);
-    gfx_str_ex(cr.x + 14, cr.y + 10, "Help & Reference", COL_TEXT, COL_TRANSPARENT, FONT_H2);
-    gfx_str(cr.x + 14, cr.y + 28, "CareOS v9  --  j/Space scroll down, k scroll up",
+    gfx_str_ex(cr.x + 14, cr.y + HELP_TITLE_Y, "Help & Reference", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+    gfx_str(cr.x + 14, cr.y + HELP_SUB_Y, "CareOS v9  --  j/Space scroll down, k scroll up",
             g_theme->muted, COL_TRANSPARENT);
 
     /* Scrollable content with per-line colour */

@@ -11,6 +11,11 @@
 #define FM_TB  (16 + 14 * (i32)GFX_FONT_SCALE)
 #define FM_ROW (14 + 10 * (i32)GFX_FONT_SCALE)
 #define FM_SB_ITEMS 6
+/* Column-header band and status bar hold one line of body text. Both were 16
+ * and 20 flat, which clipped the glyph bottoms once the line height passed
+ * them; derive so they track whichever family is active. */
+#define FM_HDR (FONT_H * (i32)GFX_FONT_SCALE + 6)
+#define FM_STA (FONT_H * (i32)GFX_FONT_SCALE + 7)
 
 static const char *FM_PLACES[FM_SB_ITEMS] = {"/","~","/home","/etc","/usr/bin","/var/log"};
 
@@ -133,13 +138,13 @@ void app_files_draw(window_t *w){
 
     /* Column headers */
     i32 list_y = cr.y + FM_TB;
-    gfx_rect(tx,list_y,cr.w-FM_SB,16,COL_SURFACE3);
+    gfx_rect(tx,list_y,cr.w-FM_SB,FM_HDR,COL_SURFACE3);
     gfx_str(tx+24,list_y+3,"Name",COL_DIM,COL_SURFACE3);
     gfx_str_right(tx,list_y+3,list_rw-8,"Size",COL_DIM,COL_SURFACE3);
-    gfx_hline(tx,list_y+16,cr.w-FM_SB,COL_BORDER);
-    list_y += 16;
+    gfx_hline(tx,list_y+FM_HDR,cr.w-FM_SB,COL_BORDER);
+    list_y += FM_HDR;
 
-    i32 list_bottom = cr.y+cr.h - (w->tab!=FM_MODE_BROWSE ? 24 : 0) - 20; /* leave room for status */
+    i32 list_bottom = cr.y+cr.h - (w->tab!=FM_MODE_BROWSE ? 24 : 0) - FM_STA; /* leave room for status */
 
     u32 visible = 0;
     i32 fy = list_y;
@@ -177,8 +182,8 @@ void app_files_draw(window_t *w){
     {
         i32 px = tx + list_rw;
         i32 pw = cr.w - FM_SB - list_rw;
-        i32 pane_y = cr.y + FM_TB + 16;
-        i32 pane_h = cr.h - FM_TB - 16 - 20;
+        i32 pane_y = cr.y + FM_TB + FM_HDR;
+        i32 pane_h = cr.h - FM_TB - FM_HDR - FM_STA;
         gfx_vline(px, pane_y, pane_h, COL_BORDER);
         px++;
         pw--;
@@ -233,7 +238,8 @@ void app_files_draw(window_t *w){
             }
         } else {
             gfx_str(px + 8, pane_y + 20, "Select a file", COL_MUTED, COL_SURFACE2);
-            gfx_str(px + 8, pane_y + 36, "to preview", COL_MUTED, COL_SURFACE2);
+            gfx_str(px + 8, pane_y + 20 + (i32)(FONT_H * GFX_FONT_SCALE) + 2,
+                    "to preview", COL_MUTED, COL_SURFACE2);
         }
     }
 
@@ -242,8 +248,8 @@ void app_files_draw(window_t *w){
         gfx_str(tx+8,list_y+8,"(empty folder)",COL_MUTED,COL_SURFACE);
 
     /* -- Status bar -- */
-    i32 sb_y = cr.y+cr.h-20;
-    gfx_rect(tx,sb_y,cr.w-FM_SB,20,COL_SURFACE3);
+    i32 sb_y = cr.y+cr.h-FM_STA;
+    gfx_rect(tx,sb_y,cr.w-FM_SB,FM_STA,COL_SURFACE3);
     gfx_hline(tx,sb_y,cr.w-FM_SB,COL_BORDER);
     char status[64];
     char cnt[8]; kutoa(w->fm_dir->child_count,cnt,10);
@@ -252,11 +258,11 @@ void app_files_draw(window_t *w){
     if(w->fm_sel < w->fm_dir->child_count){
         kstrcat(status,"  |  "); kstrcat(status,w->fm_dir->children[w->fm_sel]->name);
     }
-    gfx_set_clip(tx+6, sb_y, (cr.w-FM_SB)/2, 20);
+    gfx_set_clip(tx+6, sb_y, (cr.w-FM_SB)/2, FM_STA);
     gfx_str(tx+6,sb_y+4,status,COL_DIM,COL_SURFACE3);
     gfx_clear_clip();
     /* Hint */
-    gfx_set_clip(tx + (cr.w-FM_SB)/2, sb_y, (cr.w-FM_SB)/2 - 4, 20);
+    gfx_set_clip(tx + (cr.w-FM_SB)/2, sb_y, (cr.w-FM_SB)/2 - 4, FM_STA);
     gfx_str_right(tx,sb_y+4,cr.w-FM_SB-4,"^C=copy  ^X=cut  ^V=paste  Del=delete  r=rename",COL_MUTED,COL_SURFACE3);
     gfx_clear_clip();
 }
@@ -438,7 +444,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
 
     /* -- File list -- */
     i32 list_rw_c = (cr.w - FM_SB) * 62 / 100;
-    i32 list_top = cr.y + FM_TB + 16; /* toolbar + column headers (absolute) */
+    i32 list_top = cr.y + FM_TB + FM_HDR; /* toolbar + column headers (absolute) */
     if(y >= list_top && x < cr.x + FM_SB + list_rw_c){
         u32 row = (u32)(y - list_top) / FM_ROW;
         if(w->fm_dir && row < w->fm_dir->child_count){

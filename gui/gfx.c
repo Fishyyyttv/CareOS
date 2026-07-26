@@ -407,6 +407,10 @@ i32 gfx_str_width_ex(const char *s, font_size_t size) {
     return (i32)(kstrlen(s) * font_face_at((u32)size)->advance * GFX_FONT_SCALE);
 }
 
+i32 gfx_line_h_ex(font_size_t size) {
+    return (i32)font_face_at((u32)size)->line_h * (i32)GFX_FONT_SCALE;
+}
+
 void gfx_str(i32 x, i32 y, const char *s, u32 fg, u32 bg) {
     gfx_str_ex(x, y, s, fg, bg, FONT_BODY);
 }
@@ -640,16 +644,30 @@ void notify_push(const char *title, const char *body, u32 icon_color) {
 }
 void notify_tick(void) { u32 now = timer_get_ticks(); for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active && now - notifs[i].born_tick > 500) notifs[i].active = false; }
 void notify_draw(void) {
+    /* Toast geometry follows the live font: an H3 title over a BODY line.
+     * Both the box height and the title/body split have to track those two
+     * line heights, or the title runs into the body (JetBrains Mono H3 is 21px
+     * against the 13px the old bitmap face used).
+     *
+     * The stack also starts below TOPBAR_H. gui_run() paints the menu bar
+     * after wm_draw_all() -> notify_draw(), so anything drawn above that line
+     * is covered by an opaque bar. */
+    i32 pad      = 12;
+    i32 title_lh = gfx_line_h_ex(FONT_H3);
+    i32 body_lh  = gfx_line_h_ex(FONT_BODY);
+    i32 nw = 264;
+    i32 nh = pad + title_lh + 4 + body_lh + pad;
     int slot = 0;
     for (int i = 0; i < MAX_NOTIFICATIONS; i++) {
         if (!notifs[i].active) continue;
-        i32 nw=264, nh=62; i32 nx = (i32)SCREEN_W - nw - 12; i32 ny = 12 + slot*(nh+8);
+        i32 nx = (i32)SCREEN_W - nw - 12;
+        i32 ny = TOPBAR_H + 12 + slot*(nh+8);
         u32 now = timer_get_ticks(); u32 age = now - notifs[i].born_tick; u32 life = 500;
         u32 pct = (age < life) ? (100 * (life - age) / life) : 0;
         gfx_rect_rounded(nx, ny, nw, nh, 12, COL_SURFACE);
         gfx_rect_rounded_outline(nx, ny, nw, nh, 12, COL_BORDER);
-        gfx_str_ex(nx+12, ny+12, notifs[i].title, COL_TEXT, COL_TRANSPARENT, FONT_H3);
-        gfx_str_clipped(nx+12, ny+34, nw-24, notifs[i].body, COL_DIM, COL_TRANSPARENT);
+        gfx_str_ex(nx+12, ny+pad, notifs[i].title, COL_TEXT, COL_TRANSPARENT, FONT_H3);
+        gfx_str_clipped(nx+12, ny+pad+title_lh+4, nw-24, notifs[i].body, COL_DIM, COL_TRANSPARENT);
         slot++;
     }
 }

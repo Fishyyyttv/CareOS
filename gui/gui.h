@@ -174,6 +174,13 @@ typedef enum {
 #define FONT_W  ((i32)GFX_FONT_W)
 #define FONT_H  ((i32)GFX_FONT_H)
 
+/* Line height of any text size, in device pixels, GFX_FONT_SCALE applied.
+ * FONT_H only covers FONT_BODY; headings have their own line heights and they
+ * are not a fixed multiple of the body one (JetBrains Mono H3 is 21 where BODY
+ * is 17; Classic is 13 for both). Layouts that stack a heading above body text
+ * must ask for the heading's own height or the two rows collide. */
+i32 gfx_line_h_ex(font_size_t size);
+
 void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size);
 void gfx_str_centered_ex(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg, font_size_t size);
 i32  gfx_str_width_ex(const char *s, font_size_t size);
