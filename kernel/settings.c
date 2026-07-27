@@ -1,8 +1,17 @@
 #include "kernel.h"
 #include "font.h"
 
+/* Accent colour engine lives in gui/theme.c (declared in gui.h, which the
+ * kernel-side settings.c does not include). Forward-declare the two entry
+ * points we call; the signatures match gui.h exactly. */
+void theme_set_accent(u32 idx);
+u32  theme_accent_count(void);
+/* Dropping the cached wallpaper here catches every caller that changes the
+ * backdrop -- settings app, terminal, shell, and CareLang scripts alike. */
+void gfx_wallpaper_cache_invalidate(void);
+
 #define SETTINGS_MAGIC    0x43535447u /* CSTG */
-#define SETTINGS_VERSION  4u
+#define SETTINGS_VERSION  5u
 
 typedef struct __attribute__((packed)) {
     u32 magic;
@@ -68,6 +77,25 @@ typedef struct __attribute__((packed)) {
     u32 font_family;
 } settings_blob_v4_t;
 
+typedef struct __attribute__((packed)) {
+    u32 magic;
+    u32 version;
+    u32 checksum;
+    u32 theme;
+    u32 mouse_sensitivity;
+    u32 boot_fast;
+    u32 clock_24h;
+    u32 wallpaper;
+    u32 taskbar_centered;
+    u32 vesa_w;
+    u32 vesa_h;
+    u8  wifi_connected;
+    char wifi_ssid[32];
+    char wifi_pass[64];
+    u32 font_family;
+    u32 accent;
+} settings_blob_v5_t;
+
 static careos_settings_t g_settings;
 static u8 settings_io[CAREOS_DISK_SETTINGS_SECTORS * 512u];
 
@@ -99,10 +127,13 @@ static void settings_defaults(void) {
     g_settings.clock_24h = 1;
     g_settings.wallpaper = 0;
     g_settings.taskbar_centered = 1;
+    g_settings.vesa_w = 1920;
+    g_settings.vesa_h = 1080;
     g_settings.wifi_connected = false;
     g_settings.wifi_ssid[0] = '\0';
     g_settings.wifi_pass[0] = '\0';
     g_settings.font_family = 0;
+    g_settings.accent = 0;
 }
 
 static void settings_clamp(void) {
@@ -112,6 +143,7 @@ static void settings_clamp(void) {
     if (g_settings.wallpaper > 5) g_settings.wallpaper = 0;
     g_settings.taskbar_centered = g_settings.taskbar_centered ? 1u : 0u;
     if (g_settings.font_family >= font_registry_count()) g_settings.font_family = 0;
+    if (g_settings.accent >= theme_accent_count()) g_settings.accent = 0;
 }
 
 static void settings_save(void) {
@@ -119,7 +151,7 @@ static void settings_save(void) {
 
     kmemset(settings_io, 0, sizeof(settings_io));
 
-    settings_blob_v4_t *b = (settings_blob_v4_t*)settings_io;
+    settings_blob_v5_t *b = (settings_blob_v5_t*)settings_io;
     b->magic = SETTINGS_MAGIC;
     b->version = SETTINGS_VERSION;
     b->theme = g_settings.theme;
@@ -136,6 +168,7 @@ static void settings_save(void) {
     kstrncpy(b->wifi_pass, g_settings.wifi_pass, sizeof(b->wifi_pass) - 1);
     b->wifi_pass[sizeof(b->wifi_pass) - 1] = '\0';
     b->font_family = g_settings.font_family;
+    b->accent = g_settings.accent;
 
     b->checksum = 0;
     b->checksum = fnv1a32((const u8*)b, sizeof(*b));
@@ -216,6 +249,32 @@ static bool settings_load_v4(const settings_blob_v4_t *b) {
     return true;
 }
 
+static bool settings_load_v5(const settings_blob_v5_t *b) {
+    u32 expect = b->checksum;
+    settings_blob_v5_t temp;
+    kmemcpy(&temp, b, sizeof(temp));
+    temp.checksum = 0;
+    if (fnv1a32((const u8*)&temp, sizeof(temp)) != expect) return false;
+
+    g_settings.theme = b->theme;
+    g_settings.mouse_sensitivity = b->mouse_sensitivity;
+    g_settings.boot_fast = b->boot_fast ? 1u : 0u;
+    g_settings.clock_24h = b->clock_24h ? 1u : 0u;
+    g_settings.wallpaper = b->wallpaper;
+    g_settings.taskbar_centered = b->taskbar_centered ? 1u : 0u;
+    g_settings.vesa_w = b->vesa_w;
+    g_settings.vesa_h = b->vesa_h;
+    g_settings.wifi_connected = b->wifi_connected ? true : false;
+    kstrncpy(g_settings.wifi_ssid, b->wifi_ssid, sizeof(g_settings.wifi_ssid) - 1);
+    g_settings.wifi_ssid[sizeof(g_settings.wifi_ssid) - 1] = '\0';
+    kstrncpy(g_settings.wifi_pass, b->wifi_pass, sizeof(g_settings.wifi_pass) - 1);
+    g_settings.wifi_pass[sizeof(g_settings.wifi_pass) - 1] = '\0';
+    g_settings.font_family = b->font_family;
+    g_settings.accent = b->accent;
+    settings_clamp();
+    return true;
+}
+
 static bool settings_load_v1(const settings_blob_v1_t *b) {
     u32 expect = b->checksum;
     settings_blob_v1_t temp;
@@ -243,6 +302,7 @@ void settings_init(void) {
 
     if (!settings_available()) {
         serial_write("[settings] storage unavailable, using defaults\n");
+        theme_set_accent(g_settings.accent);
         return;
     }
 
@@ -251,6 +311,7 @@ void settings_init(void) {
         if (ata_read_sectors(lba + i, 1, settings_io + i * 512u) != 0) {
             serial_write("[settings] read failed, using defaults\n");
             settings_save();
+            theme_set_accent(g_settings.accent);
             return;
         }
     }
@@ -261,38 +322,55 @@ void settings_init(void) {
     if (magic != SETTINGS_MAGIC) {
         serial_write("[settings] no prior settings, writing defaults\n");
         settings_save();
+        theme_set_accent(g_settings.accent);
         return;
     }
 
-    if (version == SETTINGS_VERSION && settings_load_v4((const settings_blob_v4_t*)settings_io)) {
-        serial_write("[settings] loaded v4 settings from disk\n");
+    if (version == SETTINGS_VERSION && settings_load_v5((const settings_blob_v5_t*)settings_io)) {
+        serial_write("[settings] loaded v5 settings from disk\n");
+        theme_set_accent(g_settings.accent);
+        return;
+    }
+
+    if (version == 4u && settings_load_v4((const settings_blob_v4_t*)settings_io)) {
+        g_settings.accent = 0u;   /* default to Blue */
+        serial_write("[settings] migrated v4 settings to v5\n");
+        settings_save();
+        theme_set_accent(g_settings.accent);
         return;
     }
 
     if (version == 3u && settings_load_v3((const settings_blob_v3_t*)settings_io)) {
         g_settings.font_family = 0u;   /* default to JetBrains Mono */
-        serial_write("[settings] migrated v3 settings to v4\n");
+        g_settings.accent = 0u;
+        serial_write("[settings] migrated v3 settings to v5\n");
         settings_save();
+        theme_set_accent(g_settings.accent);
         return;
     }
 
     if (version == 2u && settings_load_v2((const settings_blob_v2_t*)settings_io)) {
         g_settings.font_family = 0u;
-        serial_write("[settings] migrated v2 settings to v4\n");
+        g_settings.accent = 0u;
+        serial_write("[settings] migrated v2 settings to v5\n");
         settings_save();
+        theme_set_accent(g_settings.accent);
         return;
     }
 
     if (version == 1u && settings_load_v1((const settings_blob_v1_t*)settings_io)) {
         g_settings.font_family = 0u;
-        serial_write("[settings] migrated v1 settings to v4\n");
+        g_settings.accent = 0u;
+        serial_write("[settings] migrated v1 settings to v5\n");
         settings_save();
+        theme_set_accent(g_settings.accent);
         return;
     }
 
     serial_write("[settings] checksum mismatch, using defaults\n");
     settings_defaults();
     settings_save();
+    theme_set_accent(g_settings.accent);
 }
 
 const careos_settings_t *settings_get(void) {
@@ -325,6 +403,14 @@ void settings_set_wallpaper(u32 wallpaper) {
     g_settings.wallpaper = wallpaper;
     settings_clamp();
     settings_save();
+    gfx_wallpaper_cache_invalidate();
+}
+
+void settings_set_accent(u32 accent) {
+    g_settings.accent = accent;
+    settings_clamp();
+    settings_save();
+    theme_set_accent(g_settings.accent);
 }
 
 void settings_set_taskbar_centered(bool centered) {

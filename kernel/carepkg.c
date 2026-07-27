@@ -11,7 +11,7 @@
  *   description=<one-line>
  *   author=<author>
  *   exec=<filename inside package>
- *   icon=<icon-id>   (one of: terminal, notes, editor, files, calc, browser, generic)
+ *   icon=<icon-id | relative path | absolute path>   (see pkg_appdb_publish)
  *   category=<Utilities|Development|Games|System|Network>
  *   permissions=<comma list: net,fs.read,fs.write,gui>
  *   ---FILES---
@@ -20,21 +20,40 @@
  *   <content line 2>
  *   ...
  *   ---ENDFILE---
+ *   FILEB64 <relative-path>
+ *   <base64 line>
+ *   ...
+ *   ---ENDFILE---
  *   ---END---
+ *
+ * FILE sections are line-oriented text and cannot carry a byte with the value
+ * 0x0A, let alone a 0x00 -- which rules out shipping an icon in one. FILEB64
+ * is the same section with a base64 body, decoded on install, and is how a
+ * package delivers its .cri/.bmp artwork. Everything else about the format is
+ * unchanged, so a manifest that uses no FILEB64 section is byte-for-byte the
+ * manifest an older CareOS installed.
  *
  * Install flow:
  *   1. Parse manifest header
  *   2. Create /apps/<name>/ directory
  *   3. Write each FILE section into /apps/<name>/<path>
- *   4. Register in pkg_registry
- *   5. Launcher auto-picks up newly installed apps
+ *   4. Register in pkg_registry           (package bookkeeping — deps, author)
+ *   5. Register in appdb  + appdb_save()  (system-wide app registry)
+ *   6. Launcher auto-picks up newly installed apps, because it iterates appdb
  *
  * Uninstall flow:
  *   1. Remove /apps/<name>/ from VFS
  *   2. Mark registry entry as uninstalled
+ *   3. appdb_remove() + appdb_save()      (drops it from the launcher)
+ *
+ * The two databases are deliberately not merged. carepkg's registry answers
+ * "what packages did we install, from where, with which dependencies" and keeps
+ * tombstones for removed ones; appdb answers "what can the user launch right
+ * now" and holds builtin apps carepkg never installed. See include/appdb.h.
  * ============================================================================= */
 
 #include "kernel.h"
+#include "appdb.h"
 
 /* Scratch buffer size for package parsing and database serialization. These
  * were previously sized by CAREPKG_SCRATCH_MAX, the old inline per-file VFS limit.
@@ -83,6 +102,36 @@ static bool kv(const char *line, const char *key, char *dst, u32 max) {
     return true;
 }
 
+/* ── base64, for FILEB64 payloads ──────────────────────────────────────────
+ * Decodes in place. Output is 3 bytes per 4 input characters, so the write
+ * cursor can never overtake the read cursor and no second buffer is needed.
+ * Anything outside the alphabet -- padding, newlines, stray whitespace from an
+ * editor -- is skipped rather than rejected, which matters because a .care file
+ * is something people hand-edit. */
+static i32 b64_value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static u32 b64_decode_inplace(char *buf, u32 len) {
+    u32 out = 0, acc = 0, bits = 0;
+    for (u32 i = 0; i < len; i++) {
+        i32 v = b64_value(buf[i]);
+        if (v < 0) continue;
+        acc = (acc << 6) | (u32)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            buf[out++] = (char)((acc >> bits) & 0xFFu);
+        }
+    }
+    return out;
+}
+
 /* Ensure /apps/<name> directory exists; return it */
 static fs_node_t *ensure_app_dir(const char *name) {
     fs_node_t *apps = vfs_find(vfs_root(), "apps");
@@ -90,6 +139,114 @@ static fs_node_t *ensure_app_dir(const char *name) {
     fs_node_t *adir = vfs_find(apps, name);
     if (!adir) adir = vfs_mkdir(apps, name);
     return adir;
+}
+
+/* Resolve a manifest icon field into the value appdb should store, using the
+ * same three-way reading gui/icon.c applies when it loads the field back:
+ *
+ *   "browser"            a theme name -- copied through untouched
+ *   "/system/icons/..."  an absolute path -- copied through untouched
+ *   "icon.cri"           a file the package shipped -- rebased onto
+ *                        install_path, so it becomes /apps/browser/icon.cri
+ *
+ * "has a dot" is the test for the third case. It is crude, but it is also
+ * exactly the rule that keeps every manifest written before packages could
+ * ship artwork resolving to its vector glyph: none of the old icon tokens
+ * (terminal, calc, generic...) contains one.
+ *
+ * Returns false only when the rebased path will not fit, leaving out untouched. */
+static bool pkg_icon_path(const care_pkg_t *e, char *out, u32 max) {
+    if (e->icon[0] == '/' || !kstrchr(e->icon, '.')) {
+        kstrncpy(out, e->icon, max - 1);
+        return true;
+    }
+    if ((u32)kstrlen(e->install_path) + 1u + (u32)kstrlen(e->icon) >= max) return false;
+
+    kstrcpy(out, e->install_path);
+    kstrcat(out, "/");
+    kstrcat(out, e->icon);
+    return true;
+}
+
+/* Project a package onto an app-registry entry and publish it.
+ *
+ * exec in the manifest is a filename *inside* the package ("main"); appdb wants
+ * an absolute VFS path, so it is rebased onto install_path here. A manifest
+ * with no exec line still registers — the launcher shows the tile and reports
+ * the missing target on click, which beats a package that installs into a void.
+ *
+ * icon is one of three things, distinguished the same way gui/icon.c reads the
+ * field back:
+ *   "browser"            a theme name, looked up in /system/icons
+ *   "icon.cri"           a file the package shipped, rebased onto install_path
+ *   "/system/icons/..."  an absolute path, taken as-is
+ * The rebasing is what makes `icon=icon.cri` in a manifest mean the obvious
+ * thing. A name with no dot is left alone, so every manifest written before
+ * packages could ship artwork keeps resolving to its vector glyph. */
+static void pkg_appdb_publish(const care_pkg_t *e) {
+    app_entry_t a;
+    kmemset(&a, 0, sizeof(a));
+
+    kstrncpy(a.id,          e->name,        APPDB_ID_MAX - 1);
+    kstrncpy(a.name,        e->name,        APPDB_NAME_MAX - 1);
+    kstrncpy(a.version,     e->version,     APPDB_VERSION_MAX - 1);
+    kstrncpy(a.category,    e->category,    APPDB_CATEGORY_MAX - 1);
+    kstrncpy(a.permissions, e->permissions, APPDB_PERM_MAX - 1);
+
+    if (!pkg_icon_path(e, a.icon, APPDB_ICON_MAX)) {
+        terminal_write("carepkg: icon path too long, using generic: ");
+        terminal_writeln(e->name);
+        kstrcpy(a.icon, "generic");
+    }
+    /* A reinstall writes new bytes to the same path, and the image cache keys
+     * on the path. Drop the old decode or the launcher keeps drawing the
+     * previous version's artwork until the next reboot. Harmless for a theme
+     * name, which never became a cache key in the first place. */
+    res_forget(a.icon);
+
+    /* install_path and exec are both FS_PATH_MAX (256) wide, so the joined path
+     * can outrun a.exec's 128 bytes. Reject rather than kstrcat past the end —
+     * a truncated path resolves to nothing anyway, and this way it says so. */
+    if (e->exec[0]) {
+        u32 need = (u32)kstrlen(e->install_path) + 1 + (u32)kstrlen(e->exec);
+        if (need < APPDB_EXEC_MAX) {
+            kstrcpy(a.exec, e->install_path);
+            kstrcat(a.exec, "/");
+            kstrcat(a.exec, e->exec);
+        } else {
+            terminal_write("carepkg: exec path too long, not registered: ");
+            terminal_writeln(e->name);
+        }
+    }
+
+    /* The only expected failure is an id that collides with a builtin app.
+     * The package stays installed and visible to `carepkg list`; it just never
+     * reaches the launcher, and the user is told why rather than left wondering
+     * where the tile went. */
+    if (appdb_register(&a) == 0) {
+        appdb_save();
+    } else {
+        terminal_write("carepkg: not registered in the app database (name "
+                       "collides with a built-in app): ");
+        terminal_writeln(e->name);
+    }
+}
+
+/* Commit one accumulated FILE/FILEB64 section to /apps/<name>/<fname>.
+ *
+ * The three call sites in the parser (a following FILE, ---ENDFILE---, and
+ * ---END---) previously each carried their own copy of this; a base64 section
+ * has to decode before writing, and three copies of that was three chances to
+ * get it wrong. `content` is mutated when binary, which is fine -- the buffer
+ * is scratch and is reset by the caller immediately after. */
+static void pkg_write_section(fs_node_t *app_dir, const char *fname,
+                              char *content, u32 len, bool binary) {
+    if (!fname[0] || !app_dir) return;
+    if (binary) len = b64_decode_inplace(content, len);
+
+    fs_node_t *f = vfs_find(app_dir, fname);
+    if (!f) f = vfs_mkfile(app_dir, fname);
+    if (f) vfs_write(f, content, len);
 }
 
 /* ── Parse & install a .care/.cpk file ──────────────────────────────────────── */
@@ -108,6 +265,7 @@ static int pkg_install_node(fs_node_t *node) {
     /* Simple state machine: 0=pre-header, 1=header, 2=file-body */
     int state = 0;
     char cur_fname[64] = "";
+    bool cur_binary = false;   /* current section came from FILEB64 */
     char *file_content = (char*)kmalloc(CAREPKG_SCRATCH_MAX);
     if (!file_content) return -1;
     u32  fc_len = 0;
@@ -173,38 +331,32 @@ static int pkg_install_node(fs_node_t *node) {
                     kv(line,"deps",       tmp.deps,       sizeof(tmp.deps));
                 }
             } else if (state == 2) {
-                if (kstrncmp(line,"FILE ",5)==0) {
+                if (kstrncmp(line,"FILE ",5)==0 || kstrncmp(line,"FILEB64 ",8)==0) {
                     /* Save previous file if any */
-                    if (cur_fname[0] && app_dir) {
-                        fs_node_t *f = vfs_find(app_dir, cur_fname);
-                        if (!f) f = vfs_mkfile(app_dir, cur_fname);
-                        if (f) vfs_write(f, file_content, fc_len);
-                    }
-                    kstrncpy(cur_fname, line+5, 63);
+                    pkg_write_section(app_dir, cur_fname, file_content, fc_len, cur_binary);
+                    cur_binary = (line[4] != ' ');          /* "FILEB64 " vs "FILE " */
+                    kstrncpy(cur_fname, line + (cur_binary ? 8 : 5), 63);
                     file_content[0] = '\0';
                     fc_len = 0;
                 } else if (kstrcmp(line,"---ENDFILE---")==0) {
                     /* Save current file */
-                    if (cur_fname[0] && app_dir) {
-                        fs_node_t *f = vfs_find(app_dir, cur_fname);
-                        if (!f) f = vfs_mkfile(app_dir, cur_fname);
-                        if (f) vfs_write(f, file_content, fc_len);
-                    }
+                    pkg_write_section(app_dir, cur_fname, file_content, fc_len, cur_binary);
                     cur_fname[0] = '\0';
+                    cur_binary   = false;
                     file_content[0] = '\0';
                     fc_len = 0;
                 } else if (kstrcmp(line,"---END---")==0) {
                     /* Save last file */
-                    if (cur_fname[0] && app_dir) {
-                        fs_node_t *f = vfs_find(app_dir, cur_fname);
-                        if (!f) f = vfs_mkfile(app_dir, cur_fname);
-                        if (f) vfs_write(f, file_content, fc_len);
-                    }
+                    pkg_write_section(app_dir, cur_fname, file_content, fc_len, cur_binary);
                     break;
                 } else {
-                    /* Accumulate file content */
+                    /* Accumulate file content. Text sections keep the line
+                     * structure; base64 sections must not, because a newline
+                     * inside the payload would decode to a byte that is not
+                     * there. b64_decode_inplace() would skip it either way,
+                     * but not concatenating keeps the buffer honest. */
                     if (fc_len + li + 2 < CAREPKG_SCRATCH_MAX) {
-                        if (fc_len > 0) file_content[fc_len++] = '\n';
+                        if (fc_len > 0 && !cur_binary) file_content[fc_len++] = '\n';
                         kmemcpy(file_content + fc_len, line, kstrlen(line));
                         fc_len += kstrlen(line);
                         file_content[fc_len] = '\0';
@@ -235,6 +387,7 @@ static int pkg_install_node(fs_node_t *node) {
     terminal_write(" v");
     terminal_writeln(tmp.version);
     carepkg_db_save();
+    pkg_appdb_publish(&tmp);
 
 _out:
     kfree(file_content);
@@ -257,12 +410,18 @@ static int pkg_remove(const char *name) {
         terminal_write("carepkg: not installed: "); terminal_writeln(name);
         return -1;
     }
-    /* Remove /apps/<name> */
+    /* Remove /apps/<name>. Drop the icon's cached decode first: the pixels
+     * outlive the file otherwise, and a later package installing to the same
+     * path would inherit this one's artwork. */
+    char icon_path[APPDB_ICON_MAX];
+    if (pkg_icon_path(e, icon_path, sizeof(icon_path))) res_forget(icon_path);
+
     fs_node_t *node = vfs_resolve_path(e->install_path);
     if (node) vfs_delete(node);
     e->installed = false;
     terminal_write("[care] Removed: "); terminal_writeln(name);
     carepkg_db_save();
+    if (appdb_remove(name) == 0) appdb_save();
     return 0;
 }
 
@@ -325,6 +484,11 @@ static void pkg_create(const char *name, const char *version) {
     kstrcat(content, "---FILES---\n");
     kstrcat(content, "FILE main\n");
     kstrcat(content, "echo Hello from "); kstrcat(content, name); kstrcat(content, "\n");
+    kstrcat(content, "---ENDFILE---\n");
+    kstrcat(content, "FILE README.txt\n");
+    kstrcat(content, "To ship an icon, set icon=icon.cri above and add a\n");
+    kstrcat(content, "base64 section:  FILEB64 icon.cri  ...  ---ENDFILE---\n");
+    kstrcat(content, "tools/care-pack.py does both for you.\n");
     kstrcat(content, "---ENDFILE---\n");
     kstrcat(content, "---END---\n");
     vfs_write(f, content, kstrlen(content));
@@ -432,6 +596,13 @@ void carepkg_init(void) {
     /* Load persisted package list */
     carepkg_db_load();
 
+    /* Reconcile the app registry with what we just restored. appdb_init() ran
+     * first and seeded only the builtins, so anything installed in a previous
+     * session has to be re-published here. appdb_register() overwrites by id,
+     * so this is idempotent even when apps.db outlived installed.db. */
+    for (u32 i = 0; i < pkg_count; i++)
+        if (registry[i].installed) pkg_appdb_publish(&registry[i]);
+
     /* Create and auto-install a demo "hello" .care package */
     fs_node_t *tmp = vfs_find(vfs_root(), "tmp");
     if (!tmp) tmp = vfs_mkdir(vfs_root(), "tmp");
@@ -518,6 +689,14 @@ void carepkg_run(const char *cmd, const char *arg) {
         terminal_writeln("  create  <name>        Create a .care template in /tmp");
         terminal_writeln("");
         terminal_writeln(".care format: plain-text manifest with FILE sections");
+        terminal_writeln("  FILE <path>      text payload, one line per line");
+        terminal_writeln("  FILEB64 <path>   base64 payload, for icons and binaries");
+        terminal_writeln("");
+        terminal_writeln("icon=<value> is read three ways:");
+        terminal_writeln("  browser        a name from the /system/icons theme");
+        terminal_writeln("  icon.cri       a file this package ships");
+        terminal_writeln("  /system/...    an absolute path to any .cri/.bmp/.tga");
+        terminal_writeln("");
         terminal_writeln("Packages install to /apps/<name>/");
     } else {
         terminal_write("carepkg: unknown command: "); terminal_writeln(cmd);

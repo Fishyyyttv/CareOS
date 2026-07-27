@@ -1,0 +1,5 @@
+wait 13
+moveto 400 800
+shot mouse1
+moveto 88 879
+shot mouse2

@@ -77,7 +77,10 @@ void pmm_free_frame(u32 frame) {
 
 static pml4e_t kernel_pml4[512] __attribute__((aligned(4096)));
 static pdpte_t kernel_pdpt[512] __attribute__((aligned(4096)));
-static pde_t   kernel_pd[512]   __attribute__((aligned(4096)));
+static pde_t   kernel_pd1[512]  __attribute__((aligned(4096)));
+static pde_t   kernel_pd2[512]  __attribute__((aligned(4096)));
+static pde_t   kernel_pd3[512]  __attribute__((aligned(4096)));
+static pde_t   kernel_pd4[512]  __attribute__((aligned(4096)));
 
 static void paging_load_cr3(u64 phys_pml4) {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(phys_pml4) : "memory");
@@ -137,31 +140,66 @@ static int paging_map_internal(pml4e_t *pml4, u64 virt, u64 phys, u32 flags) {
     return 0;
 }
 
+/* Emitted by kernel.ld: first page-aligned address past .bss. */
+extern u8 _kernel_end[];
+
 void paging_init(void) {
     kmemset(phys_bitmap, 0xFF, sizeof(phys_bitmap));
     phys_free_frames = 0;
 
-    u32 reserved_frames = KERNEL_RESERVED_BYTES / PAGE_SIZE;
+    /* Reserve every frame the kernel image actually occupies, measured from
+     * the link rather than assumed. KERNEL_RESERVED_BYTES is kept as a FLOOR
+     * only -- it leaves slack below the image for anything the loader placed
+     * there (multiboot structures, the framebuffer's low mappings) that we do
+     * not want handed out either.
+     *
+     * The old fixed 256 MB was 37 MB from being wrong: heap_mem alone is
+     * KERNEL_HEAP_SIZE of .bss, and the icon/wallpaper archive added 12 MB of
+     * .rodata ahead of it. Once the image crossed the constant, pmm_alloc_frame
+     * would have started returning pages inside heap_mem -- corruption that
+     * would surface as unrelated crashes long after the allocation. */
+    u64 image_end = (u64)_kernel_end;
+    u64 reserved  = (image_end + PAGE_SIZE - 1) & ~((u64)PAGE_SIZE - 1);
+    if (reserved < KERNEL_RESERVED_BYTES) reserved = KERNEL_RESERVED_BYTES;
+
+    u32 reserved_frames = (u32)(reserved / PAGE_SIZE);
+    if (reserved_frames > FRAME_COUNT) reserved_frames = FRAME_COUNT;
+
     for (u32 f = reserved_frames; f < FRAME_COUNT; f++) {
         frame_clear(f);
         phys_free_frames++;
     }
 
+    {   /* Boot-visible proof that the reservation tracks the real image. */
+        char b[24];
+        serial_write("[pmm] kernel image ends at ");
+        kutoa((u32)(image_end / 1024u / 1024u), b, 10); serial_write(b);
+        serial_write(" MiB, reserving ");
+        kutoa((u32)(reserved / 1024u / 1024u), b, 10); serial_write(b);
+        serial_write(" MiB, ");
+        kutoa(phys_free_frames / 256u, b, 10); serial_write(b);
+        serial_write(" MiB free\n");
+    }
+
     kmemset(kernel_pml4, 0, sizeof(kernel_pml4));
     kmemset(kernel_pdpt, 0, sizeof(kernel_pdpt));
-    kmemset(kernel_pd,   0, sizeof(kernel_pd));
+    kmemset(kernel_pd1,  0, sizeof(kernel_pd1));
+    kmemset(kernel_pd2,  0, sizeof(kernel_pd2));
+    kmemset(kernel_pd3,  0, sizeof(kernel_pd3));
+    kmemset(kernel_pd4,  0, sizeof(kernel_pd4));
 
-    /* Identity map first 2GB using 2MB pages (Huge pages) */
+    /* Identity map 0-4GB physical memory using 2MB pages (Huge pages) */
     kernel_pml4[0] = (u64)kernel_pdpt | PDE_PRESENT | PDE_RW;
-    kernel_pdpt[0] = (u64)kernel_pd   | PDE_PRESENT | PDE_RW;
-    
-    /* Allocate a second PD for the second GB */
-    static pde_t kernel_pd2[512] __attribute__((aligned(4096)));
-    kernel_pdpt[1] = (u64)kernel_pd2 | PDE_PRESENT | PDE_RW;
+    kernel_pdpt[0] = (u64)kernel_pd1  | PDE_PRESENT | PDE_RW;
+    kernel_pdpt[1] = (u64)kernel_pd2  | PDE_PRESENT | PDE_RW;
+    kernel_pdpt[2] = (u64)kernel_pd3  | PDE_PRESENT | PDE_RW;
+    kernel_pdpt[3] = (u64)kernel_pd4  | PDE_PRESENT | PDE_RW;
 
     for (int i = 0; i < 512; i++) {
-        kernel_pd[i]  = ((u64)i * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
-        kernel_pd2[i] = ((u64)(i + 512) * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
+        kernel_pd1[i] = ((u64)(i + 0)    * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
+        kernel_pd2[i] = ((u64)(i + 512)  * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
+        kernel_pd3[i] = ((u64)(i + 1024) * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
+        kernel_pd4[i] = ((u64)(i + 1536) * 0x200000) | PDE_PRESENT | PDE_RW | PDE_4MB;
     }
 
     register_interrupt_handler(14, page_fault_handler);

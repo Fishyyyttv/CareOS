@@ -4,6 +4,7 @@
  * Copyright (C) 2026 [Your Name]
  * ============================================================================= */
 #include "kernel.h"
+#include "appdb.h"
 #include "gui.h"
 
 #define MB2_MAGIC 0x36D76289u
@@ -301,6 +302,10 @@ void kernel_main(u64 magic, u64 mbi_addr){
     }
 
     users_init();        slog_ok("Users");
+
+    /* Must precede carepkg_init(): package installs register into the app
+     * registry, and carepkg_init() replays its persisted package list. */
+    appdb_init();        slog_ok("App registry");
 
     carepkg_init();      slog_ok("CarePackage manager");
     serial_write("[boot] Initializing scheduler...\n");

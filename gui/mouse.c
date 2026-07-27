@@ -15,7 +15,7 @@
 
 #define MOUSE_IRQ            (IRQ0 + 12)
 #define MOUSE_RESOLUTION_CMD 0x02  /* 4 counts/mm */
-#define MOUSE_SAMPLE_HZ      100
+#define MOUSE_SAMPLE_HZ      200   /* 200 Hz = 5 ms input latency (was 100) */
 #define MOUSE_DEADZONE_RAW   1
 #define MOUSE_MAX_RAW_DELTA  24
 
@@ -79,8 +79,8 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 -= accel_q8(dx);
-            accum_dy_q8 += accel_q8(dy); /* both axes flipped to match host pointer */
+            accum_dx_q8 += accel_q8(dx);
+            accum_dy_q8 -= accel_q8(dy);
         }
         break;
     case 3:
@@ -95,8 +95,8 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 -= accel_q8(dx);
-            accum_dy_q8 += accel_q8(dy);
+            accum_dx_q8 += accel_q8(dx);
+            accum_dy_q8 -= accel_q8(dy);
         }
 
         /* M-06: scroll wheel (4th byte, signed) */
@@ -237,7 +237,38 @@ static const u16 cur_outl[19] = {
     0b0000001111000, 0b0000000110000, 0b0000000000000,
 };
 
+/* M-08: Smoothed render position in Q8 fixed-point (256 units = 1 px).
+ * The lerp lives here so the TRUE target (x,y from mouse.x/mouse.y, used for
+ * clicks/hit-testing) is never altered -- only the DRAWN arrow eases toward it:
+ *   draw += (target - draw) * 0.35   (90/256 ~= 0.35, integer math)
+ * Advances once per call (== once per redraw) regardless of mouse movement,
+ * so a glide keeps catching up to a stationary target. */
+static i32 draw_x_q8 = 0, draw_y_q8 = 0;
+static bool draw_seeded = false;
+
 void mouse_draw_cursor(i32 x, i32 y) {
+    i32 target_x_q8 = x << 8;
+    i32 target_y_q8 = y << 8;
+
+    /* Seed to the target on first run so the cursor doesn't slide in from a
+     * corner at startup. */
+    if (!draw_seeded) {
+        draw_x_q8 = target_x_q8;
+        draw_y_q8 = target_y_q8;
+        draw_seeded = true;
+    } else {
+        /* Ease toward target; snap when within <1px to kill tiny residuals. */
+        i32 diff_x = target_x_q8 - draw_x_q8;
+        i32 diff_y = target_y_q8 - draw_y_q8;
+        if (diff_x > -256 && diff_x < 256) draw_x_q8 = target_x_q8;
+        else                               draw_x_q8 += diff_x * 90 / 256;
+        if (diff_y > -256 && diff_y < 256) draw_y_q8 = target_y_q8;
+        else                               draw_y_q8 += diff_y * 90 / 256;
+    }
+
+    x = draw_x_q8 >> 8;
+    y = draw_y_q8 >> 8;
+
     /* Shadow pass (offset by 1,1, dark) */
     for (i32 row = 0; row < 19; row++) {
         for (i32 col = 0; col < 13; col++) {

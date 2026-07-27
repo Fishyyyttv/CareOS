@@ -7,9 +7,9 @@
 #include "font.h"
 #define GFX_TRANSPARENT 0xFFFFFFFF  /* internal skip-pixel sentinel */
 
-u32  SCREEN_W     = 800;
-u32  SCREEN_H     = 600;
-u32  SCREEN_PITCH = 800*4;
+u32  SCREEN_W     = 1920;
+u32  SCREEN_H     = 1080;
+u32  SCREEN_PITCH = 1920*4;
 u32 *FRAMEBUFFER  = (u32*)0;
 u32  GFX_FONT_SCALE = 1;
 u32  GFX_FONT_W = 8;
@@ -115,6 +115,37 @@ void gfx_flip(void) {
     dirty_reset();
 }
 
+/* -- Wallpaper cache ------------------------------------------------------
+ * The desktop wallpaper is the same every frame until the theme, accent, or
+ * resolution changes -- yet the old renderer paid for it in full on every
+ * frame: a cover-fitted full-screen image scale (gfx_draw_image_cover), or the
+ * procedural fallback with several 800x600 alpha-blend passes. On a software-
+ * emulated GPU that per-frame cost is exactly what made the pointer lag while
+ * moving, because every mouse packet forced a from-scratch recomposite.
+ *
+ * Compose the wallpaper once, keep the pixels, and blit them back at the top of
+ * each frame (one memcpy) instead of re-rendering. Invalidated on theme/accent
+ * change; reallocated by gfx_init() on a resolution change. If the cache buffer
+ * cannot be allocated, blit reports failure and the caller falls back to the
+ * original per-frame draw, so this is a pure fast-path with a safe fallback. */
+static u32 *WALLPAPER_CACHE     = (u32*)0;
+static bool wallpaper_cache_ok  = false;
+
+void gfx_wallpaper_cache_invalidate(void) { wallpaper_cache_ok = false; }
+
+bool gfx_wallpaper_cache_blit(void) {
+    if (!wallpaper_cache_ok || !WALLPAPER_CACHE || !BACKBUFFER) return false;
+    kmemcpy(BACKBUFFER, WALLPAPER_CACHE, (size_t)SCREEN_W * SCREEN_H * 4);
+    dirty_full = true;
+    return true;
+}
+
+void gfx_wallpaper_cache_capture(void) {
+    if (!WALLPAPER_CACHE || !BACKBUFFER) return;
+    kmemcpy(WALLPAPER_CACHE, BACKBUFFER, (size_t)SCREEN_W * SCREEN_H * 4);
+    wallpaper_cache_ok = true;
+}
+
 static u32 *SCREEN_FB;
 static u32  SCREEN_W_VAL, SCREEN_H_VAL, SCREEN_P;
 
@@ -150,6 +181,12 @@ void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch) {
         g_screen_buf.pixels = BACKBUFFER;
         g_screen_buf.pitch  = SCREEN_W * 4;
     }
+
+    /* Full-screen wallpaper cache. Same size as the backbuffer; a NULL result
+     * just disables the fast path (see gfx_wallpaper_cache_blit). */
+    WALLPAPER_CACHE    = (u32*)kmalloc(sz);
+    wallpaper_cache_ok = false;
+
     dirty_reset();
     dirty_full = true;
     gfx_clear(0);
@@ -269,6 +306,144 @@ void gfx_shadow(i32 x, i32 y, i32 w, i32 h) {
 
 void gfx_shadow_ext(i32 x, i32 y, i32 w, i32 h, u32 alpha) {
     gfx_rect_blend(x, y, w, h, 0, (u8)alpha);
+}
+
+/* ── CDL primitives ───────────────────────────────────────────────────────
+ * The shared foundation the rest of the design language is built on: a soft
+ * shadow, a real blur, and a glass panel, plus the rounded-shape blended fill
+ * they all lean on. Kept together so the "floating surface" look is defined in
+ * exactly one place. */
+
+u32 gfx_isqrt(u32 v) {
+    if (v == 0) return 0;
+    u32 x = v, y = (x + 1) / 2;
+    while (y < x) { x = y; y = (x + v / x) / 2; }
+    return x;
+}
+
+/* One blended horizontal span, honouring the clip rect, no per-span dirty. */
+static inline void blend_span(i32 x, i32 y, i32 len, u32 color, u32 a) {
+    if (!g_target || !g_target->pixels || len <= 0) return;
+    if (y < 0 || y >= (i32)g_target->h) return;
+    i32 x1 = x < 0 ? 0 : x;
+    i32 x2 = x + len; if (x2 > (i32)g_target->w) x2 = (i32)g_target->w;
+    if (clip_active) {
+        if (y < clip_y || y >= clip_y + clip_h) return;
+        if (x1 < clip_x)          x1 = clip_x;
+        if (x2 > clip_x + clip_w) x2 = clip_x + clip_w;
+    }
+    if (x1 >= x2) return;
+    u32 inv = 256 - a;
+    u32 rf = (color >> 16) & 0xFF, gf = (color >> 8) & 0xFF, bf = color & 0xFF;
+    u32 *row = &g_target->pixels[y * (g_target->pitch / 4) + x1];
+    for (i32 i = x1; i < x2; i++) {
+        u32 bg = *row;
+        u32 rr = (((bg >> 16) & 0xFF) * inv + rf * a) >> 8;
+        u32 gg = (((bg >>  8) & 0xFF) * inv + gf * a) >> 8;
+        u32 bb = (( bg        & 0xFF) * inv + bf * a) >> 8;
+        *row++ = (rr << 16) | (gg << 8) | bb;
+    }
+}
+
+void gfx_rect_rounded_blend(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color, u8 alpha) {
+    if (w <= 0 || h <= 0 || alpha == 0) return;
+    if (r <= 0) { gfx_rect_blend(x, y, w, h, color, alpha); return; }
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    u32 a = alpha;
+    for (i32 row = 0; row < h; row++) {
+        i32 dy = -1;
+        if (row < r)          dy = (r - 1) - row;
+        else if (row >= h - r) dy = row - (h - r);
+        i32 inset = 0;
+        if (dy >= 0) inset = r - (i32)gfx_isqrt((u32)(r * r - dy * dy));
+        blend_span(x + inset, y + row, w - 2 * inset, color, a);
+    }
+    gfx_dirty(x, y, w, h);
+}
+
+/* Separable box blur (horizontal then vertical) of the target in place. Cheap
+ * enough for panel-sized regions; not meant for full-screen every frame. */
+void gfx_blur_region(i32 x, i32 y, i32 w, i32 h, i32 rad) {
+    if (rad < 1 || !g_target || !g_target->pixels) return;
+    i32 W = (i32)g_target->w, H = (i32)g_target->h, st = (i32)(g_target->pitch / 4);
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > W) w = W - x;
+    if (y + h > H) h = H - y;
+    if (w <= 0 || h <= 0) return;
+    static u32 line[4096];              /* IMAGE_MAX_DIM ceiling */
+    if (w > 4096 || h > 4096) return;
+
+    for (i32 j = 0; j < h; j++) {
+        u32 *rowp = &g_target->pixels[(y + j) * st + x];
+        for (i32 i = 0; i < w; i++) line[i] = rowp[i];
+        for (i32 i = 0; i < w; i++) {
+            i32 a = i - rad; if (a < 0) a = 0;
+            i32 b = i + rad; if (b >= w) b = w - 1;
+            u32 sr = 0, sg = 0, sb = 0, n = 0;
+            for (i32 k = a; k <= b; k++) {
+                u32 c = line[k]; sr += (c >> 16) & 0xFF; sg += (c >> 8) & 0xFF; sb += c & 0xFF; n++;
+            }
+            rowp[i] = ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+        }
+    }
+    for (i32 i = 0; i < w; i++) {
+        for (i32 j = 0; j < h; j++) line[j] = g_target->pixels[(y + j) * st + x + i];
+        for (i32 j = 0; j < h; j++) {
+            i32 a = j - rad; if (a < 0) a = 0;
+            i32 b = j + rad; if (b >= h) b = h - 1;
+            u32 sr = 0, sg = 0, sb = 0, n = 0;
+            for (i32 k = a; k <= b; k++) {
+                u32 c = line[k]; sr += (c >> 16) & 0xFF; sg += (c >> 8) & 0xFF; sb += c & 0xFF; n++;
+            }
+            g_target->pixels[(y + j) * st + x + i] = ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+        }
+    }
+    gfx_dirty(x, y, w, h);
+}
+
+void gfx_shadow_soft_ex(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy) {
+    if (w <= 0 || h <= 0 || blur <= 0) return;
+    const i32 L = 10;                   /* stacked rings → smooth falloff */
+    u32 denom = (u32)(L * (L + 1) / 2);  /* Σ weights, so total ink ≈ alpha */
+    for (i32 i = L; i >= 1; i--) {
+        i32 s = blur * i / L;            /* outer rings reach further, fainter */
+        u32 a = (u32)alpha * (u32)(L - i + 1) / denom;
+        if (a == 0) a = 1;
+        gfx_rect_rounded_blend(x - s, y - s + dy, w + 2 * s, h + 2 * s, r + s,
+                               COL_SHADOW, (u8)a);
+    }
+}
+
+void gfx_shadow_soft(i32 x, i32 y, i32 w, i32 h, i32 r) {
+    gfx_shadow_soft_ex(x, y, w, h, r, CDL_SHADOW_BLUR, CDL_SHADOW_ALPHA, CDL_SHADOW_DY);
+}
+
+void gfx_glass_panel_ex(i32 x, i32 y, i32 w, i32 h, i32 r, u32 tint, u8 alpha, i32 blur) {
+    gfx_blur_region(x, y, w, h, blur);
+    gfx_rect_rounded_blend(x, y, w, h, r, tint, alpha);
+    /* Top sheen sells the "frosted" read; brighter on dark themes. */
+    gfx_rect_rounded_blend(x + 1, y + 1, w - 2, h / 3, r, COL_WHITE,
+                           g_theme->is_dark ? 14 : 24);
+    gfx_rect_rounded_outline(x, y, w, h, r, COL_BORDER);
+}
+
+void gfx_glass_panel(i32 x, i32 y, i32 w, i32 h, i32 r) {
+    gfx_glass_panel_ex(x, y, w, h, r, COL_GLASS_TINT, CDL_GLASS_ALPHA, CDL_GLASS_BLUR);
+}
+
+/* Ease-out cubic mapped to 0..256 fixed-point; saturates at duration. */
+u32 cdl_ease_out(u32 elapsed_ms, u32 duration_ms) {
+    if (duration_ms == 0 || elapsed_ms >= duration_ms) return 256;
+    u32 t = elapsed_ms * 256 / duration_ms;   /* 0..256 */
+    u32 inv = 256 - t;                          /* (1-t) */
+    u32 cube = (inv * inv / 256) * inv / 256;   /* (1-t)^3 */
+    return 256 - cube;                          /* 1-(1-t)^3 */
+}
+
+i32 cdl_lerp(i32 a, i32 b, u32 t256) {
+    return a + (i32)(((i64)(b - a) * (i32)t256) / 256);
 }
 
 void gfx_rect_rounded(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color) {
@@ -429,6 +604,16 @@ void gfx_str_bg_none(i32 x, i32 y, const char *s, u32 fg) {
 
 void gfx_set_clip(i32 x,i32 y,i32 w,i32 h){ clip_x=x;clip_y=y;clip_w=w;clip_h=h;clip_active=true; }
 void gfx_clear_clip(void){ clip_active=false; }
+
+/* Read back the active clip rect. The image blitter resolves the clip once per
+ * draw into a bounds box instead of testing it per pixel, which is the whole
+ * difference between an affordable and an unaffordable full-screen wallpaper.
+ * Returns false (and leaves *out untouched) when no clip is set. */
+bool gfx_get_clip(rect_t *out){
+    if (!clip_active) return false;
+    if (out) { out->x = clip_x; out->y = clip_y; out->w = clip_w; out->h = clip_h; }
+    return true;
+}
 static inline bool in_clip(i32 x,i32 y){ if(!clip_active) return true; return x>=clip_x&&x<clip_x+clip_w&&y>=clip_y&&y<clip_y+clip_h; }
 
 static inline void put_px(i32 x, i32 y, u32 c){
@@ -599,9 +784,9 @@ void button_draw(const button_t *b){
     else if (b->hover) { bg_col = COL_HOVER; border = COL_ACCENT; }
     else if (b->active) { bg_col = g_theme->surface3; border = COL_PRIMARY; }
     else { bg_col = base; border = COL_BORDER; }
-    gfx_rect_rounded(x, y, w, h, 8, bg_col);
+    gfx_rect_rounded(x, y, w, h, CDL_R_BUTTON, bg_col);
     gfx_rect_blend(x + 1, y + 1, w - 2, h / 3, COL_WHITE, b->hover ? 10 : 5);
-    gfx_rect_rounded_outline(x, y, w, h, 8, border);
+    gfx_rect_rounded_outline(x, y, w, h, CDL_R_BUTTON, border);
     if (b->active && !b->bg) gfx_rect_rounded(x + 8, y + h - 3, w - 16, 2, 1, COL_PRIMARY);
     i32 ty = y + (h - (i32)(FONT_H * GFX_FONT_SCALE)) / 2;
     u32 fg = b->fg ? b->fg : COL_TEXT;
@@ -617,9 +802,9 @@ void textinput_draw(const textinput_t *t){
     u32 bg = t->focused ? COL_INPUT_BG : g_theme->surface2;
     u32 border_col = t->focused ? COL_PRIMARY : (t->hover ? COL_ACCENT : COL_BORDER);
     i32 x = t->rect.x, y = t->rect.y, w = t->rect.w, h = t->rect.h;
-    gfx_rect_rounded(x, y, w, h, 8, bg);
+    gfx_rect_rounded(x, y, w, h, CDL_R_INPUT, bg);
     if (t->focused) gfx_rect_blend(x + 1, y + 1, w - 2, h / 3, COL_WHITE, 8);
-    gfx_rect_rounded_outline(x, y, w, h, 8, border_col);
+    gfx_rect_rounded_outline(x, y, w, h, CDL_R_INPUT, border_col);
     i32 pad = 10;
     i32 ty  = y + (h - (i32)(FONT_H * GFX_FONT_SCALE)) / 2;
     if (t->len > 0) { gfx_str_clipped(x + pad, ty, w - pad * 2, t->buf, COL_TEXT, COL_TRANSPARENT); }
@@ -643,6 +828,7 @@ void notify_push(const char *title, const char *body, u32 icon_color) {
     notifs[slot].icon_color = icon_color; notifs[slot].born_tick = timer_get_ticks(); notifs[slot].active = true; notif_hover[slot] = false;
 }
 void notify_tick(void) { u32 now = timer_get_ticks(); for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active && now - notifs[i].born_tick > 500) notifs[i].active = false; }
+bool notify_active(void) { for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active) return true; return false; }
 void notify_draw(void) {
     /* Toast geometry follows the live font: an H3 title over a BODY line.
      * Both the box height and the title/body split have to track those two
@@ -664,10 +850,15 @@ void notify_draw(void) {
         i32 ny = TOPBAR_H + 12 + slot*(nh+8);
         u32 now = timer_get_ticks(); u32 age = now - notifs[i].born_tick; u32 life = 500;
         u32 pct = (age < life) ? (100 * (life - age) / life) : 0;
-        gfx_rect_rounded(nx, ny, nw, nh, 12, COL_SURFACE);
-        gfx_rect_rounded_outline(nx, ny, nw, nh, 12, COL_BORDER);
-        gfx_str_ex(nx+12, ny+pad, notifs[i].title, COL_TEXT, COL_TRANSPARENT, FONT_H3);
-        gfx_str_clipped(nx+12, ny+pad+title_lh+4, nw-24, notifs[i].body, COL_DIM, COL_TRANSPARENT);
+        /* Floating frosted card: soft shadow, blurred wallpaper, tint, hairline. */
+        gfx_shadow_soft(nx, ny, nw, nh, CDL_R_CARD);
+        gfx_glass_panel(nx, ny, nw, nh, CDL_R_CARD);
+        /* Accent dot + title, body, and a thin accent life bar along the bottom. */
+        gfx_circle_fill(nx + 18, ny + pad + title_lh / 2, 4,
+                        notifs[i].icon_color ? notifs[i].icon_color : COL_ACCENT);
+        gfx_str_ex(nx+32, ny+pad, notifs[i].title, COL_TEXT, COL_TRANSPARENT, FONT_H3);
+        gfx_str_clipped(nx+32, ny+pad+title_lh+4, nw-44, notifs[i].body, COL_DIM, COL_TRANSPARENT);
+        gfx_rect_rounded(nx + 12, ny + nh - 5, (nw - 24) * (i32)pct / 100, 2, 1, COL_ACCENT);
         slot++;
     }
 }

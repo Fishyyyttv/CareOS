@@ -19,6 +19,8 @@
  * ============================================================================= */
 #include "kernel.h"
 #include "gui.h"
+#include "image.h"
+#include "icon.h"
 
 static window_t windows[MAX_WINDOWS];
 window_t *wm_get_window(int i) { if(i<0||i>=MAX_WINDOWS) return NULL; return &windows[i]; }
@@ -130,7 +132,7 @@ static void draw_desktop_icon(const desktop_icon_t *ic) {
     /* Icon — left-aligned with consistent padding */
     i32 icon_x = r.x + 10;
     i32 icon_y = r.y + (r.h - icon_sz) / 2;
-    gfx_draw_icon(ic->app, icon_x, icon_y, icon_sz, ic->icon_color);
+    icon_draw_app(ic->app, icon_x, icon_y, icon_sz, ic->icon_color);
 
     /* Label — vertically centred next to icon, full name visible */
     i32 tx = icon_x + icon_sz + 10;
@@ -202,6 +204,59 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     }
 }
 
+/* -- Animation helpers (macOS-style open/close/minimise transitions) ------ */
+
+/* Shrink/grow a rect by `pct` percent about its own centre (integer math). */
+static rect_t rect_scale_center(rect_t r, i32 pct) {
+    i32 nw = r.w * pct / 100;
+    i32 nh = r.h * pct / 100;
+    return rect_make(r.x + (r.w - nw) / 2, r.y + (r.h - nh) / 2, nw, nh);
+}
+
+/* Small landing rect at the bottom-centre (the dock) -- minimise target. */
+static rect_t wm_dock_rect(void) {
+    i32 mw = 80, mh = 48;
+    return rect_make((i32)SCREEN_W / 2 - mw / 2,
+                     (i32)SCREEN_H - (i32)TASKBAR_H - mh / 2, mw, mh);
+}
+
+/* Hand focus to the topmost visible window other than `skip`, skipping any
+ * window that is itself busy closing or minimising. */
+static void wm_refocus_after(window_t *skip) {
+    window_t *top = NULL; u32 bz = 0;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *o = &windows[i];
+        if (o == skip || !o->active || o->minimized) continue;
+        if (o->anim_kind == WM_ANIM_CLOSE || o->anim_kind == WM_ANIM_MINIMIZE) continue;
+        if (o->z_order >= bz) { top = o; bz = o->z_order; }
+    }
+    if (top) top->focused = true;
+}
+
+/* Real teardown -- deferred until the close animation finishes. Mirrors the
+ * original wm_close side effects (slot freed, cascade count decremented). */
+static void wm_finish_close(window_t *w) {
+    w->active    = false;
+    w->focused   = false;
+    w->animating = false;
+    w->anim_kind = WM_ANIM_NONE;
+    if (open_count > 0) open_count--;
+}
+
+/* Start the reverse-of-minimise transition: grow out of the dock + fade in.
+ * Called both from the minimise-toggle and when re-opening a minimised app. */
+static void wm_start_restore(window_t *w) {
+    rect_t home = w->rect;              /* real geometry kept while minimised */
+    w->minimized       = false;
+    w->anim_from       = wm_dock_rect();
+    w->target_rect     = home;
+    w->anim_kind       = WM_ANIM_RESTORE;
+    w->anim_start_tick = timer_get_ticks();
+    w->opacity         = 0;
+    w->animating       = true;
+    wm_focus(w);
+}
+
 /* -- Open window -- SINGLE init path -------------------------------------- */
 window_t *wm_open(app_id_t app, const char *title,
                   i32 x, i32 y, i32 w, i32 h) {
@@ -209,8 +264,8 @@ window_t *wm_open(app_id_t app, const char *title,
     /* If app already open -- restore + focus, no re-init */
     for (int i = 0; i < MAX_WINDOWS; i++) {
         if (windows[i].active && windows[i].app == app && app != APP_NONE) {
-            windows[i].minimized = false;
-            wm_focus(&windows[i]);
+            if (windows[i].minimized) wm_start_restore(&windows[i]); /* grow from dock */
+            else                      wm_focus(&windows[i]);
             serial_write("  [wm_open] restored existing window\n");
             return &windows[i];
         }
@@ -251,9 +306,17 @@ window_t *wm_open(app_id_t app, const char *title,
         win->rect         = rect_make(fx, fy, w, h);
         win->restore_rect = win->rect;
         win->target_rect  = win->rect;
-        win->animating    = false;
 
-        
+        /* macOS-style open: scale up from ~95% about the centre + fade in.
+         * opacity starts at 0 so the full-size rect never flashes before the
+         * first animation tick moves it. */
+        win->anim_from       = rect_scale_center(win->rect, 95);
+        win->anim_kind       = WM_ANIM_OPEN;
+        win->anim_start_tick = timer_get_ticks();
+        win->opacity         = 0;
+        win->animating       = true;
+
+
         /* Initialize structural UI root */
         rect_t cr = wm_client_rect(win);
         win->root = widget_create(WIDGET_PANEL, 0, 0, cr.w, cr.h);
@@ -307,24 +370,20 @@ window_t *wm_open(app_id_t app, const char *title,
 
 void wm_close(window_t *w) {
     if (!w) return;
-    /* Clear app state before freeing slot */
-    w->active  = false;
-    w->focused = false;
-    /* Decrement open_count for accurate cascade */
-    if (open_count > 0) open_count--;
-    /* If we closed the focused window, focus the next visible one */
-    bool any_focused = false;
-    for (int i = 0; i < MAX_WINDOWS; i++)
-        if (windows[i].active && windows[i].focused) { any_focused = true; break; }
-    if (!any_focused) {
-        /* Find the topmost active window */
-        window_t *top = NULL; u32 bz = 0;
-        for (int i = 0; i < MAX_WINDOWS; i++)
-            if (windows[i].active && windows[i].z_order >= bz) {
-                top = &windows[i]; bz = windows[i].z_order;
-            }
-        if (top) top->focused = true;
-    }
+    if (w->anim_kind == WM_ANIM_CLOSE) return;  /* already closing */
+
+    /* Start the close transition: shrink to ~95% about centre + fade out. The
+     * window stays active/drawn until the animation finishes; the real teardown
+     * (slot free + cascade decrement) then runs in wm_finish_close() from
+     * wm_animate_all(). Hand focus off now so input stops routing to it. */
+    w->anim_from       = w->rect;
+    w->target_rect     = rect_scale_center(w->rect, 95);
+    w->anim_kind       = WM_ANIM_CLOSE;
+    w->anim_start_tick = timer_get_ticks();
+    w->opacity         = 255;
+    w->animating       = true;
+    w->focused         = false;
+    wm_refocus_after(w);
 }
 
 void wm_focus(window_t *w) {
@@ -336,18 +395,21 @@ void wm_focus(window_t *w) {
 
 void wm_minimize(window_t *w) {
     if (!w) return;
-    w->minimized = !w->minimized;
-    /* If minimizing the focused window, focus next */
-    if (w->minimized && w->focused) {
-        w->focused = false;
-        window_t *top = NULL; u32 bz = 0;
-        for (int i = 0; i < MAX_WINDOWS; i++) {
-            if (windows[i].active && !windows[i].minimized && windows[i].z_order >= bz) {
-                top = &windows[i]; bz = windows[i].z_order;
-            }
-        }
-        if (top) top->focused = true;
-    }
+
+    /* Already minimised -> play the reverse (grow out of the dock + fade in). */
+    if (w->minimized) { wm_start_restore(w); return; }
+    if (w->anim_kind == WM_ANIM_MINIMIZE) return;  /* already shrinking */
+
+    /* Start the minimise transition: shrink/fade toward the dock. minimized is
+     * set only when the animation completes (in wm_animate_all). */
+    w->anim_from       = w->rect;
+    w->target_rect     = wm_dock_rect();
+    w->anim_kind       = WM_ANIM_MINIMIZE;
+    w->anim_start_tick = timer_get_ticks();
+    w->opacity         = 255;
+    w->animating       = true;
+
+    if (w->focused) { w->focused = false; wm_refocus_after(w); }
 }
 
 void wm_maximize(window_t *w) {
@@ -474,9 +536,50 @@ static u32 detect_resize_edge(window_t *w, i32 mx, i32 my) {
 
 bool wm_animate_all(void) {
     bool any = false;
+    u32  now = timer_get_ticks();
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
         if (!w->active || !w->animating) continue;   // <-- add !w->animating
+
+        /* -- Transition animations (open/close/minimise/restore) ---------- *
+         * Ease the drawn rect from anim_from -> target_rect and fade opacity.
+         * anim_kind==NONE falls through to the existing snap/geometry lerp.  */
+        if (w->anim_kind != WM_ANIM_NONE) {
+            u32 t = cdl_ease_out(now - w->anim_start_tick, CDL_ANIM_MS);
+
+            w->rect.x = cdl_lerp(w->anim_from.x, w->target_rect.x, t);
+            w->rect.y = cdl_lerp(w->anim_from.y, w->target_rect.y, t);
+            w->rect.w = cdl_lerp(w->anim_from.w, w->target_rect.w, t);
+            w->rect.h = cdl_lerp(w->anim_from.h, w->target_rect.h, t);
+
+            /* Opens/restores fade in; closes/minimises fade out. */
+            if (w->anim_kind == WM_ANIM_OPEN || w->anim_kind == WM_ANIM_RESTORE)
+                w->opacity = (u8)(t * 255 / 256);
+            else
+                w->opacity = (u8)((256 - t) * 255 / 256);
+
+            if (t >= 256) {
+                switch (w->anim_kind) {
+                case WM_ANIM_CLOSE:
+                    wm_finish_close(w);
+                    continue;                      /* slot is now free */
+                case WM_ANIM_MINIMIZE:
+                    w->rect      = w->anim_from;    /* keep real geometry */
+                    w->minimized = true;
+                    w->opacity   = 255;
+                    break;
+                default: /* OPEN / RESTORE settle at the target, fully opaque */
+                    w->rect    = w->target_rect;
+                    w->opacity = 255;
+                    break;
+                }
+                w->anim_kind = WM_ANIM_NONE;
+                w->animating = false;
+            } else {
+                any = true;
+            }
+            continue;
+        }
 
         i32 dx = w->target_rect.x - w->rect.x;
         i32 dy = w->target_rect.y - w->rect.y;
@@ -543,21 +646,30 @@ static void draw_window(window_t *w) {
     i32 wx = w->rect.x, wy = w->rect.y;
     i32 wd = w->rect.w, ht = w->rect.h;
 
-    /* Shadow */
+    /* While a transition (open/close/minimise/restore) is running, draw only
+     * the window chrome so app content is never laid out at odd interim sizes.
+     * anim_kind==NONE (idle, or snapping) still gets full content as before. */
+    bool transition = (w->animating && w->anim_kind != WM_ANIM_NONE);
+
+    /* Soft floating drop shadow (CDL). Focused windows float higher (full CDL
+     * defaults); unfocused ones sit lower with a fainter, tighter halo. Drawn
+     * before the surface. */
     if (w->focused)
-        gfx_shadow_ext(wx - 2, wy - 2, wd + 4, ht + 4, 15);
+        gfx_shadow_soft(wx, wy, wd, ht, CDL_R_WINDOW);
     else
-        gfx_shadow_ext(wx, wy, wd, ht, 8);
+        gfx_shadow_soft_ex(wx, wy, wd, ht, CDL_R_WINDOW,
+                           CDL_SHADOW_BLUR * 3 / 4, CDL_SHADOW_ALPHA / 2,
+                           CDL_SHADOW_DY / 2);
 
     /* Window body */
-    gfx_rect_rounded(wx, wy, wd, ht, 10, COL_SURFACE);
+    gfx_rect_rounded(wx, wy, wd, ht, CDL_R_WINDOW, COL_SURFACE);
 
     /* Titlebar */
     u32 tbar_col = w->focused ? COL_WINBAR : g_theme->surface2;
-    gfx_rect_rounded(wx, wy, wd, TITLEBAR_H, 10, tbar_col);
+    gfx_rect_rounded(wx, wy, wd, TITLEBAR_H, CDL_R_WINDOW, tbar_col);
     gfx_rect_blend(wx + 1, wy + 1, wd - 2, TITLEBAR_H - 2, COL_WHITE, w->focused ? 25 : 12);
     gfx_hline(wx, wy + TITLEBAR_H - 1, wd, COL_BORDER);
-    gfx_rect_rounded_outline(wx, wy, wd, ht, 10, w->focused ? COL_BORDER : g_theme->surface2);
+    gfx_rect_rounded_outline(wx, wy, wd, ht, CDL_R_WINDOW, w->focused ? COL_BORDER : g_theme->surface2);
 
     /* App title on left, traffic-light controls on right. */
     i32 btn_cy = TB_BTN_CY(wy);
@@ -566,12 +678,14 @@ static void draw_window(window_t *w) {
     gfx_circle_fill(TB_BTN_CLOSE_X(wx, wd), btn_cy, TB_BTN_R, rgb(0xff, 0x5f, 0x57));
 
     u32 tc = w->focused ? COL_TEXT : g_theme->muted;
-    gfx_draw_icon(w->app, wx + 14, wy + (TITLEBAR_H - 26) / 2, 26, w->focused ? COL_ACCENT : g_theme->muted);
+    icon_draw_app(w->app, wx + 14, wy + (TITLEBAR_H - 26) / 2, 26,
+                  w->focused ? COL_ACCENT : g_theme->muted);
     /* Title — draw with a slightly larger size for legibility */
     i32 title_y = wy + (TITLEBAR_H - (i32)FONT_H) / 2;
     gfx_str_clipped(wx + 50, title_y, wd - 155, w->title, tc, COL_TRANSPARENT);
 
-    /* App content, clipped to client area */
+    /* App content, clipped to client area (skipped mid-transition). */
+    if (!transition) {
     gfx_set_clip(wx + 1, wy + TITLEBAR_H, wd - 2, ht - TITLEBAR_H - 1);
     switch (w->app) {
     case APP_TERMINAL: app_terminal_draw(w); break;
@@ -597,6 +711,13 @@ static void draw_window(window_t *w) {
     gfx_clear_clip();
 
     if (w->showing_snap_layouts) wm_draw_snap_layouts(w);
+    }
+
+    /* Fade: overlay the background colour at (255-opacity) inside the rounded
+     * window shape so open/restore read as a fade-in and close/minimise as a
+     * fade-out. Opacity is 255 for settled windows, so this is a no-op then. */
+    if (w->opacity < 255)
+        gfx_rect_rounded_blend(wx, wy, wd, ht, CDL_R_WINDOW, COL_BG, 255 - w->opacity);
 }
 
 /* Sort windows by z_order before drawing so layering is always correct.

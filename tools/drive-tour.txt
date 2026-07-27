@@ -1,0 +1,90 @@
+# Text-dense-screen tour.
+#
+# Login is keyboard-driven; the apps are reached by clicking the desktop
+# sidebar, whose row geometry is font-independent (44px rows, 5px gaps, 14px
+# dividers after idx 3/5/7/9/11, first row at TOPBAR_H+18) so the same
+# coordinates work before and after the layout fix.
+wait 9
+shot splash
+wait 4
+shot login
+type root
+key tab
+type root
+key ret
+wait 3
+shot mustchange
+type Careos123
+key tab
+type Careos123
+key ret
+wait 3
+shot toast
+wait 4
+shot desktop
+# --- Terminal is autostarted and focused; grab it, then close it -----------
+shot terminal
+key alt+esc
+wait 1
+# --- sidebar rows ----------------------------------------------------------
+moveto 90 879
+click
+wait 3
+shot settings
+key alt+esc
+wait 1
+moveto 90 284
+click
+wait 3
+shot files
+key alt+esc
+wait 1
+moveto 90 396
+click
+wait 5
+shot monitor
+key alt+esc
+wait 1
+moveto 90 221
+click
+wait 3
+shot editor
+key alt+esc
+wait 1
+moveto 90 557
+click
+wait 5
+shot netmon
+key alt+esc
+wait 1
+moveto 90 669
+click
+wait 3
+shot users
+key alt+esc
+wait 1
+moveto 90 123
+click
+wait 3
+shot packages
+key alt+esc
+wait 1
+moveto 90 928
+click
+wait 3
+shot about
+key alt+esc
+wait 1
+moveto 90 620
+click
+wait 4
+shot browser
+key alt+esc
+wait 1
+moveto 90 445
+click
+wait 3
+shot clock
+key alt+esc
+wait 1
+shot final

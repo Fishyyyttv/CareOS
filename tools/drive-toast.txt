@@ -1,0 +1,17 @@
+# Ctrl+2 switches workspace and pushes a notification, so the toast can be
+# caught on demand with the menu bar already painted.
+wait 13
+type root
+key tab
+type root
+key ret
+wait 3
+type Careos123
+key tab
+type Careos123
+key ret
+wait 8
+key ctrl+2
+shot toastbar
+key ctrl+1
+shot toastbar2

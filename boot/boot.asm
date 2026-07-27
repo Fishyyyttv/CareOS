@@ -20,7 +20,7 @@ mb2_start:
     ; -- Framebuffer tag (type=5) ------------------------------------------
     align 8
     dw 5            ; type: framebuffer
-    dw 1            ; flags: 1 = optional
+    dw 0            ; flags: 0 = required (1920x1080)
     dd 20           ; size
     dd 1920         ; width
     dd 1080         ; height
@@ -40,7 +40,13 @@ pml4:
     resb 4096
 pdpt:
     resb 4096
-pd:
+pd1:
+    resb 4096
+pd2:
+    resb 4096
+pd3:
+    resb 4096
+pd4:
     resb 4096
 stack_bottom:
     resb 65536
@@ -59,51 +65,45 @@ _start:
     push eax ; magic
     push ebx ; pointer
 
-    ; 1. Check for Long Mode support (CPUID)
-    ; (Omitting full checks for brevity, assuming modern x86_64 for now)
-    
-    ; 2. Build Page Tables
-    ; Identity map the first 2MB (0-2MB)
-    ; PML4[0] -> PDPT
-    ; PDPT[0] -> PD
-    ; PD[0] -> 0 (huge page 2MB)
-    
+    ; 1. Clear Page Tables
     mov edi, pml4
     mov cr3, edi
     xor eax, eax
-    mov ecx, 4096/4
-    rep stosd       ; Clear PML4
-    
-    mov edi, pdpt
-    xor eax, eax
-    mov ecx, 4096/4
-    rep stosd       ; Clear PDPT
-    
-    mov edi, pd
-    xor eax, eax
-    mov ecx, 4096/4
-    rep stosd       ; Clear PD
-    
+    mov ecx, (4096 * 6) / 4
+    rep stosd       ; Clear pml4, pdpt, pd1..pd4
+
     ; PML4[0] = pdpt | 3 (Present + Write)
     mov eax, pdpt
     or eax, 0b11
     mov [pml4], eax
     
-    ; PDPT[0] = pd | 3 (Present + Write)
-    mov eax, pd
+    ; PDPT[0...3] = pd1...pd4 | 3 (Present + Write)
+    mov eax, pd1
     or eax, 0b11
     mov [pdpt], eax
+
+    mov eax, pd2
+    or eax, 0b11
+    mov [pdpt + 8], eax
+
+    mov eax, pd3
+    or eax, 0b11
+    mov [pdpt + 16], eax
+
+    mov eax, pd4
+    or eax, 0b11
+    mov [pdpt + 24], eax
     
-    ; PD[0...511] = identity map 1GB using 2MB huge pages
+    ; pd1...pd4 = identity map 4GB using 2MB huge pages (2048 entries)
     mov ecx, 0
 .map_pd:
     mov eax, 0x200000
     mul ecx
     or eax, 0x83 ; Present + Write + Huge
-    mov [pd + ecx * 8], eax
-    mov dword [pd + ecx * 8 + 4], 0 ; Clear upper 32 bits
+    mov [pd1 + ecx * 8], eax
+    mov dword [pd1 + ecx * 8 + 4], 0 ; Clear upper 32 bits
     inc ecx
-    cmp ecx, 512
+    cmp ecx, 2048
     jne .map_pd
     
     ; 3. Enable PAE

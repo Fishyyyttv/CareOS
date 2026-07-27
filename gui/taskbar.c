@@ -3,6 +3,8 @@
  * ============================================================================= */
 #include "kernel.h"
 #include "gui.h"
+#include "image.h"
+#include "icon.h"
 
 /* Dock constants */
 #define DOCK_ICON_W    48      /* icon slot width  */
@@ -13,13 +15,45 @@
 #define DOCK_LAUNCHER_W 44     /* launcher button width */
 #define DOCK_SHOW_DESK_W 20    /* show-desktop nub */
 #define DOCK_SEP_W       2     /* separator between launcher and apps */
-#define DOCK_CORNER     (TASKBAR_H / 2)
+#define DOCK_CORNER     CDL_R_DOCK   /* standardized dock rounding (24) */
+
+/* Dock magnification (macOS-style). Visual only: click rects stay on the base
+ * layout so hit-testing never drifts (see taskbar_handle_mouse). */
+#define DOCK_ICON_BASE   32                 /* unmagnified icon draw size    */
+#define DOCK_MAG_EXTRA   16                 /* max extra px added at cursor   */
+#define DOCK_MAG_RANGE  (DOCK_ICON_W * 2)   /* falloff span (~2 icon widths)  */
+
+/* Last-known cursor position, captured by taskbar_handle_mouse() every frame so
+ * taskbar_draw() can compute magnification. Far-away sentinel = no hover. */
+static i32 g_dock_mouse_x = -10000;
+static i32 g_dock_mouse_y = -10000;
 
 /* Pinned apps always shown in dock */
 static const app_id_t pinned_apps[] = {
     APP_TERMINAL, APP_FILES, APP_BROWSER, APP_NOTES, APP_EDITOR, APP_SETTINGS
 };
 #define PINNED_COUNT ((i32)(sizeof(pinned_apps) / sizeof(pinned_apps[0])))
+
+static u32 slot_click_tick[32] = {0};
+
+static const char *taskbar_app_name(app_id_t app) {
+    switch (app) {
+        case APP_TERMINAL: return "Terminal";
+        case APP_FILES:    return "Files";
+        case APP_BROWSER:  return "Browser";
+        case APP_NOTES:    return "Notes";
+        case APP_EDITOR:   return "Editor";
+        case APP_SETTINGS: return "Settings";
+        case APP_SYSMON:   return "SysMon";
+        case APP_CALC:     return "Calculator";
+        case APP_PAINT:    return "Paint";
+        case APP_CLOCK:    return "Clock";
+        case APP_NETMON:   return "NetMon";
+        case APP_USERS:    return "Users";
+        case APP_PKGMGR:   return "Packages";
+        default:           return "App";
+    }
+}
 
 /* ---- Layout cache -------------------------------------------------------- */
 #define DOCK_SLOT_MAX 24
@@ -148,16 +182,17 @@ void taskbar_draw(void) {
 
     rect_t dr = L.dock_rect;
 
-    /* ---- Pill background ---- */
-    gfx_shadow_ext(dr.x - 4, dr.y - 4, dr.w + 8, dr.h + 8, 10);
-    gfx_rect_rounded(dr.x, dr.y, dr.w, dr.h, DOCK_CORNER, g_theme->taskbar);
-    gfx_rect_blend(dr.x, dr.y, dr.w, dr.h, COL_WHITE, 10);
-    gfx_rect_rounded_outline(dr.x, dr.y, dr.w, dr.h, DOCK_CORNER, COL_BORDER);
+    /* ---- Frosted-glass dock background ----
+     * Soft floating shadow first, then the glass panel (blur backdrop + tint +
+     * top sheen + hairline) at the standard dock radius. The panel is
+     * translucent so the wallpaper reads through it. */
+    gfx_shadow_soft(dr.x, dr.y, dr.w, dr.h, DOCK_CORNER);
+    gfx_glass_panel(dr.x, dr.y, dr.w, dr.h, DOCK_CORNER);
 
     /* ---- Launcher grid button ---- */
     rect_t lr = L.launcher_rect;
     u32 lbg = launcher_open ? COL_PRIMARY : COL_SURFACE2;
-    gfx_rect_rounded(lr.x, lr.y, lr.w, lr.h, 10, lbg);
+    gfx_rect_rounded(lr.x, lr.y, lr.w, lr.h, CDL_R_BUTTON, lbg);
     if (launcher_open)
         gfx_rect_blend(lr.x, lr.y, lr.w, lr.h, COL_WHITE, 30);
     /* 3x2 dot grid */
@@ -177,7 +212,13 @@ void taskbar_draw(void) {
                  dr.h - DOCK_PAD_H * 2, COL_BORDER);
     }
 
-    /* ---- App slots ---- */
+    /* ---- App slots ----
+     * Magnification is applied to the *visual* icon size only. Each slot's
+     * click rect (s->rect) is unchanged, so hit-testing in
+     * taskbar_handle_mouse() stays exact regardless of the animation. */
+    bool mag_active = (g_dock_mouse_y >= dr.y - 24) &&
+                      (g_dock_mouse_y <= dr.y + dr.h + 24);
+
     for (int i = 0; i < L.slot_count; i++) {
         dock_slot_t *s = &L.slots[i];
         rect_t r = s->rect;
@@ -185,25 +226,73 @@ void taskbar_draw(void) {
         bool is_focused = w && w->focused && !w->minimized;
         bool is_open    = w != NULL;
 
-        /* Active slot highlight */
+        /* Slot centre and fixed baseline (bottom of the base icon). Icons grow
+         * upward from this baseline so the dock's lower edge never shifts. */
+        i32 cx          = r.x + r.w / 2;
+        i32 base_bottom = r.y + (r.h - DOCK_ICON_BASE) / 2 + DOCK_ICON_BASE;
+
+        /* Distance->scale ramp: full size + extra px that decays linearly over
+         * ~2 icon widths. Integer math only. */
+        i32 size = DOCK_ICON_BASE;
+        if (mag_active) {
+            i32 dist = g_dock_mouse_x - cx;
+            if (dist < 0) dist = -dist;
+            if (dist < DOCK_MAG_RANGE)
+                size += (DOCK_MAG_EXTRA * (DOCK_MAG_RANGE - dist)) / DOCK_MAG_RANGE;
+        }
+
+        i32 icon_x = cx - size / 2;          /* centred horizontally */
+        i32 icon_y = base_bottom - size;     /* anchored to baseline */
+
+        /* Active/minimized chip, sized to the (possibly magnified) icon */
         if (is_focused) {
-            gfx_rect_rounded(r.x - 2, r.y - 2, r.w + 4, r.h + 4, 10, COL_SURFACE3);
-            gfx_rect_rounded_outline(r.x - 2, r.y - 2, r.w + 4, r.h + 4, 10, COL_PRIMARY);
+            gfx_rect_rounded(icon_x - 4, icon_y - 4, size + 8, size + 8,
+                             CDL_R_BUTTON, COL_SURFACE3);
+            gfx_rect_rounded_outline(icon_x - 4, icon_y - 4, size + 8, size + 8,
+                                     CDL_R_BUTTON, COL_PRIMARY);
         } else if (is_open && w->minimized) {
-            /* Minimized: subtle tint */
-            gfx_rect_rounded(r.x - 1, r.y - 1, r.w + 2, r.h + 2, 8, COL_SURFACE2);
+            gfx_rect_rounded(icon_x - 3, icon_y - 3, size + 6, size + 6,
+                             CDL_R_BUTTON, COL_SURFACE2);
         }
 
         /* Icon */
         u32 icon_col = is_focused ? slot_color(s->app) :
                        (is_open   ? COL_DIM              :
                                     COL_MUTED);
-        gfx_draw_icon(s->app, r.x + (r.w - 32) / 2, r.y + (r.h - 32) / 2, 32, icon_col);
+        icon_draw_app(s->app, icon_x, icon_y, size, icon_col);
 
-        /* Running dot */
+        /* Ripple effect */
+        u32 now = timer_get_ticks();
+        u32 ct = slot_click_tick[s->app];
+        if (ct > 0 && now - ct < 300) {
+            u32 prog = now - ct;
+            i32 rw = size + (prog * 30 / 300);
+            u32 alpha = 100 - (prog * 100 / 300);
+            gfx_rect_blend(icon_x - (rw-size)/2, icon_y - (rw-size)/2, rw, rw, COL_WHITE, alpha);
+        }
+
+        /* Running indicator: dot anchored to the dock baseline (not magnified)
+         * so dots stay aligned. Focused app gets a brighter, wider dot. */
         if (is_open) {
-            u32 dot = is_focused ? COL_PRIMARY : COL_DIM;
-            gfx_circle_fill(r.x + r.w / 2, r.y + r.h + 4, 2, dot);
+            i32 dot_y = dr.y + dr.h - 6;
+            if (is_focused) gfx_circle_fill(cx, dot_y, 3, COL_ACCENT);
+            else            gfx_circle_fill(cx, dot_y, 2, COL_DIM);
+        }
+    }
+
+    /* Draw tooltips after everything so they're on top */
+    for (int i = 0; i < L.slot_count; i++) {
+        dock_slot_t *s = &L.slots[i];
+        rect_t r = s->rect;
+        if (rect_contains(r, g_dock_mouse_x, g_dock_mouse_y)) {
+            const char* name = taskbar_app_name(s->app);
+            i32 tw = gfx_str_width_ex(name, FONT_BODY) + 16;
+            i32 th = gfx_line_h_ex(FONT_BODY) + 8;
+            i32 tx = r.x + r.w / 2 - tw / 2;
+            i32 ty = r.y - th - 12;
+            gfx_shadow_soft(tx, ty, tw, th, 6);
+            gfx_glass_panel(tx, ty, tw, th, 6);
+            gfx_str_centered(tx, ty, tw, name, COL_TEXT, COL_TRANSPARENT);
         }
     }
 
@@ -215,6 +304,11 @@ void taskbar_draw(void) {
 
 /* ---- Mouse handling ------------------------------------------------------ */
 void taskbar_handle_mouse(mouse_t *m) {
+    /* Cache cursor every frame (this runs each frame) so taskbar_draw() can
+     * drive magnification. Must happen before the click-only early return. */
+    g_dock_mouse_x = m->x;
+    g_dock_mouse_y = m->y;
+
     if (!m->left_clicked) return;
 
     /* Show-desktop nub */
@@ -240,9 +334,13 @@ void taskbar_handle_mouse(mouse_t *m) {
         app_id_t  app = L.slots[i].app;
 
         if (w) {
-            /* Window exists: toggle focus/minimize */
+            /* Window exists: toggle focus/minimize. wm_minimize() now toggles --
+             * minimising an open window, or playing the dock-grow restore
+             * animation for a minimised one -- so route both through it and only
+             * plain-focus a window that is merely unfocused. */
             if (w->focused && !w->minimized) wm_minimize(w);
-            else { w->minimized = false; wm_focus(w); }
+            else if (w->minimized)           wm_minimize(w);
+            else                             wm_focus(w);
         } else {
             /* Pinned but not open: launch it */
             const char *name = "App";
@@ -263,6 +361,7 @@ void taskbar_handle_mouse(mouse_t *m) {
             i32 cx = avail_x + (sw - avail_x - ww) / 2;
             wm_open(app, name, cx, (sh - wh) / 2 - 10, ww, wh);
         }
+        slot_click_tick[app] = timer_get_ticks();
         return;
     }
 }

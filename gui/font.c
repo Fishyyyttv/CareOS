@@ -6,11 +6,15 @@
 extern const font_family_t font_jetbrains_mono;
 extern const font_family_t font_jetbrains_mono_bold;
 extern const font_family_t font_classic;
+extern const font_family_t font_ibm_plex_mono;
+extern const font_family_t font_ibm_plex_mono_bold;
 
 static const font_family_t *registry[] = {
     &font_jetbrains_mono,
     &font_jetbrains_mono_bold,
     &font_classic,
+    &font_ibm_plex_mono,
+    &font_ibm_plex_mono_bold,
 };
 #define REGISTRY_COUNT (sizeof(registry) / sizeof(registry[0]))
 
@@ -29,11 +33,16 @@ const font_face_t *font_face_at(u32 size_index) {
     return &registry[active_index]->faces[size_index];
 }
 
-/* Bold always resolves to the Bold family regardless of the active choice, so
- * gfx_str_bold() renders real weight rather than a synthetic one. */
+/* Bold resolves to the Bold family that matches the active choice, so
+ * gfx_str_bold() renders real weight rather than a synthetic one. IBM Plex Mono
+ * pairs with its own bold; everything else falls back to JetBrains Mono Bold. */
 const font_face_t *font_bold_face_at(u32 size_index) {
     if (size_index >= FONT_FACES) size_index = FONT_BODY;
-    return &font_jetbrains_mono_bold.faces[size_index];
+    const font_family_t *bold = &font_jetbrains_mono_bold;
+    if (registry[active_index] == &font_ibm_plex_mono ||
+        registry[active_index] == &font_ibm_plex_mono_bold)
+        bold = &font_ibm_plex_mono_bold;
+    return &bold->faces[size_index];
 }
 
 void font_set_family(u32 index) {

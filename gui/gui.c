@@ -3,6 +3,11 @@
  * ============================================================================= */
 #include "kernel.h"
 #include "gui.h"
+#include "image.h"
+#include "resource_cache.h"
+#include "icon.h"
+
+static void draw_glass_panel(rect_t r, i32 radius);
 
 static i32 ui_clampi(i32 v, i32 lo, i32 hi) {
     if (v < lo) return lo;
@@ -19,6 +24,11 @@ void gui_init(u32 *fb, u32 w, u32 h, u32 pitch) {
         const careos_settings_t *cfg = settings_get();
         theme_switch(cfg ? (cfg->theme == 0) : true);
     }
+
+    /* Before mouse/wm so the first painted frame already has its artwork.
+     * Publishes /system/icons and /system/wallpapers and starts the cache. */
+    serial_write("  [gui_init] resources_init\n");
+    resources_init();
 
     serial_write("  [gui_init] mouse_init\n");
     mouse_init();
@@ -106,6 +116,13 @@ static void draw_boot_splash(int done, u32 tick) {
 static void draw_elite_wallpaper(void) {
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
+
+    /* An installed /system/wallpapers/default image wins; the procedural
+     * gradient below is the fallback, not the other way round. wallpaper_draw()
+     * cover-fits, so the image needs no particular aspect ratio and survives a
+     * resolution change without reloading. */
+    if (wallpaper_draw(0, 0, sw, sh)) return;
+
     i32 cx = sw * 45 / 100;
     i32 cy = sh * 42 / 100;
     i32 r  = sw * 36 / 100;
@@ -126,6 +143,16 @@ static void draw_elite_wallpaper(void) {
     /* Bottom triangle accent (purple) */
     gfx_triangle_fill(sw / 5, sh, sw * 2 / 5, sh, sw * 3 / 10, sh * 3 / 4, rgb(0x50, 0x3e, 0xc0));
     gfx_rect_blend(0, sh * 3/5, sw, sh * 2/5, rgb(0x02, 0x03, 0x0a), 90);
+}
+
+/* Desktop backdrop for the main loop: blit the cached wallpaper when it is
+ * valid (one memcpy), otherwise render it the slow way once and cache the
+ * result. draw_elite_wallpaper() is still used directly on the login/lock
+ * screens, which composite changing overlays on top and are not hot paths. */
+static void draw_wallpaper_cached(void) {
+    if (gfx_wallpaper_cache_blit()) return;
+    draw_elite_wallpaper();
+    gfx_wallpaper_cache_capture();
 }
 
 static void draw_status_wifi(i32 x, i32 y, bool up) {
@@ -152,7 +179,65 @@ static void draw_status_battery(i32 x, i32 y) {
     gfx_rect_rounded(x + 2, y + 6, 14, 6, 2, COL_GREEN);
 }
 
-static void draw_top_bar(void) {
+/* =============================================================================
+ * CareOS Control Center & Notification Center State & Core Implementation
+ * ============================================================================= */
+
+/* Control Center State */
+static bool s_control_center_open = false;
+static bool s_wifi_enabled = true;
+static bool s_bt_enabled = true;
+static bool s_dnd_enabled = false;
+static int  s_brightness = 100; /* 10% to 100% */
+static int  s_volume = 80;     /* 0% to 100% */
+
+/* Notification Center State */
+typedef struct {
+    char title[36];
+    char body[128];
+    char time_str[16];
+    u32  color;
+    bool active;
+} nc_item_t;
+
+#define NC_MAX_ITEMS 16
+static nc_item_t s_nc_items[NC_MAX_ITEMS];
+static int s_nc_count = 0;
+static bool s_notif_center_open = false;
+static i32 s_notif_center_anim_x = 0;
+static bool s_nc_inited = false;
+
+static void control_center_add_notif(const char *title, const char *body, u32 color) {
+    if (s_nc_count < NC_MAX_ITEMS) {
+        for (int i = s_nc_count; i > 0; i--) {
+            s_nc_items[i] = s_nc_items[i - 1];
+        }
+        s_nc_count++;
+    } else {
+        for (int i = NC_MAX_ITEMS - 1; i > 0; i--) {
+            s_nc_items[i] = s_nc_items[i - 1];
+        }
+    }
+    kstrncpy(s_nc_items[0].title, title, 35);
+    s_nc_items[0].title[35] = '\0';
+    kstrncpy(s_nc_items[0].body, body, 127);
+    s_nc_items[0].body[127] = '\0';
+    kstrcpy(s_nc_items[0].time_str, "Just now");
+    s_nc_items[0].color = color ? color : COL_ACCENT;
+    s_nc_items[0].active = true;
+
+    notify_push(title, body, color);
+}
+
+static void init_nc_default_items(void) {
+    if (s_nc_inited) return;
+    s_nc_inited = true;
+    control_center_add_notif("Welcome to CareOS", "Wave 2 Control & Notification Center active.", COL_PRIMARY);
+    control_center_add_notif("Wi-Fi Connected", "Joined high-speed network 'CareOS-5G'.", COL_GREEN);
+    control_center_add_notif("System Status", "All background services operating normally.", COL_ACCENT);
+}
+
+static void draw_top_bar(const mouse_t *m) {
     i32 sw = (i32)SCREEN_W;
     i32 sc = (i32)GFX_FONT_SCALE;
     i32 fw = (i32)(FONT_W * GFX_FONT_SCALE);
@@ -175,9 +260,8 @@ static void draw_top_bar(void) {
     x += gfx_str_width("Machine") + fw * 3;
     gfx_str(x, ty, "View", COL_DIM, COL_TRANSPARENT);
 
-    /* Right: status icons + clock */
+    /* Right: status icons + clock + control/notification center triggers */
     rtc_time_t t; rtc_read(&t);
-    /* Adjust for UTC-7 (PDT) */
     int hour = (int)t.hour - 7;
     if (hour < 0) { hour += 24; if (t.day > 0) t.day--; }
     
@@ -204,12 +288,415 @@ static void draw_top_bar(void) {
 
     i32 clk_w = gfx_str_width(clock_s);
     i32 tx    = sw - clk_w - fw * 2;
+
+    /* Notification Center trigger button (Bell / [N]) */
+    i32 bell_w = 32;
+    i32 bell_x = tx - bell_w - 8;
+    bool nc_hover = m && rect_contains(rect_make(bell_x, 2, bell_w + clk_w + fw * 2, TOPBAR_H - 4), m->x, m->y);
+
+    if (s_notif_center_open) {
+        gfx_rect_rounded(bell_x, 4, bell_w + clk_w + fw * 2 - 4, TOPBAR_H - 8, 6, COL_PRIMARY);
+    } else if (nc_hover) {
+        gfx_rect_rounded(bell_x, 4, bell_w + clk_w + fw * 2 - 4, TOPBAR_H - 8, 6, COL_SURFACE2);
+    }
+
+    gfx_str(bell_x + 6, ty, "[N]", s_notif_center_open ? COL_WHITE : COL_ACCENT, COL_TRANSPARENT);
+    if (s_nc_count > 0) {
+        gfx_circle_fill(bell_x + bell_w - 8, 8, 4, COL_RED);
+    }
+
     gfx_str(tx, ty, clock_s, COL_WHITE, COL_TRANSPARENT);
 
-    /* Status icons (wifi, speaker, battery) */
-    draw_status_wifi(tx - 84, (TOPBAR_H - 16) / 2, net_is_up());
-    draw_status_speaker(tx - 58, (TOPBAR_H - 16) / 2);
-    draw_status_battery(tx - 30, (TOPBAR_H - 16) / 2);
+    /* Control Center trigger button (Status icons area) */
+    i32 cc_btn_x = bell_x - 94;
+    i32 cc_btn_w = 88;
+    bool cc_hover = m && rect_contains(rect_make(cc_btn_x - 4, 2, cc_btn_w + 8, TOPBAR_H - 4), m->x, m->y);
+
+    if (s_control_center_open) {
+        gfx_rect_rounded(cc_btn_x - 4, 4, cc_btn_w + 8, TOPBAR_H - 8, 6, COL_PRIMARY);
+    } else if (cc_hover) {
+        gfx_rect_rounded(cc_btn_x - 4, 4, cc_btn_w + 8, TOPBAR_H - 8, 6, COL_SURFACE2);
+    }
+
+    draw_status_wifi(cc_btn_x, (TOPBAR_H - 16) / 2, s_wifi_enabled);
+    draw_status_speaker(cc_btn_x + 28, (TOPBAR_H - 16) / 2);
+    draw_status_battery(cc_btn_x + 58, (TOPBAR_H - 16) / 2);
+}
+
+static bool handle_top_bar_mouse(mouse_t *m) {
+    if (!m || !m->left_clicked) return false;
+    if (m->y >= TOPBAR_H) return false;
+
+    i32 sw = (i32)SCREEN_W;
+    i32 fw = (i32)(FONT_W * GFX_FONT_SCALE);
+    i32 clk_w = gfx_str_width("Jan 00, 00:00 AM");
+    i32 bell_w = 32;
+    i32 bell_x = sw - clk_w - fw * 2 - bell_w - 16;
+    i32 cc_btn_x = bell_x - 94;
+
+    /* Click on Notification Center / Clock area */
+    if (m->x >= bell_x - 10 && m->x <= sw) {
+        s_notif_center_open = !s_notif_center_open;
+        if (s_notif_center_open) s_control_center_open = false;
+        return true;
+    }
+
+    /* Click on Control Center / Status Icons area */
+    if (m->x >= cc_btn_x - 10 && m->x < bell_x - 10) {
+        s_control_center_open = !s_control_center_open;
+        if (s_control_center_open) s_notif_center_open = false;
+        return true;
+    }
+
+    return false;
+}
+
+static void draw_control_center(mouse_t *m) {
+    if (!s_control_center_open) return;
+
+    i32 sw = (i32)SCREEN_W;
+    i32 pw = 340;
+    i32 ph = 330;
+    i32 px = sw - pw - 14;
+    i32 py = TOPBAR_H + 8;
+    rect_t panel_r = rect_make(px, py, pw, ph);
+
+    /* Glass Panel background & soft shadow */
+    gfx_shadow_soft(px, py, pw, ph, 16);
+    draw_glass_panel(panel_r, 16);
+
+    /* Header */
+    gfx_str_ex(px + 18, py + 16, "Control Center", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+    /* Close X button */
+    rect_t close_r = rect_make(px + pw - 34, py + 14, 20, 20);
+    bool close_hov = m && rect_contains(close_r, m->x, m->y);
+    gfx_circle_fill(close_r.x + 10, close_r.y + 10, 10, close_hov ? COL_RED : COL_SURFACE2);
+    gfx_str(close_r.x + 6, close_r.y + 3, "x", COL_WHITE, COL_TRANSPARENT);
+
+    /* --- Tile Row 1: Wi-Fi & Bluetooth --- */
+    /* Wi-Fi Tile */
+    rect_t wifi_r = rect_make(px + 16, py + 48, 146, 56);
+    bool wifi_hov = m && rect_contains(wifi_r, m->x, m->y);
+    u32 wifi_bg = s_wifi_enabled ? COL_PRIMARY : (wifi_hov ? COL_SURFACE3 : COL_SURFACE2);
+    gfx_rect_rounded(wifi_r.x, wifi_r.y, wifi_r.w, wifi_r.h, 12, wifi_bg);
+    gfx_rect_rounded_outline(wifi_r.x, wifi_r.y, wifi_r.w, wifi_r.h, 12, wifi_hov ? COL_ACCENT : COL_BORDER);
+    draw_status_wifi(wifi_r.x + 14, wifi_r.y + 20, s_wifi_enabled);
+    gfx_str_bold(wifi_r.x + 40, wifi_r.y + 12, "Wi-Fi", s_wifi_enabled ? COL_WHITE : COL_TEXT, COL_TRANSPARENT);
+    gfx_str(wifi_r.x + 40, wifi_r.y + 30, s_wifi_enabled ? "CareOS-5G" : "Off", s_wifi_enabled ? rgb(0xe0,0xf2,0xfe) : COL_MUTED, COL_TRANSPARENT);
+
+    /* Bluetooth Tile */
+    rect_t bt_r = rect_make(px + 178, py + 48, 146, 56);
+    bool bt_hov = m && rect_contains(bt_r, m->x, m->y);
+    u32 bt_bg = s_bt_enabled ? rgb(0x7c, 0x3a, 0xed) : (bt_hov ? COL_SURFACE3 : COL_SURFACE2);
+    gfx_rect_rounded(bt_r.x, bt_r.y, bt_r.w, bt_r.h, 12, bt_bg);
+    gfx_rect_rounded_outline(bt_r.x, bt_r.y, bt_r.w, bt_r.h, 12, bt_hov ? COL_ACCENT : COL_BORDER);
+    gfx_str_bold(bt_r.x + 14, bt_r.y + 18, "BT", s_bt_enabled ? COL_WHITE : COL_MUTED, COL_TRANSPARENT);
+    gfx_str_bold(bt_r.x + 40, bt_r.y + 12, "Bluetooth", s_bt_enabled ? COL_WHITE : COL_TEXT, COL_TRANSPARENT);
+    gfx_str(bt_r.x + 40, bt_r.y + 30, s_bt_enabled ? "On" : "Off", s_bt_enabled ? rgb(0xed,0xe9,0xfe) : COL_MUTED, COL_TRANSPARENT);
+
+    /* --- Tile Row 2: Do Not Disturb & Theme --- */
+    /* DND Tile */
+    rect_t dnd_r = rect_make(px + 16, py + 112, 146, 48);
+    bool dnd_hov = m && rect_contains(dnd_r, m->x, m->y);
+    u32 dnd_bg = s_dnd_enabled ? rgb(0xdb, 0x27, 0x77) : (dnd_hov ? COL_SURFACE3 : COL_SURFACE2);
+    gfx_rect_rounded(dnd_r.x, dnd_r.y, dnd_r.w, dnd_r.h, 12, dnd_bg);
+    gfx_rect_rounded_outline(dnd_r.x, dnd_r.y, dnd_r.w, dnd_r.h, 12, dnd_hov ? COL_ACCENT : COL_BORDER);
+    gfx_str_bold(dnd_r.x + 14, dnd_r.y + 15, "DND", s_dnd_enabled ? COL_WHITE : COL_TEXT, COL_TRANSPARENT);
+    gfx_str(dnd_r.x + 50, dnd_r.y + 15, s_dnd_enabled ? "On" : "Off", s_dnd_enabled ? COL_WHITE : COL_MUTED, COL_TRANSPARENT);
+
+    /* Theme Tile */
+    rect_t theme_r = rect_make(px + 178, py + 112, 146, 48);
+    bool theme_hov = m && rect_contains(theme_r, m->x, m->y);
+    u32 theme_bg = theme_hov ? COL_SURFACE3 : COL_SURFACE2;
+    gfx_rect_rounded(theme_r.x, theme_r.y, theme_r.w, theme_r.h, 12, theme_bg);
+    gfx_rect_rounded_outline(theme_r.x, theme_r.y, theme_r.w, theme_r.h, 12, theme_hov ? COL_ACCENT : COL_BORDER);
+    gfx_str_bold(theme_r.x + 14, theme_r.y + 15, "Theme", COL_TEXT, COL_TRANSPARENT);
+    gfx_str(theme_r.x + 65, theme_r.y + 15, g_theme->is_dark ? "Dark" : "Light", COL_ACCENT, COL_TRANSPARENT);
+
+    /* --- Row 3: Brightness Slider --- */
+    rect_t bright_box = rect_make(px + 16, py + 168, 308, 64);
+    gfx_rect_rounded(bright_box.x, bright_box.y, bright_box.w, bright_box.h, 12, COL_SURFACE2);
+    gfx_rect_rounded_outline(bright_box.x, bright_box.y, bright_box.w, bright_box.h, 12, COL_BORDER);
+
+    gfx_str_bold(bright_box.x + 14, bright_box.y + 10, "Display Brightness", COL_TEXT, COL_TRANSPARENT);
+    char b_str[16];
+    ksprintf(b_str, "%d%%", s_brightness);
+    gfx_str_right(bright_box.x, bright_box.y + 10, bright_box.w - 14, b_str, COL_ACCENT, COL_TRANSPARENT);
+
+    rect_t b_minus = rect_make(bright_box.x + 12, bright_box.y + 32, 28, 22);
+    rect_t b_plus  = rect_make(bright_box.x + bright_box.w - 40, bright_box.y + 32, 28, 22);
+    rect_t b_bar   = rect_make(bright_box.x + 48, bright_box.y + 37, bright_box.w - 96, 12);
+
+    gfx_rect_rounded(b_minus.x, b_minus.y, b_minus.w, b_minus.h, 6, m && rect_contains(b_minus, m->x, m->y) ? COL_SURFACE3 : COL_SURFACE);
+    gfx_str_centered(b_minus.x, b_minus.y + 3, b_minus.w, "-", COL_TEXT, COL_TRANSPARENT);
+
+    gfx_rect_rounded(b_plus.x, b_plus.y, b_plus.w, b_plus.h, 6, m && rect_contains(b_plus, m->x, m->y) ? COL_SURFACE3 : COL_SURFACE);
+    gfx_str_centered(b_plus.x, b_plus.y + 3, b_plus.w, "+", COL_TEXT, COL_TRANSPARENT);
+
+    gfx_rect_rounded(b_bar.x, b_bar.y, b_bar.w, b_bar.h, 6, COL_SURFACE);
+    i32 b_fill = b_bar.w * s_brightness / 100;
+    if (b_fill > 0) {
+        gfx_rect_rounded(b_bar.x, b_bar.y, b_fill, b_bar.h, 6, COL_YELLOW);
+    }
+
+    /* --- Row 4: Volume Slider --- */
+    rect_t vol_box = rect_make(px + 16, py + 240, 308, 64);
+    gfx_rect_rounded(vol_box.x, vol_box.y, vol_box.w, vol_box.h, 12, COL_SURFACE2);
+    gfx_rect_rounded_outline(vol_box.x, vol_box.y, vol_box.w, vol_box.h, 12, COL_BORDER);
+
+    gfx_str_bold(vol_box.x + 14, vol_box.y + 10, "Sound Volume", COL_TEXT, COL_TRANSPARENT);
+    char v_str[16];
+    ksprintf(v_str, "%d%%", s_volume);
+    gfx_str_right(vol_box.x, vol_box.y + 10, vol_box.w - 14, v_str, COL_ACCENT, COL_TRANSPARENT);
+
+    rect_t v_minus = rect_make(vol_box.x + 12, vol_box.y + 32, 28, 22);
+    rect_t v_plus  = rect_make(vol_box.x + vol_box.w - 40, vol_box.y + 32, 28, 22);
+    rect_t v_bar   = rect_make(vol_box.x + 48, vol_box.y + 37, vol_box.w - 96, 12);
+
+    gfx_rect_rounded(v_minus.x, v_minus.y, v_minus.w, v_minus.h, 6, m && rect_contains(v_minus, m->x, m->y) ? COL_SURFACE3 : COL_SURFACE);
+    gfx_str_centered(v_minus.x, v_minus.y + 3, v_minus.w, "-", COL_TEXT, COL_TRANSPARENT);
+
+    gfx_rect_rounded(v_plus.x, v_plus.y, v_plus.w, v_plus.h, 6, m && rect_contains(v_plus, m->x, m->y) ? COL_SURFACE3 : COL_SURFACE);
+    gfx_str_centered(v_plus.x, v_plus.y + 3, v_plus.w, "+", COL_TEXT, COL_TRANSPARENT);
+
+    gfx_rect_rounded(v_bar.x, v_bar.y, v_bar.w, v_bar.h, 6, COL_SURFACE);
+    i32 v_fill = v_bar.w * s_volume / 100;
+    if (v_fill > 0) {
+        gfx_rect_rounded(v_bar.x, v_bar.y, v_fill, v_bar.h, 6, COL_GREEN);
+    }
+}
+
+static bool handle_control_center_mouse(mouse_t *m) {
+    if (!s_control_center_open || !m || !m->left_clicked) return false;
+
+    i32 sw = (i32)SCREEN_W;
+    i32 pw = 340;
+    i32 ph = 330;
+    i32 px = sw - pw - 14;
+    i32 py = TOPBAR_H + 8;
+    rect_t panel_r = rect_make(px, py, pw, ph);
+
+    if (!rect_contains(panel_r, m->x, m->y)) {
+        if (m->y > TOPBAR_H) {
+            s_control_center_open = false;
+        }
+        return false;
+    }
+
+    /* Close button */
+    rect_t close_r = rect_make(px + pw - 34, py + 14, 20, 20);
+    if (rect_contains(close_r, m->x, m->y)) {
+        s_control_center_open = false;
+        return true;
+    }
+
+    /* Wi-Fi Tile */
+    rect_t wifi_r = rect_make(px + 16, py + 48, 146, 56);
+    if (rect_contains(wifi_r, m->x, m->y)) {
+        s_wifi_enabled = !s_wifi_enabled;
+        control_center_add_notif("Wi-Fi", s_wifi_enabled ? "Wi-Fi enabled and connected." : "Wi-Fi disabled.", COL_PRIMARY);
+        return true;
+    }
+
+    /* Bluetooth Tile */
+    rect_t bt_r = rect_make(px + 178, py + 48, 146, 56);
+    if (rect_contains(bt_r, m->x, m->y)) {
+        s_bt_enabled = !s_bt_enabled;
+        control_center_add_notif("Bluetooth", s_bt_enabled ? "Bluetooth enabled." : "Bluetooth turned off.", rgb(0x7c, 0x3a, 0xed));
+        return true;
+    }
+
+    /* DND Tile */
+    rect_t dnd_r = rect_make(px + 16, py + 112, 146, 48);
+    if (rect_contains(dnd_r, m->x, m->y)) {
+        s_dnd_enabled = !s_dnd_enabled;
+        control_center_add_notif("Do Not Disturb", s_dnd_enabled ? "DND activated." : "DND turned off.", rgb(0xdb, 0x27, 0x77));
+        return true;
+    }
+
+    /* Theme Tile */
+    rect_t theme_r = rect_make(px + 178, py + 112, 146, 48);
+    if (rect_contains(theme_r, m->x, m->y)) {
+        theme_switch(!g_theme->is_dark);
+        control_center_add_notif("Theme Changed", g_theme->is_dark ? "Switched to Dark mode." : "Switched to Light mode.", COL_ACCENT);
+        return true;
+    }
+
+    /* Brightness Controls */
+    rect_t bright_box = rect_make(px + 16, py + 168, 308, 64);
+    rect_t b_minus = rect_make(bright_box.x + 12, bright_box.y + 32, 28, 22);
+    rect_t b_plus  = rect_make(bright_box.x + bright_box.w - 40, bright_box.y + 32, 28, 22);
+    rect_t b_bar   = rect_make(bright_box.x + 48, bright_box.y + 37, bright_box.w - 96, 12);
+
+    if (rect_contains(b_minus, m->x, m->y)) {
+        if (s_brightness > 10) s_brightness -= 10;
+        return true;
+    }
+    if (rect_contains(b_plus, m->x, m->y)) {
+        if (s_brightness < 100) s_brightness += 10;
+        return true;
+    }
+    if (rect_contains(b_bar, m->x, m->y)) {
+        i32 rel_x = m->x - b_bar.x;
+        s_brightness = ui_clampi((rel_x * 100) / b_bar.w, 10, 100);
+        return true;
+    }
+
+    /* Volume Controls */
+    rect_t vol_box = rect_make(px + 16, py + 240, 308, 64);
+    rect_t v_minus = rect_make(vol_box.x + 12, vol_box.y + 32, 28, 22);
+    rect_t v_plus  = rect_make(vol_box.x + vol_box.w - 40, vol_box.y + 32, 28, 22);
+    rect_t v_bar   = rect_make(vol_box.x + 48, vol_box.y + 37, vol_box.w - 96, 12);
+
+    if (rect_contains(v_minus, m->x, m->y)) {
+        if (s_volume > 0) s_volume -= 10;
+        speaker_beep(400, 20);
+        return true;
+    }
+    if (rect_contains(v_plus, m->x, m->y)) {
+        if (s_volume < 100) s_volume += 10;
+        speaker_beep(800, 20);
+        return true;
+    }
+    if (rect_contains(v_bar, m->x, m->y)) {
+        i32 rel_x = m->x - v_bar.x;
+        s_volume = ui_clampi((rel_x * 100) / v_bar.w, 0, 100);
+        speaker_beep(600, 20);
+        return true;
+    }
+
+    return true;
+}
+
+static void draw_notification_center(mouse_t *m) {
+    init_nc_default_items();
+
+    i32 sw = (i32)SCREEN_W;
+    i32 sh = (i32)SCREEN_H;
+    i32 pw = 340;
+    i32 ph = sh - TOPBAR_H;
+
+    i32 target_x = s_notif_center_open ? (sw - pw) : sw;
+
+    if (s_notif_center_anim_x < target_x) {
+        s_notif_center_anim_x += 40;
+        if (s_notif_center_anim_x > target_x) s_notif_center_anim_x = target_x;
+    } else if (s_notif_center_anim_x > target_x) {
+        s_notif_center_anim_x -= 40;
+        if (s_notif_center_anim_x < target_x) s_notif_center_anim_x = target_x;
+    }
+
+    if (s_notif_center_anim_x >= sw) return;
+
+    i32 px = s_notif_center_anim_x;
+    i32 py = TOPBAR_H;
+
+    gfx_shadow_soft(px - 10, py, pw + 10, ph, 0);
+    gfx_rect_rounded(px, py, pw, ph, 0, COL_SURFACE);
+    gfx_rect_blend(px, py, pw, ph, COL_GLASS_TINT, g_theme->is_dark ? 45 : 25);
+    gfx_vline(px, py, ph, COL_BORDER);
+
+    gfx_str_ex(px + 18, py + 16, "Notifications", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+
+    rect_t clear_r = rect_make(px + pw - 130, py + 16, 80, 24);
+    bool clear_hov = m && rect_contains(clear_r, m->x, m->y);
+    gfx_rect_rounded(clear_r.x, clear_r.y, clear_r.w, clear_r.h, 6, clear_hov ? COL_SURFACE3 : COL_SURFACE2);
+    gfx_str_centered(clear_r.x, clear_r.y + 4, clear_r.w, "Clear All", COL_TEXT, COL_TRANSPARENT);
+
+    rect_t close_r = rect_make(px + pw - 34, py + 18, 20, 20);
+    bool close_hov = m && rect_contains(close_r, m->x, m->y);
+    gfx_circle_fill(close_r.x + 10, close_r.y + 10, 10, close_hov ? COL_RED : COL_SURFACE2);
+    gfx_str(close_r.x + 6, close_r.y + 3, "x", COL_WHITE, COL_TRANSPARENT);
+
+    gfx_hline(px + 16, py + 48, pw - 32, COL_BORDER);
+
+    i32 item_y = py + 58;
+    int visible_count = 0;
+
+    for (int i = 0; i < s_nc_count; i++) {
+        if (!s_nc_items[i].active) continue;
+        visible_count++;
+
+        rect_t item_r = rect_make(px + 16, item_y, pw - 32, 74);
+        if (item_y + item_r.h > py + ph - 16) break;
+
+        bool item_hov = m && rect_contains(item_r, m->x, m->y);
+
+        gfx_rect_rounded(item_r.x, item_r.y, item_r.w, item_r.h, 10, item_hov ? COL_SURFACE3 : COL_SURFACE2);
+        gfx_rect_rounded_outline(item_r.x, item_r.y, item_r.w, item_r.h, 10, COL_BORDER);
+
+        gfx_rect_rounded(item_r.x + 2, item_r.y + 6, 4, item_r.h - 12, 2, s_nc_items[i].color);
+
+        gfx_str_bold(item_r.x + 14, item_r.y + 10, s_nc_items[i].title, COL_TEXT, COL_TRANSPARENT);
+        gfx_str_right(item_r.x, item_r.y + 10, item_r.w - 30, s_nc_items[i].time_str, COL_MUTED, COL_TRANSPARENT);
+
+        gfx_str_clipped(item_r.x + 14, item_r.y + 32, item_r.w - 44, s_nc_items[i].body, COL_DIM, COL_TRANSPARENT);
+
+        rect_t del_r = rect_make(item_r.x + item_r.w - 24, item_r.y + 8, 16, 16);
+        if (m && rect_contains(del_r, m->x, m->y)) {
+            gfx_circle_fill(del_r.x + 8, del_r.y + 8, 8, COL_RED);
+        }
+
+        item_y += item_r.h + 10;
+    }
+
+    if (visible_count == 0) {
+        gfx_str_centered(px, py + ph / 2 - 10, pw, "No Notifications", COL_MUTED, COL_TRANSPARENT);
+    }
+}
+
+static bool handle_notification_center_mouse(mouse_t *m) {
+    if (!s_notif_center_open || !m || !m->left_clicked) return false;
+
+    i32 sw = (i32)SCREEN_W;
+    i32 sh = (i32)SCREEN_H;
+    i32 pw = 340;
+    i32 ph = sh - TOPBAR_H;
+    i32 px = sw - pw;
+    i32 py = TOPBAR_H;
+    rect_t panel_r = rect_make(px, py, pw, ph);
+
+    if (!rect_contains(panel_r, m->x, m->y)) {
+        if (m->y > TOPBAR_H) {
+            s_notif_center_open = false;
+        }
+        return false;
+    }
+
+    /* Clear All Button */
+    rect_t clear_r = rect_make(px + pw - 130, py + 16, 80, 24);
+    if (rect_contains(clear_r, m->x, m->y)) {
+        s_nc_count = 0;
+        return true;
+    }
+
+    /* Close Button */
+    rect_t close_r = rect_make(px + pw - 34, py + 18, 20, 20);
+    if (rect_contains(close_r, m->x, m->y)) {
+        s_notif_center_open = false;
+        return true;
+    }
+
+    /* Individual item dismiss */
+    i32 item_y = py + 58;
+    for (int i = 0; i < s_nc_count; i++) {
+        if (!s_nc_items[i].active) continue;
+        rect_t item_r = rect_make(px + 16, item_y, pw - 32, 74);
+        if (item_y + item_r.h > py + ph - 16) break;
+
+        rect_t del_r = rect_make(item_r.x + item_r.w - 24, item_r.y + 8, 16, 16);
+        if (rect_contains(del_r, m->x, m->y)) {
+            for (int j = i; j < s_nc_count - 1; j++) {
+                s_nc_items[j] = s_nc_items[j + 1];
+            }
+            s_nc_count--;
+            return true;
+        }
+
+        item_y += item_r.h + 10;
+    }
+
+    return true;
 }
 
 typedef enum {
@@ -823,6 +1310,8 @@ void gui_run(void) {
     u32 lx = 0, ly = 0;
     bool lb = false;
 
+    s_notif_center_anim_x = sw;
+
     while (1) {
             bool activity = false;
 
@@ -882,12 +1371,22 @@ void gui_run(void) {
                 g_last_activity_tick = timer_get_ticks();
                 needs_redraw = true;
             }
+            /* Step window open/close/minimise animations every frame so they
+             * read as smooth motion instead of the 5 Hz steps the old 200 ms
+             * gate produced. */
+            if (wm_animate_all()) activity = true;
+
+            /* Check notification center sliding animation */
+            i32 nc_target_x = s_notif_center_open ? ((i32)SCREEN_W - 340) : (i32)SCREEN_W;
+            if (s_notif_center_anim_x != nc_target_x) {
+                activity = true;
+            }
+
             if (now - last_sysmon >= 20) {
                 window_t *sm = wm_find_app(APP_SYSMON);
                 window_t *nm = wm_find_app(APP_NETMON);
                 if (sm) app_sysmon_tick(sm);
                 if (nm) app_netmon_tick(nm);
-                if (wm_animate_all()) activity = true;
                 last_sysmon = now;
                 activity = true; /* For clock update */
             }
@@ -897,12 +1396,21 @@ void gui_run(void) {
             if (activity) needs_redraw = true;
 
             if (needs_redraw) {
-                draw_elite_wallpaper();
+                draw_wallpaper_cached();
                 desktop_draw();
                 wm_draw_all();
                 taskbar_draw();
-                draw_top_bar();
+                draw_top_bar(&mouse);
                 if (launcher_open) launcher_draw(&mouse);
+
+                draw_notification_center(&mouse);
+                draw_control_center(&mouse);
+
+                if (s_brightness < 100) {
+                    u8 dim = (u8)((100 - s_brightness) * 1.8);
+                    gfx_rect_blend(0, 0, (i32)SCREEN_W, (i32)SCREEN_H, COL_BLACK, dim);
+                }
+
                 mouse_draw_cursor(mouse.x, mouse.y);
                 gfx_flip();
                 needs_redraw = false;
@@ -910,8 +1418,15 @@ void gui_run(void) {
 
             /* Handle input every frame to ensure responsiveness */
             if (!notify_handle_mouse(&mouse)) {
-                if (launcher_open) launcher_handle_mouse(&mouse);
-                else {
+                if (handle_control_center_mouse(&mouse)) {
+                    needs_redraw = true;
+                } else if (handle_notification_center_mouse(&mouse)) {
+                    needs_redraw = true;
+                } else if (handle_top_bar_mouse(&mouse)) {
+                    needs_redraw = true;
+                } else if (launcher_open) {
+                    launcher_handle_mouse(&mouse);
+                } else {
                     taskbar_handle_mouse(&mouse);
                     desktop_handle_mouse(&mouse);
                     wm_handle_mouse(&mouse);

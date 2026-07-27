@@ -127,10 +127,24 @@ typedef void (*isr_handler_t)(registers_t*);
 #define KB_STATUS_PORT  0x64
 #define KB_BUF_SIZE     256
 
-/* -- Memory --------------------------------------------------------------- */
-#define KERNEL_HEAP_START   0x400000    /* 4 MB */
-#define KERNEL_HEAP_SIZE    (192*1024*1024) /* 192 MB heap */
-#define KERNEL_RESERVED_BYTES (256*1024*1024) /* 256 MB reserved for kernel + VFS pool */
+/* -- Memory ---------------------------------------------------------------
+ * The heap is a static array in .bss (see heap_mem in kernel/memory.c), NOT a
+ * region at KERNEL_HEAP_START -- that constant is vestigial and unused.
+ * Growing KERNEL_HEAP_SIZE therefore grows the kernel image's memory footprint
+ * directly, and the loader must zero all of it at boot.
+ *
+ * 512 MB against the 4 GB the VM is given. Consumers are the framebuffer
+ * backbuffer (8 MB at 1080p), the image cache (RES_BUDGET_BYTES, 32 MB),
+ * per-window buffers, and VFS file contents. */
+#define KERNEL_HEAP_START   0x400000    /* vestigial; heap_mem[] lives in .bss */
+#define KERNEL_HEAP_SIZE    (512*1024*1024) /* 512 MB heap */
+
+/* FLOOR for the physical frames paging_init() withholds from pmm_alloc_frame().
+ * The real reservation is computed from the _kernel_end symbol emitted by
+ * kernel.ld, so it always covers the actual image; this only guarantees a
+ * minimum, keeping low memory the loader may have used out of circulation.
+ * Do NOT treat this as "where the kernel ends" -- it no longer is. */
+#define KERNEL_RESERVED_BYTES (256*1024*1024)
 #define PAGE_SIZE           4096
 
 /* -- Serial (debug) ------------------------------------------------------- */
@@ -325,6 +339,23 @@ void shell_run(void);
 /* -- Package manager ------------------------------------------------------ */
 void carepkg_init(void);
 void carepkg_run(const char *cmd, const char *pkg);
+
+/* -- GUI resource cache (gui/resource_cache.c) ----------------------------
+ * Declared here, not only in gui/resource_cache.h, so kernel-side code that
+ * rewrites or deletes an asset file can drop the stale decode without pulling
+ * gui.h into the kernel -- the same separation appdb.c keeps. Passing NULL
+ * flushes the whole cache. */
+void res_forget(const char *path);
+
+/* `res` command: archives mounted, cache occupancy, and -- the line that
+ * matters -- whether an icon name actually resolves to a decoded image. A theme
+ * that mounts but resolves nothing draws vector glyphs and looks intentional,
+ * so there is no other way to tell from the running system.
+ *
+ * Writes a multi-line report into `out` rather than printing, because the two
+ * shells have different output sinks (terminal_write vs win_append). 512 bytes
+ * is comfortably enough. */
+void res_status_text(char *out, u32 max);
 
 /* -- System info ---------------------------------------------------------- */
 void sysinfo_print(void);
@@ -623,6 +654,7 @@ typedef struct {
     u32  vesa_w;
     u32  vesa_h;
     u32  font_family;
+    u32  accent;
 } careos_settings_t;
 
 void settings_init(void);
@@ -632,6 +664,7 @@ void settings_set_mouse_sensitivity(u32 pct);
 void settings_set_boot_fast(bool enabled);
 void settings_set_clock_24h(bool enabled);
 void settings_set_wallpaper(u32 wallpaper);
+void settings_set_accent(u32 accent);
 void settings_set_taskbar_centered(bool centered);
 void settings_set_wifi_profile(const char *ssid, const char *pass, bool connected);
 void settings_set_vesa_mode(u32 w, u32 h);

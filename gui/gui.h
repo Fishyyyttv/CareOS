@@ -142,6 +142,33 @@ extern u32 g_last_activity_tick;
 #define COL_PURPLE      rgb(0x7c,0x3a,0xed)
 #define COL_TRANSPARENT 0xFF000001U
 
+/* ── Care Design Language (CDL) tokens ─────────────────────────────────────
+ * One source of truth for radii, shadows, glass, and animation timing so every
+ * built-in surface reads as one intentional system. Change it here, not in the
+ * individual widgets. Radii are the values from the CDL spec:
+ *   buttons/inputs 10, menus 12, windows/cards 14, dock 24.                   */
+#define CDL_SP            8       /* base spacing grid unit */
+#define CDL_R_BUTTON      10
+#define CDL_R_INPUT       10
+#define CDL_R_MENU        12
+#define CDL_R_WINDOW      14
+#define CDL_R_CARD        14
+#define CDL_R_DOCK        24
+
+/* Soft drop shadow: large, very soft, low opacity → surfaces feel like they
+ * float. Approximated by stacked, growing rounded blends (no real Gaussian). */
+#define CDL_SHADOW_BLUR   28      /* halo reach in px */
+#define CDL_SHADOW_ALPHA  40      /* ~15% ink at the core */
+#define CDL_SHADOW_DY     10      /* light comes from above → offset down */
+
+/* Selective glass: blurred wallpaper + ~25% tint + hairline. Used on the dock,
+ * menus, notifications, launcher — NOT on window bodies (they stay opaque). */
+#define CDL_GLASS_ALPHA   64      /* ~25% tint over the blurred backdrop */
+#define CDL_GLASS_BLUR    6
+
+/* Animation: one duration + one easing family for opens/closes/minimise. */
+#define CDL_ANIM_MS       140
+
 
 /* -- Application IDs ------------------------------------------------------ */
 typedef enum {
@@ -314,6 +341,8 @@ typedef struct window {
     rect_t target_rect;
     u32    anim_start_tick;
     u8     opacity;       /* 0-255 */
+    u8     anim_kind;     /* WM_ANIM_* : open / close / minimise transition */
+    rect_t anim_from;     /* geometry captured when the transition began */
 
     /* Snap layout flyout */
     u32    hover_start_tick;
@@ -325,6 +354,13 @@ typedef struct window {
     widget_t *root;
     gfx_buffer_t win_buffer;
 } window_t;
+
+/* Window transition kinds (window_t.anim_kind) */
+#define WM_ANIM_NONE      0
+#define WM_ANIM_OPEN      1
+#define WM_ANIM_CLOSE     2
+#define WM_ANIM_MINIMIZE  3
+#define WM_ANIM_RESTORE   4
 
 /* Snapping modes */
 #define SNAP_NONE       0
@@ -414,6 +450,14 @@ void gfx_dirty(i32 x, i32 y, i32 w, i32 h);                   /* P-02 */
 void gfx_flip(void);
 void gfx_clear(u32 color);
 
+/* Wallpaper cache: compose the static desktop backdrop once and blit it back
+ * each frame instead of re-rendering it. blit() returns false when no valid
+ * cache exists (draw the wallpaper normally, then capture()). Invalidate on any
+ * theme/accent/wallpaper change. */
+void gfx_wallpaper_cache_invalidate(void);
+bool gfx_wallpaper_cache_blit(void);
+void gfx_wallpaper_cache_capture(void);
+
 void gfx_setpixel(i32 x, i32 y, u32 color);
 void gfx_hline(i32 x, i32 y, i32 len, u32 color);
 void gfx_vline(i32 x, i32 y, i32 len, u32 color);
@@ -428,6 +472,30 @@ void gfx_shadow(i32 x, i32 y, i32 w, i32 h);
 void gfx_shadow_ext(i32 x, i32 y, i32 w, i32 h, u32 alpha);
 void gfx_circle(i32 cx, i32 cy, i32 r, u32 color);
 void gfx_circle_fill(i32 cx, i32 cy, i32 r, u32 color);
+
+/* ── CDL primitives (foundation for glass, soft shadows, animation) ──────── */
+u32  gfx_isqrt(u32 v);
+/* Alpha-blended rounded-rect fill — composites only inside the rounded shape,
+ * so no square corners leak past the radius (unlike gfx_rect_blend). */
+void gfx_rect_rounded_blend(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color, u8 alpha);
+/* Separable box blur of the current target in place, over [x,y,w,h]. */
+void gfx_blur_region(i32 x, i32 y, i32 w, i32 h, i32 radius);
+/* Modern soft drop shadow (CDL defaults / explicit). Draw BEFORE the surface. */
+void gfx_shadow_soft(i32 x, i32 y, i32 w, i32 h, i32 r);
+void gfx_shadow_soft_ex(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy);
+/* Glass panel = blur the backdrop + tint + top highlight + hairline border. */
+void gfx_glass_panel(i32 x, i32 y, i32 w, i32 h, i32 r);
+void gfx_glass_panel_ex(i32 x, i32 y, i32 w, i32 h, i32 r, u32 tint, u8 alpha, i32 blur);
+/* Time-eased 0..256 progress (ease-out cubic), and an integer lerp helper. */
+u32  cdl_ease_out(u32 elapsed_ms, u32 duration_ms);
+i32  cdl_lerp(i32 a, i32 b, u32 t256);
+
+/* ── Accent colour engine (drives primary/accent/selection theme-wide) ───── */
+void        theme_set_accent(u32 idx);
+u32         theme_get_accent(void);
+u32         theme_accent_count(void);
+const char *theme_accent_name(u32 idx);
+u32         theme_accent_swatch(u32 idx);
 
 void gfx_char(i32 x, i32 y, char c, u32 fg, u32 bg);
 void gfx_str(i32 x, i32 y, const char *s, u32 fg, u32 bg);
@@ -528,6 +596,7 @@ void app_3d_key(window_t *w, char c);
 void notify_push(const char *title, const char *msg, u32 color);
 void notify_draw(void);
 void notify_tick(void);
+bool notify_active(void);
 bool notify_handle_mouse(mouse_t *m);
 
 /* -- Additional GFX helpers ----------------------------------------------- */
@@ -535,6 +604,7 @@ void gfx_gradient_rect(i32 x, i32 y, i32 w, i32 h, u32 c1, u32 c2);
 void gfx_str_clipped(i32 x, i32 y, i32 max_w, const char *s, u32 fg, u32 bg);
 void gfx_set_clip(i32 x, i32 y, i32 w, i32 h);
 void gfx_clear_clip(void);
+bool gfx_get_clip(rect_t *out);   /* false when unclipped; see gfx.c */
 i32  gfx_str_width(const char *s);
 void gfx_str_right(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg);
 void gfx_bar(i32 x, i32 y, i32 w, i32 h, u32 bg, u32 fg, u32 pct);

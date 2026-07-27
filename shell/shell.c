@@ -388,6 +388,7 @@ static void exec_cmd(char *line){
          return;
      }
      if(!kstrcmp(cmd,"sysinfo")){ sysinfo_print(); return; }
+     if(!kstrcmp(cmd,"res")){ char b[512]; res_status_text(b,sizeof(b)); terminal_write(b); return; }
      if(!kstrcmp(cmd,"lspci")){ pci_list_devices(); return; }
      if(!kstrcmp(cmd,"lsblk")){ terminal_write("sda    512M   disk\nâ””â”€sda1 512M   part  /\n"); return; }
      if(!kstrcmp(cmd,"dmesg")){
@@ -635,6 +636,7 @@ static void exec_cmd(char *line){
          terminal_write_colored("CareOS v6 Shell â€” Commands:\n",VGA_ENTRY_COLOR(VGA_LIGHT_CYAN,VGA_BLACK));
          terminal_write("  Files:   ls [-l]  cd  pwd  cat  mkdir  rm  cp  mv  touch  find  grep  wc\n");
          terminal_write("  System:  ps  kill  sleep  whoami  id  uname  uptime  date  free  df  sysinfo  dmesg\n");
+         terminal_write("  Gfx:     res  -- icon theme, wallpaper and image cache status\n");
          terminal_write("  Users:   passwd  su  useradd <name> <pass>  userdel\n");
          terminal_write("  Net:     ifconfig  wifi  ping  curl  wget  nslookup  netstat\n");
          terminal_write("  Pkgs:    carepkg [install|remove|update|search|list] <pkg>\n");

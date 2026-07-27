@@ -60,10 +60,13 @@ void vesa_init(void) {
     g_bga_present = true;
     serial_write("[VESA] BGA detected, running at GRUB resolution\n");
 
-    /* Apply saved preference if any */
+    /* Apply saved preference if different from current active resolution */
     const careos_settings_t *s = settings_get();
-    if (s->vesa_w >= 800 && s->vesa_h >= 600)
-        vesa_set_mode((u16)s->vesa_w, (u16)s->vesa_h);
+    if (s->vesa_w >= 800 && s->vesa_h >= 600) {
+        if ((u16)s->vesa_w != g_cur_w || (u16)s->vesa_h != g_cur_h) {
+            vesa_set_mode((u16)s->vesa_w, (u16)s->vesa_h);
+        }
+    }
 }
 
 int vesa_set_mode(u16 w, u16 h) {

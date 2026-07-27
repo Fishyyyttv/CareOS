@@ -1,2 +1,19 @@
 freetype-py==2.5.1
 Pillow==10.4.0
+
+# tools/gen-icons.py: SVG rasterising for the icon theme baker.
+#
+# svglib + reportlab is the portable path and works on any host. reportlab
+# delegates rasterising to a cairo backend; rlPyCairo pulls in pycairo, whose
+# wheels bundle cairo itself, which is what makes this work on Windows where a
+# system libcairo-2.dll is not present.
+#
+# Do NOT also install cairocffi here. rlPyCairo prefers it when importable, and
+# cairocffi loads cairo through ctypes -- so on a host with no system cairo it
+# shadows the working pycairo backend and the baker fails at import time.
+# cairosvg (which depends on cairocffi) is optional and only worth installing on
+# a host that already has cairo's native libraries; gen-icons.py prefers it
+# automatically when it imports cleanly.
+svglib==1.5.1
+reportlab==4.2.5
+rlPyCairo==0.3.0

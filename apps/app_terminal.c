@@ -1,6 +1,61 @@
 /* CareOS v9 -- apps/app_terminal.c -- Terminal application */
 #include "apps_common.h"
 
+/* -- Terminal Themes & Customization -------------------------------------- */
+typedef struct {
+    const char *name;
+    u32 bg;
+    u32 text;
+    u32 prompt;
+    u32 input_bg;
+    u32 cursor;
+    u32 border;
+} term_theme_t;
+
+static const term_theme_t g_term_themes[] = {
+    {
+        "Monokai",
+        rgb(0x27, 0x28, 0x22), /* Dark Charcoal/Olive */
+        rgb(0xf8, 0xf8, 0xf2), /* Text */
+        rgb(0xa6, 0xe2, 0x2e), /* Monokai Green Prompt */
+        rgb(0x1e, 0x1f, 0x1c), /* Input BG */
+        rgb(0xf9, 0x26, 0x72), /* Monokai Pink Cursor */
+        rgb(0x3e, 0x3d, 0x32)  /* Border */
+    },
+    {
+        "Dracula",
+        rgb(0x28, 0x2a, 0x36), /* Dark Blue-Gray */
+        rgb(0xf8, 0xf8, 0xf2), /* Bright Text */
+        rgb(0x50, 0xfa, 0x7b), /* Dracula Green Prompt */
+        rgb(0x21, 0x22, 0x2c), /* Input BG */
+        rgb(0xff, 0x79, 0xc6), /* Dracula Pink Cursor */
+        rgb(0x44, 0x47, 0x5a)  /* Border */
+    },
+    {
+        "Nord",
+        rgb(0x2e, 0x34, 0x40), /* Nord Dark Blue */
+        rgb(0xd8, 0xde, 0xe9), /* Nord Ice Text */
+        rgb(0xa3, 0xbe, 0x8c), /* Nord Green Prompt */
+        rgb(0x24, 0x29, 0x33), /* Input BG */
+        rgb(0x88, 0xc0, 0xd0), /* Nord Frost Cyan Cursor */
+        rgb(0x4c, 0x56, 0x6a)  /* Border */
+    },
+    {
+        "Solarized",
+        rgb(0x00, 0x2b, 0x36), /* Solarized Dark Base03 */
+        rgb(0x83, 0x94, 0x96), /* Base0 Text */
+        rgb(0x85, 0x99, 0x00), /* Solarized Green Prompt */
+        rgb(0x07, 0x36, 0x42), /* Base02 Input BG */
+        rgb(0x2a, 0xa1, 0x98), /* Solarized Cyan Cursor */
+        rgb(0x58, 0x6e, 0x75)  /* Base01 Border */
+    }
+};
+
+#define TERM_THEME_COUNT (sizeof(g_term_themes) / sizeof(g_term_themes[0]))
+
+static u32 g_term_theme_idx = 0; /* Default: Monokai */
+static u8  g_term_opacity   = 217; /* Default ~85% opacity (217/255) */
+
 static struct fs_node *term_cwd=NULL;
 
 static void term_path(struct fs_node *n,char *buf){
@@ -64,6 +119,83 @@ static void term_exec(window_t *w,char *line){
     const char *cmd=argv[0];
 
     if(!kstrcmp(cmd,"clear")){win_clear(w);}
+    else if(!kstrcmp(cmd,"theme") || !kstrcmp(cmd,"termtheme")){
+        if(argc<2 || !kstrcmp(argv[1],"list")){
+            win_append(w,"Terminal Theme Presets:\n");
+            for(u32 i=0; i<TERM_THEME_COUNT; i++){
+                char num[4]; kutoa(i+1, num, 10);
+                win_append(w, " "); win_append(w, num); win_append(w, ". ");
+                win_append(w, g_term_themes[i].name);
+                if(i == g_term_theme_idx) win_append(w, "  [active]");
+                win_append(w, "\n");
+            }
+            win_append(w,"usage: theme <monokai|dracula|nord|solarized|1-4>\n");
+            return;
+        }
+        const char *arg = argv[1];
+        int chosen = -1;
+        if(arg[0]>='1' && arg[0]<='4' && arg[1]=='\0'){
+            chosen = arg[0] - '1';
+        } else {
+            for(u32 i=0; i<TERM_THEME_COUNT; i++){
+                char tname[32];
+                u32 len = kstrlen(g_term_themes[i].name);
+                for(u32 k=0; k<len && k<31; k++){
+                    char ch = g_term_themes[i].name[k];
+                    tname[k] = (ch>='A' && ch<='Z') ? (ch+32) : ch;
+                }
+                tname[len] = '\0';
+                
+                char iname[32];
+                u32 ilen = kstrlen(arg);
+                for(u32 k=0; k<ilen && k<31; k++){
+                    char ch = arg[k];
+                    iname[k] = (ch>='A' && ch<='Z') ? (ch+32) : ch;
+                }
+                iname[ilen] = '\0';
+
+                if(!kstrcmp(tname, iname)){
+                    chosen = (int)i;
+                    break;
+                }
+            }
+        }
+        if(chosen >= 0 && (u32)chosen < TERM_THEME_COUNT){
+            g_term_theme_idx = (u32)chosen;
+            win_append(w, "Terminal theme set to ");
+            win_append(w, g_term_themes[g_term_theme_idx].name);
+            win_append(w, "\n");
+        } else {
+            win_append(w, "theme: unknown preset. Use 'theme list' to view options.\n");
+        }
+    }
+    else if(!kstrcmp(cmd,"opacity") || !kstrcmp(cmd,"transparency")){
+        if(argc<2){
+            char valbuf[16];
+            u32 pct = (g_term_opacity * 100) / 255;
+            kutoa(pct, valbuf, 10);
+            win_append(w, "Current terminal opacity: ");
+            win_append(w, valbuf);
+            win_append(w, "% (alpha ");
+            kutoa(g_term_opacity, valbuf, 10);
+            win_append(w, valbuf);
+            win_append(w, "/255)\nusage: opacity <0-100>\n");
+            return;
+        }
+        int val = katoi(argv[1]);
+        if(val < 0) val = 0;
+        if(val > 255) val = 255;
+        if(val <= 100 && kstrlen(argv[1]) <= 3){
+            val = (val * 255) / 100;
+        }
+        g_term_opacity = (u8)val;
+        u32 pct = (g_term_opacity * 100) / 255;
+        char valbuf[16];
+        kutoa(pct, valbuf, 10);
+        win_append(w, "Terminal opacity set to ");
+        win_append(w, valbuf);
+        win_append(w, "%\n");
+    }
     else if(!kstrcmp(cmd,"ls")){
         struct fs_node *d=(argc>=2&&argv[1][0]!='/')?vfs_find(term_cwd,argv[1]):(argc>=2?vfs_resolve_path(argv[1]):term_cwd);
         if(!d){win_append(w,"ls: not found\n");return;}
@@ -147,6 +279,9 @@ static void term_exec(window_t *w,char *line){
         kutoa(KERNEL_HEAP_SIZE/1024,b,10); win_append(w,b); win_append(w,"K  ");
         kutoa(kmem_used()/1024,b,10); win_append(w,b); win_append(w,"K  ");
         kutoa(kmem_free_bytes()/1024,b,10); win_append(w,b); win_append(w,"K\n");
+    }
+    else if(!kstrcmp(cmd,"res")){
+        char b[512]; res_status_text(b,sizeof(b)); win_append(w,b);
     }
     else if(!kstrcmp(cmd,"uptime")){
         u32 ticks = timer_get_ticks();
@@ -266,10 +401,13 @@ static void term_exec(window_t *w,char *line){
         win_append(w,"Available commands:\n");
         win_append(w,"- ls, cd, pwd, cat, mkdir, rm, touch\n");
         win_append(w,"- echo, ps, whoami, clear, help\n");
+        win_append(w,"- theme [monokai|dracula|nord|solarized]\n");
+        win_append(w,"- opacity <0-100>  set window transparency\n");
         win_append(w,"- ifconfig, ping, curl, wifi\n");
         win_append(w,"- uname, date, free, uptime\n");
         win_append(w,"- carepkg, dmesg, settings\n");
         win_append(w,"- sysinfo (--version, --cpu, --mem)\n");
+        win_append(w,"- res   icon theme, wallpaper and image cache status\n");
         win_append(w,"- network (--status, --ip)\n");
         win_append(w,"- care <file.cl>  run a Care language script\n");
     }
@@ -300,8 +438,14 @@ void app_terminal_init(window_t *w){
 }
 void app_terminal_draw(window_t *w){
     rect_t cr=wm_client_rect(w);
-    /* Dark background */
-    gfx_rect(cr.x,cr.y,cr.w,cr.h,COL_SURFACE);
+    const term_theme_t *cur_theme = &g_term_themes[g_term_theme_idx];
+
+    /* Background with configurable transparency / opacity */
+    if (g_term_opacity >= 253) {
+        gfx_rect(cr.x, cr.y, cr.w, cr.h, cur_theme->bg);
+    } else if (g_term_opacity > 0) {
+        gfx_rect_blend(cr.x, cr.y, cr.w, cr.h, cur_theme->bg, g_term_opacity);
+    }
 
     i32 sc = (i32)GFX_FONT_SCALE;
     i32 lh = FONT_H * sc + 3;
@@ -324,7 +468,7 @@ void app_terminal_draw(window_t *w){
         const char *p = w->text_buf;
         while (line < w->scroll && *p) { if(*p=='\n') line++; p++; }
 
-        /* Draw each visible line with prompt colouring */
+        /* Draw each visible line with theme prompt/text colouring */
         i32 y = cr.y + 6;
         u32 drawn = 0;
         gfx_set_clip(cr.x, cr.y, cr.w, text_h);
@@ -335,13 +479,10 @@ void app_terminal_draw(window_t *w){
             char tmp[160]; if(len>159) len=159;
             kmemcpy(tmp, p, len); tmp[len]='\0';
 
-            /* Colour the prompt portion green like the reference */
-            u32 col = COL_TEXT;
-            /* Lines starting with a known username pattern get special colour */
-            if (tmp[0] && (kstrncmp(tmp,"user@",5)==0 || kstrncmp(tmp,"root@",5)==0))
-                col = g_theme->success;
-            else if (tmp[0] == '$')
-                col = g_theme->success;
+            /* Prompt vs regular text color from active theme */
+            u32 col = cur_theme->text;
+            if (tmp[0] && (kstrncmp(tmp, "user@", 5) == 0 || kstrncmp(tmp, "root@", 5) == 0 || kstrncmp(tmp, "CareOS", 6) == 0 || tmp[0] == '$'))
+                col = cur_theme->prompt;
 
             gfx_str_clipped(cr.x + 12, y, cr.w - 20, tmp, col, COL_TRANSPARENT);
             y += lh;
@@ -353,20 +494,36 @@ void app_terminal_draw(window_t *w){
 
     /* ---- Input bar ---- */
     i32 iy = cr.y + text_h;
-    gfx_rect(cr.x, iy, cr.w, input_h, g_theme->input_bg);
-    gfx_hline(cr.x, iy, cr.w, COL_BORDER);
+    if (g_term_opacity >= 253) {
+        gfx_rect(cr.x, iy, cr.w, input_h, cur_theme->input_bg);
+    } else if (g_term_opacity > 0) {
+        u8 input_alpha = (g_term_opacity > 220) ? g_term_opacity : (u8)(g_term_opacity + 30);
+        gfx_rect_blend(cr.x, iy, cr.w, input_h, cur_theme->input_bg, input_alpha);
+    }
+    gfx_hline(cr.x, iy, cr.w, cur_theme->border);
 
     /* Prompt symbol */
     i32 ty = iy + (input_h - FONT_H * sc) / 2;
-    gfx_str(cr.x + 12, ty, "$", g_theme->success, COL_TRANSPARENT);
+    gfx_str(cr.x + 12, ty, "$", cur_theme->prompt, COL_TRANSPARENT);
     i32 input_x = cr.x + 12 + (FONT_W + 2) * sc;
-    gfx_str_clipped(input_x, ty, cr.w - 28, w->input_buf, g_theme->success, COL_TRANSPARENT);
+    gfx_str_clipped(input_x, ty, cr.w - 28, w->input_buf, cur_theme->text, COL_TRANSPARENT);
 
-    /* Blinking cursor */
-    if((timer_get_ticks()/40)%2==0){
-        i32 cx = input_x + (i32)w->input_len * FONT_W * sc;
-        gfx_vline(cx, iy + 4, input_h - 8, g_theme->success);
+    /* Animated blinking cursor */
+    u32 tick = timer_get_ticks();
+    u32 phase = tick % 50; /* 500ms cycle */
+    u8 cursor_alpha;
+    if (phase < 25) {
+        cursor_alpha = (u8)(50 + (phase * 205) / 25);
+    } else {
+        cursor_alpha = (u8)(50 + ((50 - phase) * 205) / 25);
     }
+
+    i32 cx = input_x + (i32)w->input_len * FONT_W * sc;
+    i32 cursor_w = 2 * sc;
+    i32 cursor_h = input_h - 8;
+    i32 cursor_y = iy + 4;
+
+    gfx_rect_blend(cx, cursor_y, cursor_w, cursor_h, cur_theme->cursor, cursor_alpha);
 }
 void app_terminal_key(window_t *w,char c){
     if(c=='\n'){

@@ -61,4 +61,52 @@ theme_t *g_theme = &theme_dark;
 
 void theme_switch(bool dark) {
     g_theme = dark ? &theme_dark : &theme_light;
+    /* The procedural wallpaper fallback is drawn from theme colours, so a theme
+     * change must drop the cached backdrop. */
+    gfx_wallpaper_cache_invalidate();
 }
+
+/* ── Accent colour engine ──────────────────────────────────────────────────
+ * A single chosen accent drives primary + accent + selection across the whole
+ * UI, because every surface already reads COL_PRIMARY / COL_ACCENT. We mutate
+ * both theme structs so the choice survives a dark/light toggle. Each accent
+ * carries its own dark- and light-theme triple so contrast stays right. */
+typedef struct {
+    const char *name;
+    u32 d_primary, d_accent, d_selection;   /* dark theme */
+    u32 l_primary, l_accent, l_selection;   /* light theme */
+} accent_t;
+
+static const accent_t ACCENTS[] = {
+    { "Blue",   rgb(0x55,0x9a,0xff), rgb(0x82,0xbc,0xff), rgb(0x2a,0x56,0xb8),
+                rgb(0x2f,0x6f,0xc8), rgb(0x4f,0x8e,0xe6), rgb(0x4f,0x8e,0xe6) },
+    { "Green",  rgb(0x34,0xc7,0x59), rgb(0x6e,0xe7,0xa0), rgb(0x1f,0x8f,0x46),
+                rgb(0x1a,0xa3,0x4a), rgb(0x34,0xc7,0x59), rgb(0x1a,0xa3,0x4a) },
+    { "Orange", rgb(0xff,0x9f,0x0a), rgb(0xff,0xbf,0x60), rgb(0xc0,0x6f,0x00),
+                rgb(0xe0,0x7a,0x00), rgb(0xff,0x9f,0x0a), rgb(0xe0,0x7a,0x00) },
+    { "Purple", rgb(0xa8,0x55,0xf7), rgb(0xc9,0x9b,0xff), rgb(0x7c,0x3a,0xed),
+                rgb(0x8b,0x3d,0xe0), rgb(0xa8,0x55,0xf7), rgb(0x8b,0x3d,0xe0) },
+    { "Red",    rgb(0xff,0x5f,0x57), rgb(0xff,0x90,0x89), rgb(0xc0,0x39,0x2b),
+                rgb(0xdc,0x4c,0x4c), rgb(0xff,0x5f,0x57), rgb(0xc0,0x39,0x2b) },
+};
+#define ACCENT_COUNT ((u32)(sizeof(ACCENTS) / sizeof(ACCENTS[0])))
+
+static u32 g_accent_idx = 0;
+
+void theme_set_accent(u32 idx) {
+    if (idx >= ACCENT_COUNT) idx = 0;
+    g_accent_idx = idx;
+    const accent_t *a = &ACCENTS[idx];
+    theme_dark.primary   = a->d_primary;
+    theme_dark.accent    = a->d_accent;
+    theme_dark.selection = a->d_selection;
+    theme_light.primary   = a->l_primary;
+    theme_light.accent    = a->l_accent;
+    theme_light.selection = a->l_selection;
+    gfx_wallpaper_cache_invalidate();
+}
+
+u32         theme_get_accent(void)        { return g_accent_idx; }
+u32         theme_accent_count(void)       { return ACCENT_COUNT; }
+const char *theme_accent_name(u32 idx)     { return ACCENTS[idx < ACCENT_COUNT ? idx : 0].name; }
+u32         theme_accent_swatch(u32 idx)   { return ACCENTS[idx < ACCENT_COUNT ? idx : 0].d_primary; }

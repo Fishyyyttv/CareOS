@@ -1,6 +1,8 @@
 /* CareOS v9 -- apps/app_settings.c -- functional settings suite */
 #include "apps_common.h"
 #include "font.h"
+#include "image.h"
+#include "icon.h"
 
 extern void term_ip_to_str(u32 ip, char *out);
 
@@ -235,14 +237,31 @@ void app_settings_draw(window_t *w){
 
         cy += 82;
         gfx_str(cx, cy, "Wallpaper", COL_TEXT, COL_TRANSPARENT);
-        for (u32 i = 0; i < 6; i++) {
+        for (u32 i = 0; i < WALLPAPER_SLOTS; i++) {
             i32 wx = cx + (i32)(i % 3) * 148;
             i32 wy = cy + 18 + (i32)(i / 3) * 82;
-            gfx_rect_rounded(wx, wy, 132, 64, 12, COL_SURFACE2);
-            gfx_rect_blend(wx, wy, 132, 64, COL_GLASS_TINT, (u8)(12 + i * 4));
+
+            /* Show the background itself rather than a tinted placeholder.
+             * wallpaper_thumb() returns art baked at exactly 132x64, so this is
+             * a straight blit -- picking a wallpaper without seeing it first
+             * was the reason six identical grey swatches told you nothing. */
+            image_t *thumb = wallpaper_thumb(i);
+            if (thumb) {
+                gfx_set_clip(wx, wy, 132, 64);
+                gfx_draw_image(thumb, wx, wy);
+                gfx_clear_clip();
+            } else {
+                gfx_rect_rounded(wx, wy, 132, 64, 12, COL_SURFACE2);
+                gfx_rect_blend(wx, wy, 132, 64, COL_GLASS_TINT, (u8)(12 + i * 4));
+            }
+
             if (cfg->wallpaper == i) gfx_rect_rounded_outline(wx, wy, 132, 64, 12, COL_PRIMARY);
+            else                     gfx_rect_rounded_outline(wx, wy, 132, 64, 12, COL_BORDER);
+
+            /* Index badge, on a dark plate so it stays legible over any image. */
             buf[0] = '#'; buf[1] = '0' + (char)i; buf[2] = '\0';
-            gfx_str(wx + 10, wy + 8, buf, COL_TEXT, COL_TRANSPARENT);
+            gfx_rect_blend(wx + 6, wy + 6, 26, FONT_H + 4, COL_BLACK, 140);
+            gfx_str(wx + 10, wy + 8, buf, COL_WHITE, COL_TRANSPARENT);
         }
 
         cy += 190;
@@ -263,6 +282,27 @@ void app_settings_draw(window_t *w){
                 font_registry_name(i), active,
                 active ? COL_PRIMARY : COL_SURFACE3, active ? COL_WHITE : COL_TEXT);
             button_draw(&fb);
+        }
+
+        /* Accent colour. Appended at the very end of the tab so it never
+         * perturbs the hand-computed click offsets of the sections above.
+         * Both draw and click derive the section top from the font-list top
+         * (cx-aligned, cy+20 here == settings_content_top()+366 in the click
+         * handler) plus the row count, so the two stay in exact lockstep. */
+        {
+            i32 fn_top = cy + 20;
+            i32 acc_y  = fn_top + (i32)font_registry_count() * 40 + 12;
+            i32 sw = 52, sh = 34, gap = 12;
+            gfx_str(cx, acc_y, "Accent color", COL_TEXT, COL_TRANSPARENT);
+            for (u32 i = 0; i < theme_accent_count(); i++) {
+                i32 ax = cx + (i32)i * (sw + gap);
+                i32 ay = acc_y + 20;
+                gfx_rect_rounded(ax, ay, sw, sh, 10, theme_accent_swatch(i));
+                if (theme_get_accent() == i)
+                    gfx_rect_rounded_outline(ax, ay, sw, sh, 10, COL_WHITE);
+                else
+                    gfx_rect_rounded_outline(ax, ay, sw, sh, 10, COL_BORDER);
+            }
         }
         break;
     }
@@ -437,7 +477,7 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
             user_set_current_theme_preference(1);
             settings_set_status(w, "Light theme applied", COL_GREEN);
         }
-        for (u32 i = 0; i < 6; i++) {
+        for (u32 i = 0; i < WALLPAPER_SLOTS; i++) {
             i32 wx = cx + (i32)(i % 3) * 148;
             i32 wy = cy + 100 + (i32)(i / 3) * 82;
             if (rect_contains(rect_make(wx, wy, 132, 64), x, y)) {
@@ -457,6 +497,24 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
                 user_set_current_font_preference(i);
                 settings_set_status(w, "Font updated", COL_GREEN);
                 gfx_dirty(0, 0, (i32)SCREEN_W, (i32)SCREEN_H);
+            }
+        }
+        /* Accent swatches: derived identically to the draw side. Here the
+         * font-list top is cy + 366 (settings_content_top()+366), matching
+         * cy+20 in draw; acc_y/ax/ay use the same expressions, so the hit
+         * rects line up exactly with the drawn swatches. */
+        {
+            i32 fn_top = cy + 366;
+            i32 acc_y  = fn_top + (i32)font_registry_count() * 40 + 12;
+            i32 sw = 52, sh = 34, gap = 12;
+            for (u32 i = 0; i < theme_accent_count(); i++) {
+                i32 ax = cx + (i32)i * (sw + gap);
+                i32 ay = acc_y + 20;
+                if (rect_contains(rect_make(ax, ay, sw, sh), x, y)) {
+                    settings_set_accent(i);
+                    settings_set_status(w, "Accent updated", COL_GREEN);
+                    gfx_dirty(0, 0, (i32)SCREEN_W, (i32)SCREEN_H);
+                }
             }
         }
         break;

@@ -1,0 +1,3 @@
+echo CareOS example browser package
+echo This runs through the Care language interpreter, like every
+echo package exec does. The point of the example is the icon, not this.
