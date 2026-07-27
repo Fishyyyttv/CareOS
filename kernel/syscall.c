@@ -41,22 +41,68 @@ static int fd_alloc(void) {
 #define EFAULT  14
 
 /* ── User-pointer validation helpers ──────────────────────────────────────── */
-static bool user_ptr_ok(const void *ptr, u64 len) {
-    u64 addr = (u64)ptr;
-    /* Identity map is first 1GB */
-    return addr >= 0x400000ULL && len <= 0x3FFFFFFFULL - addr;
+/*
+ * These used to be a range guess: `addr >= 0x400000 && len <= 0x3FFFFFFF - addr`.
+ * That accepted every kernel address from 4MB to 1GB, so a ring-3 task could
+ * hand a kernel pointer to read()/write() and get an arbitrary kernel
+ * read/write primitive -- the identity map is present in every process's PML4,
+ * so the kernel dereferencing it would succeed rather than fault.
+ *
+ * Validation is now done against the calling task's actual page tables:
+ * a page is only accepted if the User bit (and the RW bit, when the kernel is
+ * going to write) is set at all four levels. Because the kernel's identity map
+ * omits PDE_USER, kernel addresses are rejected by construction rather than by
+ * a hardcoded range that has to be kept in sync with the memory layout.
+ *
+ * INT 0x80 does not switch CR3, so the current task's page tables are the ones
+ * live on the CPU: what we validate is exactly what the subsequent kmemcpy
+ * dereferences.
+ */
+static bool user_range_ok(const void *ptr, u64 len, bool for_write) {
+    u64 cr3 = task_current_cr3();
+    /* cr3 == 0 marks a kernel task, which has no user address space and has no
+     * business passing user pointers into these helpers. */
+    if (cr3 == 0) return false;
+    return paging_user_range_ok((pde_t *)cr3, (u64)ptr, len, for_write);
 }
 
 int copy_from_user(void *dst, const void *user_src, u32 len) {
-    if (!user_ptr_ok(user_src, (u64)len)) return -(int)EFAULT;
+    if (!user_range_ok(user_src, (u64)len, false)) return -(int)EFAULT;
     kmemcpy(dst, user_src, len);
     return 0;
 }
 
 int copy_to_user(void *user_dst, const void *src, u32 len) {
-    if (!user_ptr_ok(user_dst, (u64)len)) return -(int)EFAULT;
+    if (!user_range_ok(user_dst, (u64)len, true)) return -(int)EFAULT;
     kmemcpy(user_dst, src, len);
     return 0;
+}
+
+/*
+ * Copy a NUL-terminated string in from user space. The length is not known up
+ * front, so validate one page at a time as the scan crosses into it -- never
+ * read a byte that has not been proven user-accessible first. Returns the
+ * length copied, or -EFAULT for an unmapped page and -EINVAL if the string is
+ * longer than the caller's buffer.
+ */
+static int copy_str_from_user(char *dst, const char *user_src, u32 max) {
+    if (!dst || !user_src || max == 0) return -(int)EINVAL;
+
+    u64 addr = (u64)user_src;
+    u64 checked_upto = 0;   /* exclusive end of the validated region */
+
+    for (u32 i = 0; i < max; i++) {
+        u64 at = addr + i;
+        if (at >= checked_upto) {
+            u64 page = at & ~0xFFFULL;
+            if (!user_range_ok((const void *)page, PAGE_SIZE, false))
+                return -(int)EFAULT;
+            checked_upto = page + PAGE_SIZE;
+        }
+        dst[i] = user_src[i];
+        if (dst[i] == '\0') return (int)i;
+    }
+    return -(int)EINVAL;    /* no terminator within max */
 }
 
 /* ── Syscall implementations ───────────────────────────────────────────────── */
@@ -69,7 +115,9 @@ static i32 sys_exit(i32 status) {
 static i32 sys_read(u32 fd, char *buf, u32 count) {
     if (fd >= FD_MAX || !fd_table[fd].open) return -(i32)EBADF;
     if (!buf || count == 0) return -(i32)EINVAL;
-    if (fd != FD_STDIN && !user_ptr_ok(buf, count)) return -(i32)EFAULT;
+    /* The kernel writes into buf, so demand a writable user mapping. STDIN was
+     * previously exempt from validation even though it writes to buf too. */
+    if (!user_range_ok(buf, count, true)) return -(i32)EFAULT;
 
     if (fd == FD_STDIN) {
         u32 n = 0;
@@ -84,6 +132,7 @@ static i32 sys_read(u32 fd, char *buf, u32 count) {
 
     if (!fd_table[fd].node) return -(i32)EBADF;
     fs_node_t *node = fd_table[fd].node;
+    if (!node->data || fd_table[fd].offset >= node->size) return 0;
     u32 avail = node->size - fd_table[fd].offset;
     if (avail == 0) return 0;
     u32 n = count < avail ? count : avail;
@@ -95,7 +144,10 @@ static i32 sys_read(u32 fd, char *buf, u32 count) {
 static i32 sys_write(u32 fd, const char *buf, u32 count) {
     if (fd >= FD_MAX || !fd_table[fd].open) return -(i32)EBADF;
     if (!buf || count == 0) return -(i32)EINVAL;
-    if (fd != FD_STDOUT && fd != FD_STDERR && !user_ptr_ok(buf, count)) return -(i32)EFAULT;
+    /* Read-only access to buf is enough here, but STDOUT/STDERR must not be
+     * exempt: echoing an unvalidated pointer to the terminal leaked kernel
+     * memory to whoever could read the screen. */
+    if (!user_range_ok(buf, count, false)) return -(i32)EFAULT;
 
     if (fd == FD_STDOUT || fd == FD_STDERR) {
         for (u32 i = 0; i < count; i++) terminal_putchar(buf[i]);
@@ -104,8 +156,10 @@ static i32 sys_write(u32 fd, const char *buf, u32 count) {
 
     if (!fd_table[fd].node) return -(i32)EBADF;
     fs_node_t *node = fd_table[fd].node;
-    u32 space = FS_FILE_DATA_MAX - 1 - node->size;
+    if (node->size >= FS_FILE_MAX_BYTES) return -(i32)EINVAL;
+    u32 space = FS_FILE_MAX_BYTES - node->size;
     u32 n = count < space ? count : space;
+    if (vfs_file_reserve(node, node->size + n) != 0) return -(i32)EINVAL;
     kmemcpy(node->data + node->size, buf, n);
     node->size += n;
     node->data[node->size] = '\0';
@@ -116,7 +170,15 @@ static i32 sys_write(u32 fd, const char *buf, u32 count) {
 static i32 sys_open(const char *path, u32 flags, u32 mode) {
     (void)mode;
     if (!path) return -(i32)EINVAL;
-    fs_node_t *node = vfs_resolve_path(path);
+
+    /* `path` was previously handed straight to vfs_resolve_path, letting a
+     * ring-3 task point the kernel's string walk at any address it liked.
+     * Copy it in through validated pages first and resolve the kernel copy. */
+    char kpath[256];
+    int n = copy_str_from_user(kpath, path, sizeof kpath);
+    if (n < 0) return (i32)n;
+
+    fs_node_t *node = vfs_resolve_path(kpath);
     if (!node) return -(i32)ENOENT;
 
     int fd = fd_alloc();

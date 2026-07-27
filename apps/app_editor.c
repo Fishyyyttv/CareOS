@@ -414,7 +414,7 @@ void app_editor_key(window_t *w, char c){
                 if (f && f->type == FS_FILE) {
                     kstrncpy(w->editor_path, w->input_buf, FS_PATH_MAX - 1);
                     win_clear(w);
-                    if (f->size > 0) {
+                    if (f->size > 0 && f->data) {
                         u32 load_len = f->size < WIN_TEXT_BUF - 1 ? f->size : WIN_TEXT_BUF - 1;
                         kmemcpy(w->text_buf, f->data, load_len);
                         w->text_len = load_len;
@@ -558,7 +558,8 @@ void app_editor_click(window_t *w, i32 x, i32 y, mouse_t *m) {
                         /* Open file */
                         kstrncpy(w->editor_path, ch->name, FS_PATH_MAX - 1);
                         u32 load_len = ch->size < WIN_TEXT_BUF - 1 ? ch->size : WIN_TEXT_BUF - 1;
-                        kmemcpy(w->text_buf, ch->data, load_len);
+                        if (!ch->data) load_len = 0;
+                        if (load_len) kmemcpy(w->text_buf, ch->data, load_len);
                         w->text_len = load_len;
                         w->text_buf[load_len] = '\0';
                         w->editor_modified = false;

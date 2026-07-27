@@ -21,9 +21,6 @@
 #define PF_W            0x2u
 #define PF_R            0x4u
 
-#define USER_VADDR_MIN  0x400000ULL
-#define USER_VADDR_MAX  0xBFF00000ULL
-
 /* ── ELF64 data structures ──────────────────────────────────────────────────── */
 typedef struct {
     u32 e_ident_magic;
@@ -73,7 +70,7 @@ static int elf_validate(const u8 *data, u32 size) {
 
 /* ── elf_load_vfs: kernel-space flat load ────────────────────────────────────── */
 int elf_load_vfs(fs_node_t *node, const char *task_name) {
-    if (!node || node->type != FS_FILE) return -1;
+    if (!node || node->type != FS_FILE || !node->data) return -1;
 
     const u8 *data = (const u8 *)node->data;
     u32       size = node->size;
@@ -129,7 +126,7 @@ int elf_load_path(const char *path, const char *task_name) {
 
 /* ── elf_load_user: user-space ring-3 load ───────────────────────────────────── */
 int elf_load_user(fs_node_t *node, const char *name, int session) {
-    if (!node || node->type != FS_FILE) return -1;
+    if (!node || node->type != FS_FILE || !node->data) return -1;
 
     const u8 *data = (const u8 *)node->data;
     u32       size = node->size;
@@ -150,7 +147,14 @@ int elf_load_user(fs_node_t *node, const char *name, int session) {
         u64 virt_start = ph->p_vaddr & ~(u64)(PAGE_SIZE - 1);
         u64 virt_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);
 
-        if (virt_start < USER_VADDR_MIN || virt_end > USER_VADDR_MAX) {
+        /* ld always emits a small read-only PT_LOAD segment covering just the
+         * ELF header + program header table, placed immediately below the
+         * -Ttext address (ending exactly at USER_CODE_BASE). The running
+         * program never reads its own ELF header, so skip mapping that
+         * segment instead of rejecting the whole binary because of it. */
+        if (virt_end <= USER_CODE_BASE) continue;
+
+        if (virt_start < USER_CODE_BASE || virt_end > USER_CODE_MAX) {
             paging_free_dir(dir);
             return -4;
         }
@@ -187,6 +191,27 @@ int elf_load_user(fs_node_t *node, const char *name, int session) {
         char tmp[16]; kutoa((u32)ph->p_vaddr, tmp, 16); serial_write(tmp); serial_write("\n");
     }
 
+    /* Map a dedicated, eagerly-allocated user stack right after the
+     * code/data window — private frames, never shared with any other
+     * process. See docs/superpowers/specs/
+     * 2026-07-20-per-process-address-spaces-design.md */
+    {
+        u64 stack_bottom = USER_STACK_TOP - TASK_STACK_SIZE;
+        for (u64 virt = stack_bottom; virt < USER_STACK_TOP; virt += PAGE_SIZE) {
+            u32 frame = pmm_alloc_frame();
+            if (frame == (u32)~0u) { paging_free_dir(dir); return -8; }
+
+            kmemset((void *)((u64)frame * PAGE_SIZE), 0, PAGE_SIZE);
+
+            u32 flags = PTE_PRESENT | PTE_USER | PTE_RW;
+            if (paging_map(dir, virt, (u64)frame * PAGE_SIZE, flags) != 0) {
+                pmm_free_frame(frame);
+                paging_free_dir(dir);
+                return -9;
+            }
+        }
+    }
+
     int tid = task_create_user(name, eh->e_entry, dir, session);
     if (tid < 0) { paging_free_dir(dir); return -7; }
 
@@ -197,12 +222,13 @@ int elf_load_user(fs_node_t *node, const char *name, int session) {
 }
 
 int elf_check(fs_node_t *node) {
-    if (!node || node->type != FS_FILE || node->size < sizeof(elf64_ehdr_t)) return -1;
+    if (!node || node->type != FS_FILE || !node->data ||
+        node->size < sizeof(elf64_ehdr_t)) return -1;
     return elf_validate((const u8 *)node->data, node->size);
 }
 
 u32 elf_entry_point(fs_node_t *node) {
-    if (elf_check(node) != 0) return 0;
+    if (elf_check(node) != 0) return 0;   /* also covers node->data == NULL */
     const elf64_ehdr_t *eh = (const elf64_ehdr_t *)node->data;
     return (u32)eh->e_entry;
 }

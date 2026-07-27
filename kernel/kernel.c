@@ -71,6 +71,48 @@ static void enable_sse(void) {
     __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4));
 }
 
+static void slog_hex64(const char *label, u64 v) {
+    serial_write(label);
+    serial_write("0x");
+    char b[12];
+    kutoa((u32)(v >> 32), b, 16); serial_write(b);
+    kutoa((u32)(v & 0xFFFFFFFFu), b, 16); serial_write(b);
+    serial_write("\n");
+}
+
+/* Copies an objcopy-embedded ELF blob into /bin/<bin_name> and launches it
+ * as a ring-3 task. Returns the task id on success, -1 on failure. */
+static int smoke_embed_and_launch(const char *bin_name, const u8 *start,
+                                   const u8 *end, const char *task_name) {
+    u32 elf_size = (u32)(uintptr_t)(end - start);
+    serial_write("[smoke] "); serial_write(bin_name); serial_write(" ELF size = ");
+    char sb[12]; kutoa(elf_size, sb, 10); serial_write(sb); serial_write("\n");
+
+    if (elf_size == 0 || elf_size > FS_FILE_MAX_BYTES) {
+        serial_write("[smoke] ERROR: bad ELF size for "); serial_write(bin_name); serial_write("\n");
+        return -1;
+    }
+
+    fs_node_t *bin_dir = vfs_mkdir(vfs_root(), "bin");
+    if (!bin_dir) bin_dir = vfs_find(vfs_root(), "bin");
+    if (!bin_dir) return -1;
+
+    fs_node_t *n = vfs_mkfile(bin_dir, bin_name);
+    if (!n) return -1;
+
+    if (vfs_file_reserve(n, elf_size) != 0) {
+        serial_write("[smoke] ERROR: no heap for "); serial_write(bin_name); serial_write("\n");
+        return -1;
+    }
+    kmemcpy(n->data, start, elf_size);
+    n->size = elf_size;
+
+    int tid = elf_load_user(n, task_name, -1);
+    serial_write("[smoke] elf_load_user("); serial_write(bin_name); serial_write(") returned ");
+    kitoa(tid, sb, 10); serial_write(sb); serial_write("\n");
+    return tid;
+}
+
 void kernel_main(u64 magic, u64 mbi_addr){
     /* Stage 1: core hardware */
     slog_stage(1, "Hardware init");
@@ -185,30 +227,6 @@ void kernel_main(u64 magic, u64 mbi_addr){
     paging_init();       slog_ok("Paging");
     syscall_init();      slog_ok("Syscalls");
 
-    /* ── Ring-3 smoke test: embed ring3_exit ELF and launch it ────────────────── */
-    {
-        extern u8 _binary_tests_ring3_exit_start[];
-        extern u8 _binary_tests_ring3_exit_end[];
-        u32 elf_size = (u32)(uintptr_t)(_binary_tests_ring3_exit_end - _binary_tests_ring3_exit_start);
-        serial_write("[smoke] ring3_exit ELF size = ");
-        char _sb[12]; kutoa(elf_size, _sb, 10); serial_write(_sb); serial_write("\n");
-
-        fs_node_t *bin_dir = vfs_mkdir(vfs_root(), "bin");
-        if (!bin_dir) bin_dir = vfs_find(vfs_root(), "bin");
-        if (bin_dir && elf_size > 0 && elf_size <= FS_FILE_DATA_MAX) {
-            fs_node_t *n = vfs_mkfile(bin_dir, "ring3_exit");
-            if (n) {
-                kmemcpy(n->data, _binary_tests_ring3_exit_start, elf_size);
-                n->size = elf_size;
-                int tid = elf_load_user(n, "ring3_exit", -1);
-                serial_write("[smoke] elf_load_user returned ");
-                kitoa(tid, _sb, 10); serial_write(_sb); serial_write("\n");
-            }
-        } else if (elf_size > FS_FILE_DATA_MAX) {
-            serial_write("[smoke] ELF too large for VFS node data field\n");
-        }
-    }
-
     /* Stage 3: devices, persistence, userland services */
     slog_stage(3, "Device and persistence init");
     rtc_init();          slog_ok("RTC");
@@ -260,9 +278,13 @@ void kernel_main(u64 magic, u64 mbi_addr){
                     fs_node_t *wad_node = vfs_mkfile(user_dir, "DOOM1.WAD");
                     user_dir->inode_num = saved;
                     if (wad_node) {
-                        wad_node->raw_data = (void *)_binary_DOOM1_WAD_start;
-                        wad_node->size     = wad_size;
-                        wad_node->inode_num = 0;
+                        /* Borrowed: the WAD lives in .data, so it must never
+                         * be kfree'd. data_owned = false enforces that. */
+                        wad_node->data       = (char *)_binary_DOOM1_WAD_start;
+                        wad_node->capacity   = 0;
+                        wad_node->data_owned = false;
+                        wad_node->size       = wad_size;
+                        wad_node->inode_num  = 0;
                         serial_write("[doom] DOOM1.WAD ready at /home/user/DOOM1.WAD\n");
                     } else {
                         serial_write("[doom] ERROR: vfs_mkfile failed for DOOM1.WAD\n");
@@ -283,6 +305,75 @@ void kernel_main(u64 magic, u64 mbi_addr){
     carepkg_init();      slog_ok("CarePackage manager");
     serial_write("[boot] Initializing scheduler...\n");
     scheduler_init();    slog_ok("Scheduler");
+
+#if !defined(CAREOS_SKIP_SMOKE_TESTS)
+    /* ── Ring-3 smoke tests: must run after scheduler_init(), which resets
+     * the task table — anything launched before it never actually runs. ── */
+    {
+        extern u8 _binary_tests_ring3_exit_start[];
+        extern u8 _binary_tests_ring3_exit_end[];
+        smoke_embed_and_launch("ring3_exit", _binary_tests_ring3_exit_start,
+                                _binary_tests_ring3_exit_end, "ring3_exit");
+    }
+
+    /* ── Address-space isolation test: launch two processes that each write
+     * a distinct marker to the same virtual address, then verify each kept
+     * its own physical frame. See docs/superpowers/specs/
+     * 2026-07-20-per-process-address-spaces-design.md ── */
+    {
+        extern u8 _binary_tests_ring3_isolate_a_start[];
+        extern u8 _binary_tests_ring3_isolate_a_end[];
+        extern u8 _binary_tests_ring3_isolate_b_start[];
+        extern u8 _binary_tests_ring3_isolate_b_end[];
+
+        int tid_a = smoke_embed_and_launch("ring3_isolate_a",
+                        _binary_tests_ring3_isolate_a_start,
+                        _binary_tests_ring3_isolate_a_end, "isolate_a");
+        int tid_b = smoke_embed_and_launch("ring3_isolate_b",
+                        _binary_tests_ring3_isolate_b_start,
+                        _binary_tests_ring3_isolate_b_end, "isolate_b");
+
+        if (tid_a < 0 || tid_b < 0) {
+            serial_write("[isolation-test] FAIL: could not launch test tasks\n");
+        } else {
+            /* isolate_a/b never exit (they spin after writing their marker,
+             * specifically so their address space stays alive to inspect --
+             * see tests/ring3_isolate_a.asm) -- just give them a generous,
+             * fixed number of scheduler rotations to run, then inspect. */
+            for (int i = 0; i < 64; i++) {
+                task_yield();
+            }
+
+            u64 dir_a = task_get_cr3(tid_a);
+            u64 dir_b = task_get_cr3(tid_b);
+            u64 phys_a = paging_translate((pde_t *)dir_a, 0x8040001000ULL);
+            u64 phys_b = paging_translate((pde_t *)dir_b, 0x8040001000ULL);
+            u32 val_a = (phys_a != ~0ULL) ? *(volatile u32 *)phys_a : 0;
+            u32 val_b = (phys_b != ~0ULL) ? *(volatile u32 *)phys_b : 0;
+
+            slog_hex64("[isolation-test] phys_a = ", phys_a);
+            slog_hex64("[isolation-test] phys_b = ", phys_b);
+            slog_hex64("[isolation-test] val_a  = ", (u64)val_a);
+            slog_hex64("[isolation-test] val_b  = ", (u64)val_b);
+
+            bool pass = (phys_a != ~0ULL) && (phys_b != ~0ULL) &&
+                        (phys_a != phys_b) &&
+                        (val_a == 0xAAAAAAAAu) && (val_b == 0xBBBBBBBBu);
+            serial_write(pass ? "[isolation-test] PASS\n" : "[isolation-test] FAIL\n");
+
+            /* isolate_a/b spin forever by design (see ring3_isolate_a.asm) --
+             * now that inspection is done, reap them explicitly: mark dead
+             * first so the scheduler never picks them again, then free
+             * their private address spaces so they don't leak for the rest
+             * of boot. */
+            task_kill(tid_a);
+            task_kill(tid_b);
+            paging_switch_kernel();
+            paging_free_dir((pde_t *)dir_a);
+            paging_free_dir((pde_t *)dir_b);
+        }
+    }
+#endif /* CAREOS_SKIP_SMOKE_TESTS */
 
     e1000_init();
     net_init();          slog_ok("Networking");

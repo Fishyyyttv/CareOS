@@ -223,16 +223,22 @@ __attribute__((noreturn)) void kernel_panic(u32 code, const char *msg);
 #define FS_MAX_DIRS     64
 #define FS_NAME_MAX     64
 #define FS_PATH_MAX     256
-#define FS_FILE_DATA_MAX (5*1024*1024)
+
+/* Upper bound on a single file's heap allocation. File contents live on the
+ * kernel heap (KERNEL_HEAP_SIZE, 192 MiB); this ceiling stops one runaway
+ * write from consuming it. Previously file data was a 5 MiB inline array,
+ * which cost 640 MiB of BSS for the 128-node pool whether used or not. */
+#define FS_FILE_MAX_BYTES (16u*1024u*1024u)
 
 typedef enum { FS_FILE, FS_DIR } fs_node_type_t;
 
 typedef struct fs_node {
     char            name[FS_NAME_MAX];
     fs_node_type_t  type;
-    u32             size;
-    char            data[FS_FILE_DATA_MAX];
-    void           *raw_data; /* if non-NULL, file content lives here (not in data[]) */
+    u32             size;          /* valid bytes in data */
+    char           *data;          /* heap or borrowed; NULL until content exists */
+    u32             capacity;      /* allocated bytes; 0 when borrowed */
+    bool            data_owned;    /* false = borrowed memory, never kfree'd */
     struct fs_node *parent;
     struct fs_node *children[32];
     u32             child_count;
@@ -251,6 +257,13 @@ int        vfs_write(fs_node_t *f, const char *data, u32 len);
 int        vfs_read(fs_node_t *f, char *buf, u32 len);
 int        vfs_delete(fs_node_t *node);
 fs_node_t *vfs_resolve_path(const char *path);
+
+/* File data storage. Contents are heap-allocated on first write. A node with
+ * data_owned == false borrows memory it must never free (e.g. the embedded
+ * DOOM WAD living in .data). */
+int         vfs_file_reserve(fs_node_t *f, u32 bytes); /* 0 ok, -1 fail */
+const char *vfs_file_str(fs_node_t *f);                /* never NULL; "" if empty */
+void        vfs_file_release(fs_node_t *f);
 
 /* -- Paging types & flags -------------------------------------------------- */
 typedef u64 pml4e_t;
@@ -280,13 +293,21 @@ typedef void (*task_func_t)(void);
 
 typedef enum { TASK_READY, TASK_RUNNING, TASK_BLOCKED, TASK_DEAD } task_state_t;
 
+/* Public view of a task. task_get()/task_current() hand out pointers to the
+ * scheduler's private tcb_t cast to this type, so the two layouts MUST agree
+ * field-for-field over this prefix. scheduler.c enforces that with
+ * _Static_assert on every member; do not reorder one without the other.
+ * (They previously disagreed from `state` onward, which is why `ps` printed a
+ * stack pointer in its tick column.) */
 typedef struct {
     u32          id;
     char         name[32];
     task_state_t state;
-    task_func_t  entry;
+    u32          timeslice;
+    u32          ticks_remaining;
+    u32          tick_count;      /* total ticks consumed */
     u64          rsp;
-    u64          tick_count;
+    u64          cr3;
 } task_t;
 
 void task_init(void);
@@ -312,6 +333,9 @@ void sysinfo_print(void);
 int care_lang_exec(const char *src, u32 len);
 int care_lang_exec_buf(const char *src, u32 len, char *out, u32 out_max);
 
+/* -- Startup scripts (rc.care) --------------------------------------------- */
+void rc_care_run_startup(void);
+
 /* -- Kernel main ---------------------------------------------------------- */
 void kernel_main(u64 magic, u64 mbi_addr);
 
@@ -331,14 +355,35 @@ pde_t *paging_create_dir(void);
 int    paging_map(pde_t *dir, u64 virt, u64 phys, u32 flags);
 void   paging_map_mmio(u32 phys_start, u32 size);
 void   paging_switch_dir(pde_t *dir);
+void   paging_switch_kernel(void);
 void   paging_free_dir(pde_t *dir);
+u64    paging_translate(pde_t *dir, u64 virt);
+/* True only if every page of [virt, virt+len) is mapped user-accessible (and
+ * writable when need_write) in `dir`, checking Present/User/RW at all four
+ * levels. This is the page-table-enforced replacement for guessing at address
+ * ranges when validating syscall arguments. */
+bool   paging_user_range_ok(pde_t *dir, u64 virt, u64 len, bool need_write);
+
+/* User-space private address region: a dedicated PML4 slot so every
+ * process gets its own physical PDPT/PD/PT frames, never aliased with the
+ * kernel's shared identity map at PML4[0] or with other processes.
+ * See docs/superpowers/specs/2026-07-20-per-process-address-spaces-design.md */
+#define USER_PML4_INDEX   1
+#define USER_CODE_BASE    ((u64)USER_PML4_INDEX << 39)     /* 0x0000008000000000 */
+#define USER_CODE_MAX     (USER_CODE_BASE + 0x40000000ULL) /* +1GB: code/data */
+#define TASK_STACK_PAGES  512
+#define TASK_STACK_SIZE   (TASK_STACK_PAGES * PAGE_SIZE)
+#define USER_STACK_TOP    (USER_CODE_MAX + TASK_STACK_SIZE)  /* stack sits right after */
 
 /* -- Preemptive scheduler ------------------------------------------------- */
 void scheduler_init(void);
+u64  task_get_cr3(int tid);
+bool task_has_exited(int tid);
+void task_kill(int tid);
 void scheduler_tick(registers_t *r);
 void task_block(void);
 void task_unblock(u32 id);
-u32  task_current_cr3(void);
+u64  task_current_cr3(void);
 
 /* -- System calls --------------------------------------------------------- */
 void syscall_init(void);
@@ -346,15 +391,27 @@ int  copy_from_user(void *dst, const void *user_src, u32 len);
 int  copy_to_user(void *user_dst, const void *src, u32 len);
 
 /* -- User management ------------------------------------------------------ */
+/* Password hash algorithms. Records written before v4 of the on-disk userdb
+ * hold a 32-bit FNV-style hash; they verify against the legacy algorithm and
+ * are transparently upgraded to PBKDF2 on the next successful login. */
+#define USER_HASH_LEGACY_FNV  0u
+#define USER_HASH_PBKDF2_S256 1u
+
+#define USER_PASS_HASH_LEN 32u
+#define USER_SALT_LEN      16u
+
+/* NOTE: this must stay field-for-field identical to user_rec_t in
+ * kernel/users.c. apps/app_users.c and apps/app_settings.c cast the void*
+ * from user_get_by_uid() to user_t*, so any layout drift is silent corruption. */
 typedef struct {
     u32  uid, gid;
     char name[32];
-    u32  pass_hash;
+    u8   pass_hash[USER_PASS_HASH_LEN];
     char home[64];
     char shell[32];
     bool active;
     bool is_root;
-    u32  salt;
+    u8   salt[USER_SALT_LEN];
     u8   failed_attempts;
     u32  lock_until_tick;
     u32  theme_pref;
@@ -363,6 +420,8 @@ typedef struct {
     u8   last_login_day;
     u8   last_login_hour;
     u8   last_login_minute;
+    u8   hash_algo;
+    bool must_change_password;
 } user_t;
 
 void *user_get_by_uid(u32 uid);
@@ -382,6 +441,9 @@ int         user_change_password(const char *name, const char *old_pass,
                                  const char *new_pass);
 void        user_list(void);
 void        user_set_current_theme_preference(u32 theme);
+/* True when the logged-in account still holds a shipped bootstrap password and
+ * must set a new one before reaching the desktop. */
+bool        user_must_change_password(void);
 
 /* VFS path helper (implemented in users.c) */
 void vfs_get_path(fs_node_t *node, char *buf, u32 max);
@@ -444,7 +506,10 @@ int         ata_cached_write(u32 lba, const void *buf);
 void        ata_cache_flush(void);
 #define CAREOS_DISK_HOMEFS_SECTORS    96u
 #define CAREOS_DISK_SETTINGS_SECTORS   4u
-#define CAREOS_DISK_USERDB_SECTORS     4u
+/* 8 sectors = 4096 B, enough for MAX_USERS (16) v4 records of 198 B each
+ * (3168 B) plus the header. The old value of 4 could not even hold 16 v3
+ * records (2512 B > 2048 B), which users_persist_save did not bound-check. */
+#define CAREOS_DISK_USERDB_SECTORS     8u
 #define CAREOS_DISK_RESERVED_SECTORS  (CAREOS_DISK_HOMEFS_SECTORS + CAREOS_DISK_SETTINGS_SECTORS + CAREOS_DISK_USERDB_SECTORS)
 
 /* -- e1000 Ethernet driver ------------------------------------------------ */

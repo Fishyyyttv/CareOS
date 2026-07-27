@@ -6,12 +6,12 @@ QEMU      := qemu-system-x86_64
 GCC_INC   := $(shell gcc -print-file-name=include 2>/dev/null)
 LIBGCC    := $(shell gcc -print-libgcc-file-name 2>/dev/null)
 
-KERN_CFLAGS := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
-               -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
+KERN_CFLAGS := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
+               -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
                -Iinclude -Iinclude/libc -Igui -fno-builtin \
                -mno-red-zone -mno-mmx -mno-sse -mno-sse2
 
-APP_CFLAGS  := -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
+APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
                -Iinclude -Iinclude/libc -Igui -fno-builtin \
                -mno-red-zone
@@ -42,14 +42,24 @@ NASMFLAGS := -f elf64
 
 DISK      := careos.img
 DISK_MB   = 4096
-DISK_RESERVED_SECTORS := 104
+# Must equal CAREOS_DISK_RESERVED_SECTORS in include/kernel.h
+# (HOMEFS 96 + SETTINGS 4 + USERDB 8). If these disagree, the ext2 filesystem
+# overlaps the reserved tail where homefs/settings/userdb live.
+DISK_RESERVED_SECTORS := 108
 
-# -machine pc,usb=off   forces PS/2 mouse on IRQ12 (no USB tablet)
+# Display backend. sdl gives a predictable pointer grab (click the window to
+# grab, Ctrl+Alt+G to release) and a fullscreen toggle (Ctrl+Alt+F). Override
+# with e.g. `make run QEMU_DISPLAY=gtk` if your QEMU build has no SDL support.
+QEMU_DISPLAY ?= sdl
+
+# -machine pc,usb=off   forces PS/2 mouse on IRQ12. CareOS has no USB stack, so a
+#                       usb-tablet would NOT work; the PS/2 mouse is RELATIVE and
+#                       only moves the cursor once QEMU has grabbed the pointer.
+# -display $(QEMU_DISPLAY)  window that captures the mouse (Ctrl+Alt+G releases)
 # -drive                4GB disk image so ATA driver finds a drive
-# -display sdl          proper window that captures mouse (Ctrl+Alt+G to release)
 # -serial stdio         boot stage logs in your terminal
 QEMUBASE  := -m 4096M -smp 4 -cpu max -cdrom careos.iso -no-reboot -serial stdio -vga std \
-             -machine pc,usb=off \
+             -machine pc,usb=off -display $(QEMU_DISPLAY) \
              -drive file=$(DISK),format=raw,if=ide,index=0 \
              -netdev user,id=net0 -device e1000,netdev=net0
 
@@ -69,6 +79,7 @@ C_SRC     := kernel/kernel.c       \
              kernel/ext2.c         \
              kernel/pipe.c         \
              kernel/care_lang.c    \
+             kernel/rc_care.c      \
              drivers/vga.c         \
              drivers/timer.c       \
              drivers/keyboard.c    \
@@ -116,7 +127,7 @@ C_SRC     := kernel/kernel.c       \
 ASM_OBJ   := $(ASM_SRC:.asm=.o)
 C_OBJ     := $(C_SRC:.c=.o)
 DOOM_OBJ  := $(DOOM_SRC:.c=.o)
-ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o DOOM1.WAD.bin.o
+ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o
 
 .PHONY: all run run-1080p run-kvm run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk
 
@@ -144,6 +155,12 @@ kernel/libc_shim.o: kernel/libc_shim.c
 	@echo "  CC    $<"
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Header dependency tracking. Without this, editing a header (e.g. the
+# fs_node_t layout in include/kernel.h) rebuilds nothing, and stale objects
+# get linked against new ones with mismatched struct layouts.
+DEP_FILES := $(ALL_OBJ:.o=.d)
+-include $(DEP_FILES)
+
 kernel/kernel.elf: $(ALL_OBJ)
 	@echo "  LD    kernel.elf"
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJ) $(LIBGCC)
@@ -160,7 +177,9 @@ careos.iso: kernel/kernel.elf
 run: $(DISK) careos.iso
 	$(QEMU) $(QEMUBASE)
 
-run-1080p: $(DISK) careos.iso
+# Boots straight into fullscreen. Click once to grab the mouse; Ctrl+Alt+F
+# toggles fullscreen at any time, Ctrl+Alt+G releases the pointer grab.
+run-1080p run-fullscreen: $(DISK) careos.iso
 	$(QEMU) $(QEMUBASE) -full-screen
 
 run-kvm: $(DISK) careos.iso
@@ -192,28 +211,48 @@ tests/ring3_exit.o: tests/ring3_exit.asm
 	nasm -f elf64 -o tests/ring3_exit.o tests/ring3_exit.asm
 
 tests/ring3_exit: tests/ring3_exit.o
-	ld -m elf_x86_64 -Ttext 0x400000 -o tests/ring3_exit tests/ring3_exit.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_exit tests/ring3_exit.o
 
 tests/ring3_fault.o: tests/ring3_fault.asm
 	nasm -f elf64 -o tests/ring3_fault.o tests/ring3_fault.asm
 
 tests/ring3_fault: tests/ring3_fault.o
-	ld -m elf_x86_64 -Ttext 0x400000 -o tests/ring3_fault tests/ring3_fault.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_fault tests/ring3_fault.o
 
 # Convert ring3_exit ELF to a linkable object so it can be embedded in the kernel
 tests/ring3_exit.bin.o: tests/ring3_exit
 	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 tests/ring3_exit tests/ring3_exit.bin.o
+
+tests/ring3_isolate_a.o: tests/ring3_isolate_a.asm
+	nasm -f elf64 -o tests/ring3_isolate_a.o tests/ring3_isolate_a.asm
+
+tests/ring3_isolate_a: tests/ring3_isolate_a.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_isolate_a tests/ring3_isolate_a.o
+
+tests/ring3_isolate_a.bin.o: tests/ring3_isolate_a
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 tests/ring3_isolate_a tests/ring3_isolate_a.bin.o
+
+tests/ring3_isolate_b.o: tests/ring3_isolate_b.asm
+	nasm -f elf64 -o tests/ring3_isolate_b.o tests/ring3_isolate_b.asm
+
+tests/ring3_isolate_b: tests/ring3_isolate_b.o
+	ld -m elf_x86_64 -Ttext 0x8000000000 -o tests/ring3_isolate_b tests/ring3_isolate_b.o
+
+tests/ring3_isolate_b.bin.o: tests/ring3_isolate_b
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 tests/ring3_isolate_b tests/ring3_isolate_b.bin.o
 
 # Embed DOOM1.WAD directly into the kernel binary
 DOOM1.WAD.bin.o: DOOM1.WAD
 	@echo "  EMBED DOOM1.WAD ($$(du -h DOOM1.WAD | cut -f1))"
 	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 DOOM1.WAD DOOM1.WAD.bin.o
 
-test-elfs: tests/ring3_exit tests/ring3_fault
+test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_isolate_b
 
 clean:
-	@rm -f $(ALL_OBJ) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
+	@rm -f $(ALL_OBJ) $(ALL_OBJ:.o=.d) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
 	@rm -f tests/ring3_exit.o tests/ring3_exit tests/ring3_fault.o tests/ring3_fault tests/ring3_exit.bin.o
+	@rm -f tests/ring3_isolate_a.o tests/ring3_isolate_a tests/ring3_isolate_a.bin.o
+	@rm -f tests/ring3_isolate_b.o tests/ring3_isolate_b tests/ring3_isolate_b.bin.o
 	@echo "  Cleaned (kept $(DISK) for persistent users/data)"
 
 clean-all: clean reset-disk
@@ -222,7 +261,7 @@ clean-all: clean reset-disk
 help:
 	@echo "  make              build disk + ISO"
 	@echo "  make run          run in QEMU (SDL window, PS/2 mouse)"
-	@echo "  make run-1080p    run fullscreen"
+	@echo "  make run-1080p    run fullscreen (alias: run-fullscreen)"
 	@echo "  make run-kvm      run with KVM acceleration"
 	@echo "  make run-nowindow headless serial-only"
 	@echo "  make debug        run with GDB"
@@ -231,6 +270,8 @@ help:
 	@echo "  make clean-all    clean + reset disk"
 	@echo ""
 	@echo "  Mouse: click QEMU window to capture, Ctrl+Alt+G to release"
+	@echo "  Fullscreen: Ctrl+Alt+F toggles it any time (or use make run-1080p)"
+	@echo "  Display: override backend with make run QEMU_DISPLAY=gtk"
 
 
 

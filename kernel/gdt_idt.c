@@ -188,11 +188,23 @@ void pic_send_eoi(u8 irq) {
     outb(PIC1_CMD, PIC_EOI);
 }
 
+/* The EOI must be sent BEFORE the handler runs, not after. scheduler_tick()
+ * is registered on IRQ0 and context-switches away mid-handler, so it never
+ * returns here for the interrupted task -- the EOI would be deferred until
+ * that task is scheduled back in. The PIC's in-service bit for IRQ0 then
+ * stays set forever, it stops delivering timer interrupts, and the only
+ * remaining way to reach the scheduler is a voluntary task_yield(). A ring-3
+ * task that spins without yielding (tests/ring3_isolate_a.asm) is then never
+ * preempted and the whole system wedges -- which is why boot hung before
+ * Stage 4 and never brought up the framebuffer or GUI.
+ *
+ * Acking early is safe: these are interrupt gates (0x8E), so IF is clear for
+ * the whole handler and no nested IRQ can be delivered before the iretq. */
 void irq_handler(registers_t *r) {
     u8 irq = (u8)(r->int_no - IRQ0);
+    pic_send_eoi(irq);
     if (isr_handlers[r->int_no])
         isr_handlers[r->int_no](r);
-    pic_send_eoi(irq);
 }
 
 void idt_init(void) {

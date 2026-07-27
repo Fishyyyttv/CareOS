@@ -199,8 +199,9 @@ static void exec_cmd(char *line){
          fs_node_t *f=(argv[1][0]=='/')?vfs_resolve_path(argv[1]):vfs_find(cwd,argv[1]);
          if(!f){terminal_write("cat: "); terminal_write(argv[1]); terminal_write(": not found\n");return;}
          if(f->type==FS_DIR){terminal_write("cat: is a directory\n");return;}
-         terminal_write(f->data);
-         if(f->size&&f->data[f->size-1]!='\n') terminal_write("\n");
+         const char *fd_txt=vfs_file_str(f);
+         terminal_write(fd_txt);
+         if(f->size&&fd_txt[f->size-1]!='\n') terminal_write("\n");
          return;
      }
      if(!kstrcmp(cmd,"mkdir")){
@@ -261,7 +262,7 @@ static void exec_cmd(char *line){
          fs_node_t *f=(argv[2][0]=='/')?vfs_resolve_path(argv[2]):vfs_find(cwd,argv[2]);
          if(!f){terminal_write("grep: file not found\n");return;}
          /* Line-by-line search */
-         const char *p=f->data; char line2[256];
+         const char *p=vfs_file_str(f); char line2[256];
          while(*p){
              int l=0; const char *start=p;
              while(*p&&*p!='\n'&&l<255) line2[l++]=(char)*p++;
@@ -282,8 +283,9 @@ static void exec_cmd(char *line){
          fs_node_t *f=(argv[1][0]=='/')?vfs_resolve_path(argv[1]):vfs_find(cwd,argv[1]);
          if(!f){terminal_write("wc: not found\n");return;}
          u32 lines=0,words=0,bytes=f->size; bool in_word=false;
+         const char *wc_txt=vfs_file_str(f);
          for(u32 i=0;i<f->size;i++){
-             char c=f->data[i]; if(c=='\n') lines++;
+             char c=wc_txt[i]; if(c=='\n') lines++;
              if(c==' '||c=='\t'||c=='\n'){in_word=false;}else if(!in_word){words++;in_word=true;}
          }
          char b[12];
@@ -698,7 +700,7 @@ static void exec_cmd(char *line){
          if (argc<2) { terminal_write("usage: care <file.cl>\n"); return; }
          fs_node_t *f=(argv[1][0]=='/')?vfs_resolve_path(argv[1]):vfs_find(cwd,argv[1]);
          if (!f||f->type!=FS_FILE) { terminal_write("care: file not found\n"); return; }
-         if (care_lang_exec(f->data,f->size)!=0) terminal_write("care: script error\n");
+         if (care_lang_exec(vfs_file_str(f),f->size)!=0) terminal_write("care: script error\n");
          return;
      }
 

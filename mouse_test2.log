@@ -1,0 +1,324 @@
+
+[STAGE 1] Hardware init
+  [OK] PMM
+  [OK] GDT
+  [OK] SSE
+[boot] calling terminal_init...
+  [OK] VGA terminal
+[boot] calling serial_init...
+  [OK] Serial (COM1)
+[boot] calling idt_init...
+  [OK] IDT
+
+[STAGE 2] Core services
+  [OK] PIT timer
+  [OK] PS/2 keyboard
+  [OK] VFS
+[paging] 4-level enabled
+  [OK] Paging
+  [OK] Syscalls
+[smoke] ring3_exit ELF size = 4656
+[smoke] elf_load_user returned -4
+
+[STAGE 3] Device and persistence init
+[rtc] CMOS RTC driver ready
+  [OK] RTC
+[pci] 0:0.0  VID=8086 DID=1237  Host Bridge
+    BAR0=0 BAR1=0 BAR2=0 BAR3=0 BAR4=0 BAR5=0
+[pci] 0:1.0  VID=8086 DID=7000  ISA Bridge
+    BAR0=0 BAR1=0 BAR2=0 BAR3=0 BAR4=0 BAR5=0
+[pci] 0:1.1  VID=8086 DID=7010  IDE Controller
+    BAR0=0 BAR1=0 BAR2=0 BAR3=0 BAR4=c041 BAR5=0
+[pci] 0:1.3  VID=8086 DID=7113  Bridge
+    BAR0=0 BAR1=0 BAR2=0 BAR3=0 BAR4=0 BAR5=0
+[pci] 0:2.0  VID=1234 DID=1111  Display/VGA
+    BAR0=fd000008 BAR1=0 BAR2=febb0000 BAR3=0 BAR4=0 BAR5=0
+[pci] 0:3.0  VID=8086 DID=100e  Ethernet
+    BAR0=feb80000 BAR1=c001 BAR2=0 BAR3=0 BAR4=0 BAR5=0
+[pci] scan complete, 6 devices
+  [OK] PCI
+[ata] drive: QEMU HARDDISK, sectors=8388608
+  [OK] ATA/IDE
+[ext2] mounted, block_size=1024 groups=512
+  [OK] ext2
+[ext2 test] root OK
+[settings] loaded v3 settings from disk
+  [OK] Settings
+[vfs] /home bridged to ext2
+  [OK] Home persistence
+[doom] WAD size = 14445628
+[doom] DOOM1.WAD ready at /home/user/DOOM1.WAD
+[users] loaded account database from disk
+[users] subsystem ready, awaiting login
+  [OK] Users
+[carepkg] .care package manager ready
+  [OK] CarePackage manager
+[boot] Initializing scheduler...
+  [OK] Scheduler
+[e1000] init start
+[e1000] raw BAR0=0xfeb80000
+[e1000] mmio BAR0=0xfeb80000
+[paging] mmio mapped
+[e1000] mmio mapped
+[e1000] pci command set
+[e1000] resetting NIC
+[e1000] MAC=52:54:00:12:34:56
+[NET] e1000 up, IP=10.0.2.15
+[NET] DHCP lease renewed: 10.0.2.15/24 gw 10.0.2.2
+  [OK] Networking
+
+[STAGE 4] Framebuffer detection
+  MB2 magic  = 0x36d76289
+  MB2 mbi    = 0x100070
+  MB2 total  = 0x718
+  [FB] Direct-color mask shifts parsed
+  FB addr    = 0xfd000000
+  FB width   = 0x780
+  FB height  = 0x438
+  FB pitch   = 0x1e00
+  FB bpp     = 0x20
+  [OK] MB2 framebuffer tag found
+[paging] mmio mapped
+  FB ready: bpp=0x20
+
+[STAGE 5] GUI launch
+  Calling gui_init...
+  [gui_init] gfx_init
+  [gui_init] mouse_init
+  [mouse] IntelliMouse scroll wheel detected
+  [mouse] PS/2 ready, 5-zone accel, adaptive smooth, scroll wheel
+  [gui_init] wm_init
+  [gui_init] done
+  gui_init complete
+[VESA] BGA detected, running at GRUB resolution
+  [OK] VESA/BGA
+  Calling gui_run (enters main loop)...
+  [gui_run] splash start
+  [gui_run] splash done
+  [gui_run] login gate
+[dbg draw] x=960 y=540
+[dbg upd] step_x=192 step_y=72 -> cur_x=1152 cur_y=612
+[dbg draw] x=1152 y=612
+[dbg upd] step_x=-19 step_y=-4 -> cur_x=1133 cur_y=608
+[dbg draw] x=1133 y=608
+[dbg upd] step_x=-36 step_y=7 -> cur_x=1097 cur_y=615
+[dbg draw] x=1097 y=615
+[dbg upd] step_x=-24 step_y=-24 -> cur_x=1073 cur_y=591
+[dbg draw] x=1073 y=591
+[dbg upd] step_x=-32 step_y=-59 -> cur_x=1041 cur_y=532
+[dbg draw] x=1041 y=532
+[dbg upd] step_x=-35 step_y=48 -> cur_x=1006 cur_y=580
+[dbg draw] x=1006 y=580
+[dbg upd] step_x=-96 step_y=26 -> cur_x=910 cur_y=606
+[dbg draw] x=910 y=606
+[dbg upd] step_x=-72 step_y=48 -> cur_x=838 cur_y=654
+[dbg draw] x=838 y=654
+[dbg upd] step_x=-12 step_y=-4 -> cur_x=826 cur_y=650
+[dbg draw] x=826 y=650
+[dbg upd] step_x=52 step_y=19 -> cur_x=878 cur_y=669
+[dbg draw] x=878 y=669
+[dbg upd] step_x=159 step_y=96 -> cur_x=1037 cur_y=765
+[dbg draw] x=1037 y=765
+[dbg upd] step_x=29 step_y=-105 -> cur_x=1066 cur_y=660
+[dbg draw] x=1066 y=660
+[dbg upd] step_x=-147 step_y=112 -> cur_x=919 cur_y=772
+[dbg draw] x=919 y=772
+[dbg upd] step_x=104 step_y=-72 -> cur_x=1023 cur_y=700
+[dbg draw] x=1023 y=700
+[dbg upd] step_x=-114 step_y=-17 -> cur_x=909 cur_y=683
+[dbg draw] x=909 y=683
+[dbg upd] step_x=109 step_y=-95 -> cur_x=1018 cur_y=588
+[dbg draw] x=1018 y=588
+[dbg upd] step_x=30 step_y=144 -> cur_x=1048 cur_y=732
+[dbg draw] x=1048 y=732
+[dbg upd] step_x=36 step_y=-90 -> cur_x=1084 cur_y=642
+[dbg draw] x=1084 y=642
+[dbg upd] step_x=-192 step_y=-74 -> cur_x=892 cur_y=568
+[dbg draw] x=892 y=568
+[dbg upd] step_x=117 step_y=-8 -> cur_x=1009 cur_y=560
+[dbg draw] x=1009 y=560
+[dbg upd] step_x=-28 step_y=20 -> cur_x=981 cur_y=580
+[dbg draw] x=981 y=580
+[dbg upd] step_x=-45 step_y=130 -> cur_x=936 cur_y=710
+[dbg draw] x=936 y=710
+[dbg upd] step_x=50 step_y=-8 -> cur_x=986 cur_y=702
+[dbg draw] x=986 y=702
+[dbg upd] step_x=-72 step_y=-36 -> cur_x=914 cur_y=666
+[dbg draw] x=914 y=666
+[dbg upd] step_x=-68 step_y=-25 -> cur_x=846 cur_y=641
+[dbg draw] x=846 y=641
+[dbg upd] step_x=-16 step_y=-20 -> cur_x=830 cur_y=621
+[dbg draw] x=830 y=621
+[dbg upd] step_x=-15 step_y=-35 -> cur_x=815 cur_y=586
+[dbg draw] x=815 y=586
+[dbg upd] step_x=12 step_y=-19 -> cur_x=827 cur_y=567
+[dbg draw] x=827 y=567
+[dbg upd] step_x=1 step_y=0 -> cur_x=828 cur_y=567
+[dbg draw] x=828 y=567
+[dbg upd] step_x=42 step_y=-8 -> cur_x=870 cur_y=559
+[dbg draw] x=870 y=559
+[dbg upd] step_x=11 step_y=-3 -> cur_x=881 cur_y=556
+[dbg draw] x=881 y=556
+[dbg upd] step_x=54 step_y=-27 -> cur_x=935 cur_y=529
+[dbg draw] x=935 y=529
+[dbg upd] step_x=31 step_y=-18 -> cur_x=966 cur_y=511
+[dbg draw] x=966 y=511
+[dbg upd] step_x=1 step_y=0 -> cur_x=967 cur_y=511
+[dbg draw] x=967 y=511
+[dbg upd] step_x=0 step_y=-1 -> cur_x=967 cur_y=510
+[dbg draw] x=967 y=510
+[dbg upd] step_x=2 step_y=-25 -> cur_x=969 cur_y=485
+[dbg draw] x=969 y=485
+[dbg upd] step_x=4 step_y=-7 -> cur_x=973 cur_y=478
+[dbg draw] x=973 y=478
+[dbg upd] step_x=2 step_y=-4 -> cur_x=975 cur_y=474
+[dbg draw] x=975 y=474
+[dbg upd] step_x=3 step_y=-15 -> cur_x=978 cur_y=459
+[dbg draw] x=978 y=459
+[dbg upd] step_x=5 step_y=-10 -> cur_x=983 cur_y=449
+[dbg draw] x=983 y=449
+[dbg upd] step_x=1 step_y=-7 -> cur_x=984 cur_y=442
+[dbg draw] x=984 y=442
+[dbg upd] step_x=-9 step_y=-23 -> cur_x=975 cur_y=419
+[dbg draw] x=975 y=419
+[dbg upd] step_x=-12 step_y=-13 -> cur_x=963 cur_y=406
+[dbg draw] x=963 y=406
+[dbg upd] step_x=-91 step_y=42 -> cur_x=872 cur_y=448
+[dbg draw] x=872 y=448
+[dbg upd] step_x=-27 step_y=27 -> cur_x=845 cur_y=475
+[dbg draw] x=845 y=475
+[dbg upd] step_x=-1 step_y=6 -> cur_x=844 cur_y=481
+[dbg draw] x=844 y=481
+[dbg upd] step_x=0 step_y=1 -> cur_x=844 cur_y=482
+[dbg draw] x=844 y=482
+[dbg upd] step_x=12 step_y=1 -> cur_x=856 cur_y=483
+[dbg draw] x=856 y=483
+[dbg upd] step_x=84 step_y=5 -> cur_x=940 cur_y=488
+[dbg draw] x=940 y=488
+[dbg upd] step_x=120 step_y=-3 -> cur_x=1060 cur_y=485
+[dbg draw] x=1060 y=485
+[dbg upd] step_x=13 step_y=5 -> cur_x=1073 cur_y=490
+[dbg draw] x=1073 y=490
+[dbg upd] step_x=-11 step_y=47 -> cur_x=1062 cur_y=537
+[dbg draw] x=1062 y=537
+[dbg upd] step_x=-34 step_y=77 -> cur_x=1028 cur_y=614
+[dbg draw] x=1028 y=614
+[dbg upd] step_x=-70 step_y=73 -> cur_x=958 cur_y=687
+[dbg draw] x=958 y=687
+[dbg upd] step_x=-14 step_y=44 -> cur_x=944 cur_y=731
+[dbg draw] x=944 y=731
+[dbg upd] step_x=3 step_y=22 -> cur_x=947 cur_y=753
+[dbg draw] x=947 y=753
+[dbg upd] step_x=9 step_y=-9 -> cur_x=956 cur_y=744
+[dbg draw] x=956 y=744
+[dbg upd] step_x=26 step_y=-3 -> cur_x=982 cur_y=741
+[dbg draw] x=982 y=741
+[dbg upd] step_x=54 step_y=-7 -> cur_x=1036 cur_y=734
+[dbg draw] x=1036 y=734
+[dbg upd] step_x=3 step_y=-6 -> cur_x=1039 cur_y=728
+[dbg draw] x=1039 y=728
+[dbg upd] step_x=5 step_y=-10 -> cur_x=1044 cur_y=718
+[dbg draw] x=1044 y=718
+[dbg upd] step_x=10 step_y=-4 -> cur_x=1054 cur_y=714
+[dbg draw] x=1054 y=714
+[dbg upd] step_x=1 step_y=0 -> cur_x=1055 cur_y=714
+[dbg draw] x=1055 y=714
+[dbg upd] step_x=-2 step_y=-9 -> cur_x=1053 cur_y=705
+[dbg draw] x=1053 y=705
+[dbg upd] step_x=-1 step_y=-1 -> cur_x=1052 cur_y=704
+[dbg draw] x=1052 y=704
+[dbg upd] step_x=-27 step_y=-21 -> cur_x=1025 cur_y=683
+[dbg draw] x=1025 y=683
+[dbg upd] step_x=-68 step_y=-96 -> cur_x=957 cur_y=587
+[dbg draw] x=957 y=587
+[dbg upd] step_x=-1 step_y=-13 -> cur_x=956 cur_y=574
+[dbg draw] x=956 y=574
+[dbg upd] step_x=0 step_y=1 -> cur_x=956 cur_y=575
+[dbg draw] x=956 y=575
+[dbg upd] step_x=8 step_y=18 -> cur_x=964 cur_y=593
+[dbg draw] x=964 y=593
+[dbg upd] step_x=3 step_y=7 -> cur_x=967 cur_y=600
+[dbg draw] x=967 y=600
+[dbg upd] step_x=0 step_y=1 -> cur_x=967 cur_y=601
+[dbg draw] x=967 y=601
+[dbg upd] step_x=4 step_y=5 -> cur_x=971 cur_y=606
+[dbg draw] x=971 y=606
+[dbg upd] step_x=-4 step_y=17 -> cur_x=967 cur_y=623
+[dbg draw] x=967 y=623
+[dbg upd] step_x=-27 step_y=28 -> cur_x=940 cur_y=651
+[dbg draw] x=940 y=651
+[dbg upd] step_x=-15 step_y=30 -> cur_x=925 cur_y=681
+[dbg draw] x=925 y=681
+[dbg upd] step_x=-1 step_y=11 -> cur_x=924 cur_y=692
+[dbg draw] x=924 y=692
+[dbg upd] step_x=-1 step_y=5 -> cur_x=923 cur_y=697
+[dbg draw] x=923 y=697
+[dbg upd] step_x=0 step_y=1 -> cur_x=923 cur_y=698
+[dbg draw] x=923 y=698
+[dbg upd] step_x=-2 step_y=7 -> cur_x=921 cur_y=705
+[dbg draw] x=921 y=705
+[dbg upd] step_x=1 step_y=5 -> cur_x=922 cur_y=710
+[dbg draw] x=922 y=710
+[dbg upd] step_x=0 step_y=1 -> cur_x=922 cur_y=711
+[dbg draw] x=922 y=711
+[dbg upd] step_x=0 step_y=2 -> cur_x=922 cur_y=713
+[dbg draw] x=922 y=713
+[dbg upd] step_x=-3 step_y=6 -> cur_x=919 cur_y=719
+[dbg draw] x=919 y=719
+[dbg upd] step_x=-1 step_y=0 -> cur_x=918 cur_y=719
+[dbg draw] x=918 y=719
+[dbg upd] step_x=14 step_y=-1 -> cur_x=932 cur_y=718
+[dbg draw] x=932 y=718
+[dbg upd] step_x=0 step_y=-1 -> cur_x=932 cur_y=717
+[dbg draw] x=932 y=717
+[dbg upd] step_x=-2 step_y=-13 -> cur_x=930 cur_y=704
+[dbg draw] x=930 y=704
+[dbg upd] step_x=-9 step_y=-46 -> cur_x=921 cur_y=658
+[dbg draw] x=921 y=658
+[dbg upd] step_x=-20 step_y=-61 -> cur_x=901 cur_y=597
+[dbg draw] x=901 y=597
+[dbg upd] step_x=-1 step_y=-2 -> cur_x=900 cur_y=595
+[dbg draw] x=900 y=595
+[dbg upd] step_x=0 step_y=-1 -> cur_x=900 cur_y=594
+[dbg draw] x=900 y=594
+[users] login: xf1shy
+  [rc_care] seeded /etc/rc.care
+  [rc_care] seeded user rc.care
+  [wm_open] app_init for: Terminal
+  [gui_run] entering main loop
+[dbg upd] step_x=-9 step_y=-49 -> cur_x=891 cur_y=545
+[dbg draw] x=891 y=545
+[dbg upd] step_x=50 step_y=-5 -> cur_x=941 cur_y=540
+[dbg draw] x=941 y=540
+[dbg upd] step_x=-56 step_y=63 -> cur_x=885 cur_y=603
+[dbg draw] x=885 y=603
+[dbg upd] step_x=-102 step_y=-44 -> cur_x=783 cur_y=559
+[dbg draw] x=783 y=559
+[dbg upd] step_x=89 step_y=-45 -> cur_x=872 cur_y=514
+[dbg draw] x=872 y=514
+[dbg upd] step_x=-40 step_y=-12 -> cur_x=832 cur_y=502
+[dbg draw] x=832 y=502
+[dbg upd] step_x=52 step_y=-83 -> cur_x=884 cur_y=419
+[dbg draw] x=884 y=419
+[dbg upd] step_x=77 step_y=-92 -> cur_x=961 cur_y=327
+[dbg draw] x=961 y=327
+[dbg upd] step_x=10 step_y=-15 -> cur_x=971 cur_y=312
+[dbg draw] x=971 y=312
+[dbg upd] step_x=-11 step_y=-5 -> cur_x=960 cur_y=307
+[dbg draw] x=960 y=307
+[dbg upd] step_x=35 step_y=-6 -> cur_x=995 cur_y=301
+[dbg draw] x=995 y=301
+[dbg upd] step_x=-6 step_y=6 -> cur_x=989 cur_y=307
+[dbg draw] x=989 y=307
+[dbg upd] step_x=-27 step_y=33 -> cur_x=962 cur_y=340
+[dbg draw] x=962 y=340
+[dbg upd] step_x=0 step_y=-1 -> cur_x=962 cur_y=339
+[dbg draw] x=962 y=339
+[dbg upd] step_x=-4 step_y=5 -> cur_x=958 cur_y=344
+[dbg draw] x=958 y=344
+[dbg upd] step_x=7 step_y=1 -> cur_x=965 cur_y=345
+[dbg draw] x=965 y=345
+[dbg upd] step_x=3 step_y=0 -> cur_x=968 cur_y=345
+[dbg draw] x=968 y=345
+[dbg upd] step_x=-36 step_y=24 -> cur_x=932 cur_y=369
+[dbg draw] x=932 y=369

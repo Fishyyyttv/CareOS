@@ -42,8 +42,6 @@ static void tss_set_kernel_stack(u64 rsp0) {
 }
 
 /* ── Task control blocks ────────────────────────────────────────────────────── */
-#define TASK_STACK_PAGES 512
-#define TASK_STACK_SIZE  (TASK_STACK_PAGES * PAGE_SIZE)
 #define TIMESLICE_DEFAULT 5
 
 typedef struct tcb {
@@ -72,6 +70,24 @@ typedef struct tcb {
     u8   sse_state[512] __attribute__((aligned(16)));
 } tcb_t;
 
+/* task_get()/task_current() return (task_t *)&tasks[i], so the public task_t
+ * in kernel.h must overlay tcb_t exactly. Check every shared member rather
+ * than just the size -- the layouts used to silently diverge after `state`,
+ * so callers reading t->tick_count were actually reading tcb_t::rsp. */
+#define SAME_OFFSET(f_pub, f_tcb) \
+    _Static_assert(__builtin_offsetof(task_t, f_pub) == __builtin_offsetof(tcb_t, f_tcb), \
+                   "task_t/tcb_t layout drift at " #f_pub)
+SAME_OFFSET(id,              id);
+SAME_OFFSET(name,            name);
+SAME_OFFSET(state,           state);
+SAME_OFFSET(timeslice,       timeslice);
+SAME_OFFSET(ticks_remaining, ticks_remaining);
+SAME_OFFSET(tick_count,      total_ticks);
+SAME_OFFSET(rsp,             rsp);
+SAME_OFFSET(cr3,             cr3);
+_Static_assert(sizeof(task_t) <= sizeof(tcb_t), "task_t overhangs tcb_t");
+#undef SAME_OFFSET
+
 static tcb_t  tasks[MAX_TASKS] __attribute__((aligned(16)));
 static u32    task_count   = 0;
 static u32    current_task = 0;
@@ -81,8 +97,11 @@ task_t *task_current(void) {
     return (task_t *)&tasks[current_task];
 }
 
-u32 task_current_cr3(void) {
-    return (u32)tasks[current_task].cr3;
+/* Returns the full 64-bit CR3; 0 for a kernel task (no private address
+ * space). This used to truncate to u32, which only happened to work because
+ * every page-table frame lands in the low 4GB. */
+u64 task_current_cr3(void) {
+    return tasks[current_task].cr3;
 }
 
 /* ── Context switch (x86_64) ──────────────────────────────────────────────── */
@@ -206,7 +225,7 @@ static void __attribute__((noreturn)) enter_userspace(u64 entry, u64 user_rsp) {
 
 static void __attribute__((noinline)) task_user_trampoline(void) {
     tcb_t *t = &tasks[current_task];
-    enter_userspace(t->entry, 0xBFF00000ULL + TASK_STACK_SIZE);
+    enter_userspace(t->entry, USER_STACK_TOP);
 }
 
 int task_create(const char *name, task_func_t fn) {
@@ -254,7 +273,6 @@ int task_create_user(const char *name, u64 entry, pde_t *page_dir, int session) 
     t->session_id      = session;
 
     t->kstack = (u8*)kmalloc(TASK_STACK_SIZE);
-    t->ustack = (u8*)kmalloc(TASK_STACK_SIZE);
 
     u64 *sp = (u64*)(t->kstack + TASK_STACK_SIZE);
     *--sp = (u64)task_user_trampoline;
@@ -267,12 +285,45 @@ int task_create_user(const char *name, u64 entry, pde_t *page_dir, int session) 
     return (int)(task_count - 1);
 }
 
+/* task_yield used to trigger scheduler_tick via `int $0x20` -- the exact
+ * same vector real hardware IRQ0 (the PIT timer) uses. Both routed through
+ * irq0_stub -> irq_handler, which unconditionally sends a PIC End-of-
+ * Interrupt after every call. A software `int` never goes through the
+ * PIC's INTA acknowledge cycle at all, so every voluntary yield sent a
+ * spurious EOI, desynchronizing the PIC's in-service tracking until real
+ * hardware timer interrupts stopped being delivered -- observed as tasks
+ * hanging forever the first time they needed a real preemption (e.g. a
+ * ring-3 task spinning with no voluntary yield of its own) after enough
+ * software yields had run. Route the software path through its own
+ * dedicated vector (0x30) using the plain isr_common_stub/isr_handler
+ * path -- same one INT 0x80 (syscalls) already uses -- which never
+ * touches the PIC at all. */
+extern void isr_common_stub(void);
+void task_yield_stub(void);
+__asm__(
+    ".global task_yield_stub\n"
+    "task_yield_stub:\n"
+    "  pushq $0\n"
+    "  pushq $0x30\n"
+    "  jmp isr_common_stub\n"
+);
+
 void task_yield(void) {
     if (!sched_ready) return;
-    __asm__ volatile ("int $0x20");
+    __asm__ volatile ("int $0x30");
 }
 
 __attribute__((noreturn)) void task_exit(void) {
+    /* Reclaim the process's private address space now. Note: we do NOT
+     * free tasks[current_task].kstack here — task_exit() is running on
+     * that very kernel stack, so freeing it out from under ourselves
+     * would corrupt memory. Kernel-stack reclamation needs a separate
+     * reaper that runs from a different stack after the task is dead;
+     * that gap is left for future work. */
+    if (tasks[current_task].is_user && tasks[current_task].cr3 != 0) {
+        paging_free_dir((pde_t *)tasks[current_task].cr3);
+        tasks[current_task].cr3 = 0;
+    }
     tasks[current_task].state = TASK_DEAD;
     task_yield();
     while (1) { __asm__ volatile ("hlt"); }
@@ -294,12 +345,59 @@ void scheduler_init(void) {
     __asm__ volatile ("fninit; fxsave %0" : "=m"(tasks[0].sse_state));
 
     register_interrupt_handler(IRQ0, (isr_handler_t)scheduler_tick);
+
+    idt_set_gate(0x30, (u32)(uintptr_t)task_yield_stub, GDT_CODE_SEG, 0x8E);
+    register_interrupt_handler(0x30, (isr_handler_t)scheduler_tick);
+
     sched_ready = true;
 }
 
 void task_init(void) { scheduler_init(); }
 
-void task_list(void) { /* Implementation same as before, omitted for brevity */ }
+/* Pad `s` out to `width` with spaces, in place. */
+static void pad_to(char *s, u32 width) {
+    u32 n = (u32)kstrlen(s);
+    while (n < width) s[n++] = ' ';
+    s[n] = '\0';
+}
+
+void task_list(void) {
+    terminal_write("  PID  STATE    TICKS   RING  CR3         NAME\n");
+
+    for (u32 i = 0; i < task_count; i++) {
+        tcb_t *t = &tasks[i];
+        if (t->state == TASK_DEAD) continue;
+
+        static const char *states[] = { "READY", "RUN", "BLOCKED", "DEAD" };
+        char line[96], num[24];
+
+        kstrcpy(line, "  ");
+        kutoa(t->id, num, 10);         kstrcat(line, num); pad_to(line, 7);
+        kstrcat(line, t->state <= TASK_DEAD ? states[t->state] : "?");
+                                                           pad_to(line, 16);
+        kutoa(t->total_ticks, num, 10); kstrcat(line, num); pad_to(line, 24);
+        kstrcat(line, t->is_user ? "3" : "0");              pad_to(line, 30);
+
+        if (t->cr3) { kutoa((u32)t->cr3, num, 16); kstrcat(line, num); }
+        else        { kstrcat(line, "-kernel-"); }
+                                                            pad_to(line, 42);
+        kstrcat(line, t->name);
+        kstrcat(line, "\n");
+
+        u32 col = (i == current_task)
+                ? VGA_ENTRY_COLOR(VGA_LIGHT_GREEN, VGA_BLACK)
+                : VGA_ENTRY_COLOR(VGA_WHITE, VGA_BLACK);
+        terminal_write_colored(line, col);
+    }
+
+    char foot[64], num[24];
+    kstrcpy(foot, "  ");
+    kutoa(task_count_active(), num, 10); kstrcat(foot, num);
+    kstrcat(foot, " runnable of ");
+    kutoa(task_count, num, 10);          kstrcat(foot, num);
+    kstrcat(foot, " task slots used\n");
+    terminal_write(foot);
+}
 
 task_t *task_get(u32 id) {
     for (u32 i = 0; i < task_count; i++)
@@ -313,4 +411,19 @@ u32 task_count_active(void) {
         if (tasks[i].state == TASK_READY || tasks[i].state == TASK_RUNNING)
             n++;
     return n;
+}
+
+u64 task_get_cr3(int tid) {
+    if (tid < 0 || (u32)tid >= task_count) return 0;
+    return tasks[tid].cr3;
+}
+
+bool task_has_exited(int tid) {
+    if (tid < 0 || (u32)tid >= task_count) return true;
+    return tasks[tid].state == TASK_DEAD;
+}
+
+void task_kill(int tid) {
+    if (tid < 0 || (u32)tid >= task_count) return;
+    tasks[tid].state = TASK_DEAD;
 }

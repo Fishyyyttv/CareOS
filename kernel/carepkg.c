@@ -36,6 +36,12 @@
 
 #include "kernel.h"
 
+/* Scratch buffer size for package parsing and database serialization. These
+ * were previously sized by CAREPKG_SCRATCH_MAX, the old inline per-file VFS limit.
+ * That constant is gone now that file data is heap-backed, so the historical
+ * 5 MiB is kept here rather than silently changing package size limits. */
+#define CAREPKG_SCRATCH_MAX (5u*1024u*1024u)
+
 /* ── Package registry ──────────────────────────────────────────────────────── */
 #define MAX_PACKAGES 64
 
@@ -102,14 +108,14 @@ static int pkg_install_node(fs_node_t *node) {
     /* Simple state machine: 0=pre-header, 1=header, 2=file-body */
     int state = 0;
     char cur_fname[64] = "";
-    char *file_content = (char*)kmalloc(FS_FILE_DATA_MAX);
+    char *file_content = (char*)kmalloc(CAREPKG_SCRATCH_MAX);
     if (!file_content) return -1;
     u32  fc_len = 0;
     fs_node_t *app_dir = NULL;
 
     /* Parse line by line */
     char line[256]; u32 li = 0;
-    const char *buf = node->data;
+    const char *buf = vfs_file_str(node);
     u32 len = node->size;
 
     int rc = 0;
@@ -197,7 +203,7 @@ static int pkg_install_node(fs_node_t *node) {
                     break;
                 } else {
                     /* Accumulate file content */
-                    if (fc_len + li + 2 < FS_FILE_DATA_MAX) {
+                    if (fc_len + li + 2 < CAREPKG_SCRATCH_MAX) {
                         if (fc_len > 0) file_content[fc_len++] = '\n';
                         kmemcpy(file_content + fc_len, line, kstrlen(line));
                         fc_len += kstrlen(line);
@@ -216,7 +222,7 @@ static int pkg_install_node(fs_node_t *node) {
     if (app_dir) {
         fs_node_t *mf = vfs_find(app_dir, "manifest.care");
         if (!mf) mf = vfs_mkfile(app_dir, "manifest.care");
-        if (mf) vfs_write(mf, node->data, node->size);
+        if (mf) vfs_write(mf, vfs_file_str(node), node->size);
     }
 
     /* Register */
@@ -347,20 +353,20 @@ static void carepkg_db_save(void) {
     if (!db) db = vfs_mkfile(pkg_dir, "installed.db");
     if (!db) return;
 
-    char *buf = (char*)kmalloc(FS_FILE_DATA_MAX);
+    char *buf = (char*)kmalloc(CAREPKG_SCRATCH_MAX);
     if (!buf) return;
     u32  pos = 0;
-    kstrncpy(buf, "# CareOS package database v1\n", FS_FILE_DATA_MAX - 1);
+    kstrncpy(buf, "# CareOS package database v1\n", CAREPKG_SCRATCH_MAX - 1);
     pos = (u32)kstrlen(buf);
 
-    for (u32 i = 0; i < pkg_count && pos < FS_FILE_DATA_MAX - 256; i++) {
+    for (u32 i = 0; i < pkg_count && pos < CAREPKG_SCRATCH_MAX - 256; i++) {
         if (!registry[i].installed) continue;
         care_pkg_t *e = &registry[i];
         /* Append: name|version|desc|author|exec|icon|category|perms|deps|path\n */
         const char *fields[] = { e->name, e->version, e->description, e->author,
                                   e->exec, e->icon, e->category, e->permissions,
                                   e->deps, e->install_path };
-        for (int f = 0; f < 10 && pos < FS_FILE_DATA_MAX - 64; f++) {
+        for (int f = 0; f < 10 && pos < CAREPKG_SCRATCH_MAX - 64; f++) {
             kstrncpy(buf + pos, fields[f], 127);
             pos += kstrlen(buf + pos);
             buf[pos++] = (f < 9) ? '|' : '\n';
@@ -375,7 +381,7 @@ static void carepkg_db_load(void) {
     fs_node_t *db = vfs_resolve_path(DB_PATH);
     if (!db || db->type != FS_FILE || db->size == 0) return;
 
-    const char *p = db->data;
+    const char *p = vfs_file_str(db);
     u32 len = db->size;
     char line[512];
     u32 li = 0;

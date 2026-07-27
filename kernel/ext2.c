@@ -100,29 +100,136 @@ int ext2_read_inode(u32 ino, ext2_inode_t *out) {
     return r;
 }
 
-static u32 resolve_block(const ext2_inode_t *ino, u32 logical) {
-    u32 ptrs = block_size / 4;
-    if (logical < 12) return ino->i_block[logical];
-    logical -= 12;
-    if (logical < ptrs) {
-        if (ino->i_block[12] == 0) return 0;
-        u32 *ind = (u32*)kmalloc(block_size);
-        if (!ind) return 0;
-        if (read_block(ino->i_block[12], ind) != 0) { kfree(ind); return 0; }
-        u32 r = ind[logical]; kfree(ind); return r;
+/* Forward decls: the block map below is shared by the read and write paths,
+ * so it needs the allocator that is defined further down with the rest of
+ * the write helpers. */
+static u32 alloc_block(void);
+
+/* Allocate a block and zero it on disk, so a freshly linked data block reads
+ * back as zeros and a freshly linked indirect block contains only null
+ * pointers. Returns 0 on failure. */
+static u32 alloc_zeroed_block(void) {
+    u8 *zero = (u8*)kmalloc(block_size);
+    if (!zero) return 0;
+    u32 b = alloc_block();
+    if (b == 0) { kfree(zero); return 0; }
+    kmemset(zero, 0, block_size);
+    int r = write_block(b, zero);
+    kfree(zero);
+    return r == 0 ? b : 0;
+}
+
+/* Read entry `index` out of indirect block `ind_block`. When `alloc` is set
+ * and the slot is empty, allocate a block, link it in and write the indirect
+ * block back. *allocated reports whether a new block was consumed so the
+ * caller can keep i_blocks accurate. */
+static int ind_entry(u32 ind_block, u32 index, bool alloc,
+                     u32 *out, bool *allocated) {
+    u32 *tbl = (u32*)kmalloc(block_size);
+    if (!tbl) return -1;
+    if (read_block(ind_block, tbl) != 0) { kfree(tbl); return -1; }
+
+    u32 v = tbl[index];
+    if (v == 0 && alloc) {
+        v = alloc_zeroed_block();
+        if (v == 0) { kfree(tbl); return -1; }
+        tbl[index] = v;
+        if (write_block(ind_block, tbl) != 0) { kfree(tbl); return -1; }
+        if (allocated) *allocated = true;
     }
-    logical -= ptrs;
-    if (logical < ptrs * ptrs) {
-        if (ino->i_block[13] == 0) return 0;
-        u32 *dind = (u32*)kmalloc(block_size);
-        if (!dind) return 0;
-        u32 *ind  = (u32*)kmalloc(block_size);
-        if (!ind) { kfree(dind); return 0; }
-        if (read_block(ino->i_block[13], dind) != 0) { kfree(dind); kfree(ind); return 0; }
-        if (read_block(dind[logical / ptrs], ind) != 0) { kfree(dind); kfree(ind); return 0; }
-        u32 r = ind[logical % ptrs]; kfree(dind); kfree(ind); return r;
-    }
+    kfree(tbl);
+    *out = v;
     return 0;
+}
+
+/*
+ * Map a file-logical block number onto its physical block, walking the
+ * direct, single-, double- and triple-indirect chains.
+ *
+ * alloc == false  read path: a missing block yields *out_phys == 0, i.e. a
+ *                 sparse hole. Never mutates *ino.
+ * alloc == true   write path: missing data blocks *and* the indirect blocks
+ *                 needed to reach them are allocated and linked in. i_blocks
+ *                 is updated for every block consumed (indirect blocks
+ *                 included, as ext2 requires) and *dirty is set so the caller
+ *                 knows the inode must be written back.
+ *
+ * Returns 0 on success, negative on I/O failure, allocation failure, or a
+ * logical block beyond the triple-indirect limit.
+ */
+static int map_block(ext2_inode_t *ino, u32 logical, bool alloc,
+                     u32 *out_phys, bool *dirty) {
+    const u32 ptrs = block_size / 4;
+    *out_phys = 0;
+
+    /* [0,12) direct */
+    if (logical < 12) {
+        u32 b = ino->i_block[logical];
+        if (b == 0 && alloc) {
+            b = alloc_zeroed_block();
+            if (b == 0) return -1;
+            ino->i_block[logical] = b;
+            ino->i_blocks += sectors_per_block;
+            if (dirty) *dirty = true;
+        }
+        *out_phys = b;
+        return 0;
+    }
+    logical -= 12;
+
+    /* Pick the indirection level and rebase `logical` within it. */
+    u32 slot, depth;
+    if (logical < ptrs) {
+        slot = 12; depth = 1;
+    } else if (logical - ptrs < ptrs * ptrs) {
+        slot = 13; depth = 2; logical -= ptrs;
+    } else {
+        logical -= ptrs + ptrs * ptrs;
+        if (logical >= ptrs * ptrs * ptrs) return -1;  /* past triple-indirect */
+        slot = 14; depth = 3;
+    }
+
+    /* Root of the chain lives in i_block[slot]. */
+    u32 cur = ino->i_block[slot];
+    if (cur == 0) {
+        if (!alloc) return 0;                  /* sparse: no chain at all */
+        cur = alloc_zeroed_block();
+        if (cur == 0) return -1;
+        ino->i_block[slot] = cur;
+        ino->i_blocks += sectors_per_block;
+        if (dirty) *dirty = true;
+    }
+
+    /* Descend one indirect block per level. At level L each entry covers
+     * ptrs^(L-1) logical blocks, so the index at that level is
+     * (logical / span) % ptrs; at the last level span == 1 and `cur` ends up
+     * holding the data block itself. */
+    for (u32 level = depth; level > 0; level--) {
+        u32 span = 1;
+        for (u32 k = 1; k < level; k++) span *= ptrs;
+        u32 index = (logical / span) % ptrs;
+
+        u32 next = 0;
+        bool allocated = false;
+        if (ind_entry(cur, index, alloc, &next, &allocated) != 0) return -1;
+        if (allocated) {
+            ino->i_blocks += sectors_per_block;
+            if (dirty) *dirty = true;
+        }
+        if (next == 0) return 0;               /* sparse hole (alloc == false) */
+        cur = next;
+    }
+
+    *out_phys = cur;
+    return 0;
+}
+
+/* Read-only block lookup. map_block with alloc == false never writes through
+ * the pointer, so dropping const here is safe. */
+static u32 resolve_block(const ext2_inode_t *ino, u32 logical) {
+    u32 phys = 0;
+    if (map_block((ext2_inode_t*)ino, logical, false, &phys, NULL) != 0) return 0;
+    return phys;
 }
 
 int ext2_read_data(const ext2_inode_t *ino, u32 off, void *buf, u32 len) {
@@ -276,6 +383,14 @@ static u32 alloc_block(void) {
             if (bitmap[byte] == 0xFF) continue;
             for (u32 bit = 0; bit < 8; bit++) {
                 if (!(bitmap[byte] & (1u << bit))) {
+                    /* The last group's bitmap is padded out to a whole block;
+                     * those trailing bits address blocks that do not exist.
+                     * Refuse to hand one out rather than scribbling past the
+                     * end of the filesystem. */
+                    u32 blk = sb.s_first_data_block + g * blocks_per_group
+                            + byte * 8 + bit;
+                    if (blk >= sb.s_blocks_count) { kfree(bitmap); return 0; }
+
                     bitmap[byte] |= (1u << bit);
                     write_block(bgd.bg_block_bitmap, bitmap);
                     bgd.bg_free_blocks_count--;
@@ -283,7 +398,7 @@ static u32 alloc_block(void) {
                     write_bgd(g, &bgd);
                     write_sectors(2, 2, &sb);
                     kfree(bitmap);
-                    return sb.s_first_data_block + g * blocks_per_group + byte * 8 + bit;
+                    return blk;
                 }
             }
         }
@@ -395,10 +510,14 @@ static int add_dirent(u32 parent_ino, u32 child_ino,
         logical++;
     }
 
-    /* Need a new block for the directory */
-    if (logical >= 12) { kfree(blk); return -3; } /* no indirect in write path */
-    u32 new_block = alloc_block();
-    if (new_block == 0) { kfree(blk); return -3; }
+    /* Need a new block for the directory. map_block allocates the block and
+     * any indirect blocks needed to reach it, and keeps i_blocks in step. */
+    u32 new_block = 0;
+    bool dirty = false;
+    if (map_block(&parent, logical, true, &new_block, &dirty) != 0 || new_block == 0) {
+        kfree(blk); return -3;
+    }
+
     kmemset(blk, 0, block_size);
     ext2_dirent_t *de = (ext2_dirent_t*)blk;
     de->de_inode     = child_ino;
@@ -406,11 +525,9 @@ static int add_dirent(u32 parent_ino, u32 child_ino,
     de->de_name_len  = (u8)name_len;
     de->de_file_type = file_type;
     kmemcpy(de->de_name, name, name_len);
-    write_block(new_block, blk);
+    if (write_block(new_block, blk) != 0) { kfree(blk); return -4; }
 
-    parent.i_block[logical] = new_block;
     parent.i_size += block_size;
-    parent.i_blocks += sectors_per_block;
     write_inode(parent_ino, &parent);
     kfree(blk);
     return 0;
@@ -427,22 +544,21 @@ int ext2_write_data(u32 ino_num, u32 off, const void *buf, u32 len) {
     if (!blk) return -3;
 
     u32 written = 0;
+    bool dirty = false;
     while (written < len) {
         u32 logical   = (off + written) / block_size;
         u32 blk_off   = (off + written) % block_size;
         u32 chunk     = block_size - blk_off;
         if (chunk > len - written) chunk = len - written;
 
-        u32 phys = resolve_block(&inode, logical);
-        if (phys == 0) {
-            /* Allocate a new block — direct blocks only */
-            if (logical >= 12) { kfree(blk); return -5; }
-            phys = alloc_block();
-            if (phys == 0) { kfree(blk); return -4; }
-            kmemset(blk, 0, block_size);
-            write_block(phys, blk);
-            inode.i_block[logical] = phys;
-            inode.i_blocks += sectors_per_block;
+        /* map_block allocates the data block plus any single-, double- or
+         * triple-indirect blocks needed to address it, so writes are no
+         * longer capped at the 12 direct blocks. Newly allocated blocks are
+         * already zeroed on disk, so the read-modify-write below is correct
+         * for a partial first/last block. */
+        u32 phys = 0;
+        if (map_block(&inode, logical, true, &phys, &dirty) != 0 || phys == 0) {
+            kfree(blk); return -4;
         }
 
         if (read_block(phys, blk) != 0) { kfree(blk); return -6; }

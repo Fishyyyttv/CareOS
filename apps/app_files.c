@@ -202,7 +202,7 @@ void app_files_draw(window_t *w){
                 else { kutoa(sel_node->size, sz, 10); kstrcat(sz, " B"); }
                 gfx_str_clipped(px + 8, pane_y + 36, pw - 16, sz, COL_DIM, COL_SURFACE2);
                 gfx_hline(px + 4, pane_y + 56, pw - 8, COL_BORDER);
-                if (sel_node->size > 0) {
+                if (sel_node->size > 0 && sel_node->data) {
                     gfx_set_clip(px + 4, pane_y + 62, pw - 8, pane_h - 68);
                     char preview[256];
                     u32 plen = sel_node->size < 255u ? sel_node->size : 255u;
@@ -426,7 +426,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
                         if(ew){
                             kstrncpy(ew->editor_path, ch->name, FS_PATH_MAX-1);
                             win_clear(ew);
-                            if(ch->size>0) win_append(ew,ch->data);
+                            if(ch->size>0) win_append(ew,vfs_file_str(ch));
                             ew->editor_modified=false;
                         }
                     }
@@ -453,7 +453,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
                     if(ew){
                         kstrncpy(ew->editor_path, child->name, FS_PATH_MAX-1);
                         win_clear(ew);
-                        if(child->size>0) win_append(ew,child->data);
+                        if(child->size>0) win_append(ew,vfs_file_str(child));
                         ew->editor_modified=false;
                     }
                 }

@@ -20,7 +20,20 @@ static void frame_clear(u32 frame) {
     phys_bitmap[frame / 32] &= ~(1u << (frame % 32));
 }
 
+/* phys_bitmap/phys_free_frames are shared, unlocked global state. This
+ * kernel has no spinlocks, and interrupts are enabled throughout most of
+ * kernel-mode execution (including while building a new process's page
+ * tables), so a timer tick can preempt mid-allocation and switch to a task
+ * whose own exit path calls pmm_free_frame concurrently -- corrupting the
+ * bitmap with no synchronization at all. Disable interrupts around the
+ * critical section (save/restore, not unconditional sti, so this nests
+ * safely if ever called from an already-cli'd context) rather than trying
+ * to protect every caller individually. */
 u32 pmm_alloc_frame(void) {
+    u64 flags;
+    __asm__ volatile ("pushfq; cli; pop %0" : "=r"(flags) :: "memory");
+
+    u32 result = (u32)~0u;
     for (u32 i = 0; i < BITMAP_WORDS; i++) {
         if (phys_bitmap[i] == 0xFFFFFFFF) continue;
         for (u32 b = 0; b < 32; b++) {
@@ -28,17 +41,32 @@ u32 pmm_alloc_frame(void) {
                 u32 frame = i * 32 + b;
                 frame_set(frame);
                 if (phys_free_frames) phys_free_frames--;
-                return frame;
+                result = frame;
+                goto done;
             }
         }
     }
-    return (u32)~0u;
+done:
+    __asm__ volatile ("push %0; popfq" : : "r"(flags) : "memory", "cc");
+    return result;
+}
+
+/* Declared in kernel.h but never defined until now; nothing referenced it, so
+ * it never surfaced as a link error. Useful for spotting frame leaks. */
+u32 pmm_free_count(void) {
+    return phys_free_frames;
 }
 
 void pmm_free_frame(u32 frame) {
     if (frame >= FRAME_COUNT) return;
+
+    u64 flags;
+    __asm__ volatile ("pushfq; cli; pop %0" : "=r"(flags) :: "memory");
+
     frame_clear(frame);
     phys_free_frames++;
+
+    __asm__ volatile ("push %0; popfq" : : "r"(flags) : "memory", "cc");
 }
 
 /* ── Paging structures ─────────────────────────────────────────────────────── */
@@ -167,7 +195,98 @@ void paging_switch_dir(pde_t *dir) {
     paging_load_cr3((u64)dir);
 }
 
+void paging_switch_kernel(void) {
+    paging_load_cr3((u64)kernel_pml4);
+}
+
 void paging_free_dir(pde_t *dir) {
-    /* For now just free the PML4 frame */
-    pmm_free_frame((u64)dir / PAGE_SIZE);
+    pml4e_t *pml4 = (pml4e_t *)dir;
+
+    if (pml4[USER_PML4_INDEX] & PDE_PRESENT) {
+        pdpte_t *pdpt = (pdpte_t *)(pml4[USER_PML4_INDEX] & ~0xFFFULL);
+        for (u32 pi = 0; pi < 512; pi++) {
+            if (!(pdpt[pi] & PDE_PRESENT)) continue;
+            pde_t *pd = (pde_t *)(pdpt[pi] & ~0xFFFULL);
+            for (u32 di = 0; di < 512; di++) {
+                if (!(pd[di] & PDE_PRESENT) || (pd[di] & PDE_4MB)) continue;
+                pte_t *pt = (pte_t *)(pd[di] & ~0xFFFULL);
+                for (u32 ti = 0; ti < 512; ti++) {
+                    if (pt[ti] & PTE_PRESENT) {
+                        pmm_free_frame((u32)((pt[ti] & ~0xFFFULL) / PAGE_SIZE));
+                    }
+                }
+                pmm_free_frame((u32)((u64)pt / PAGE_SIZE));
+            }
+            pmm_free_frame((u32)((u64)pd / PAGE_SIZE));
+        }
+        pmm_free_frame((u32)((u64)pdpt / PAGE_SIZE));
+    }
+
+    pmm_free_frame((u32)((u64)dir / PAGE_SIZE));
+}
+
+/* A paging entry grants user access only if Present and User/Supervisor are
+ * set, and write access only if R/W is also set -- at *every* level of the
+ * walk, which is exactly the rule the CPU applies. The kernel's identity map
+ * at PML4[0] deliberately omits PDE_USER, so this correctly refuses any
+ * kernel address even though that map is present in every process's PML4. */
+static bool entry_grants_user(u64 e, bool need_write) {
+    if (!(e & PDE_PRESENT)) return false;
+    if (!(e & PDE_USER))    return false;
+    if (need_write && !(e & PDE_RW)) return false;
+    return true;
+}
+
+bool paging_user_range_ok(pde_t *dir, u64 virt, u64 len, bool need_write) {
+    if (!dir) return false;
+    if (len == 0) return true;
+    if (virt + len < virt) return false;          /* wraps past the top */
+
+    pml4e_t *pml4 = (pml4e_t *)dir;
+    u64 first = virt & ~0xFFFULL;
+    u64 last  = (virt + len - 1) & ~0xFFFULL;
+
+    for (u64 p = first; ; p += PAGE_SIZE) {
+        u64 e = pml4[PML4_INDEX(p)];
+        if (!entry_grants_user(e, need_write)) return false;
+
+        pdpte_t *pdpt = (pdpte_t *)(e & ~0xFFFULL);
+        e = pdpt[PDPT_INDEX(p)];
+        if (!entry_grants_user(e, need_write)) return false;
+        if (!(e & PDE_4MB)) {                     /* not a 1GB page: descend */
+            pde_t *pd = (pde_t *)(e & ~0xFFFULL);
+            e = pd[PD_INDEX(p)];
+            if (!entry_grants_user(e, need_write)) return false;
+            if (!(e & PDE_4MB)) {                 /* not a 2MB page: descend */
+                pte_t *pt = (pte_t *)(e & ~0xFFFULL);
+                if (!entry_grants_user(pt[PT_INDEX(p)], need_write)) return false;
+            }
+        }
+
+        if (p == last) break;
+    }
+    return true;
+}
+
+u64 paging_translate(pde_t *dir, u64 virt) {
+    pml4e_t *pml4 = (pml4e_t *)dir;
+    u32 pml4_i = PML4_INDEX(virt);
+    u32 pdpt_i = PDPT_INDEX(virt);
+    u32 pd_i   = PD_INDEX(virt);
+    u32 pt_i   = PT_INDEX(virt);
+
+    if (!(pml4[pml4_i] & PDE_PRESENT)) return ~0ULL;
+    pdpte_t *pdpt = (pdpte_t *)(pml4[pml4_i] & ~0xFFFULL);
+
+    if (!(pdpt[pdpt_i] & PDE_PRESENT)) return ~0ULL;
+    pde_t *pd = (pde_t *)(pdpt[pdpt_i] & ~0xFFFULL);
+
+    if (!(pd[pd_i] & PDE_PRESENT)) return ~0ULL;
+    if (pd[pd_i] & PDE_4MB) {
+        return (pd[pd_i] & ~0x1FFFFFULL) | (virt & 0x1FFFFFULL);
+    }
+    pte_t *pt = (pte_t *)(pd[pd_i] & ~0xFFFULL);
+
+    if (!(pt[pt_i] & PTE_PRESENT)) return ~0ULL;
+    return (pt[pt_i] & ~0xFFFULL) | (virt & 0xFFFULL);
 }
