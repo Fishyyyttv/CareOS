@@ -78,11 +78,24 @@ void app_pkgmgr_draw(window_t *w){
         y += PKG_COL_H + 1;
 
         u32 cnt = carepkg_count();
+        i32 pkg_bottom = cr.y + PKG_CONTENT_Y + content_h;
+        {   /* clamp the scroll offset to the installed-package count */
+            i32 vis = (pkg_bottom - y) / PKG_ROW_H; if (vis < 1) vis = 1;
+            u32 tot = 0;
+            for (u32 i = 0; i < cnt; i++) {
+                char n2[32], v2[16], d2[128], c2[32]; bool in2;
+                if (carepkg_get_info(i, n2, v2, d2, c2, &in2) && in2) tot++;
+            }
+            u32 maxs = (tot > (u32)vis) ? tot - (u32)vis : 0;
+            if (w->scroll > maxs) w->scroll = maxs;
+        }
         u32 shown = 0;
-        for (u32 i = 0; i < cnt && y < cr.y + PKG_CONTENT_Y + content_h; i++) {
+        for (u32 i = 0; i < cnt; i++) {
             char name[32], ver[16], desc[128], cat[32]; bool installed;
             if (!carepkg_get_info(i, name, ver, desc, cat, &installed)) continue;
             if (!installed) continue;
+            if (shown < w->scroll) { shown++; continue; }   /* scrolled above */
+            if (y >= pkg_bottom) break;
             bool sel = (i == w->pkgmgr_sel);
             u32 bg = sel ? COL_SELECTION : (shown % 2 == 0 ? COL_SURFACE : COL_SURFACE2);
             gfx_rect(cr.x + 1, y, cr.w - 2, PKG_ROW_H, bg);
@@ -112,11 +125,25 @@ void app_pkgmgr_draw(window_t *w){
 
         fs_node_t *tmpd = vfs_find(vfs_root(), "tmp");
         if (tmpd) {
-            for (u32 i = 0; i < tmpd->child_count && y < cr.y + PKG_CONTENT_Y + content_h; i++) {
+            i32 pkg_bottom = cr.y + PKG_CONTENT_Y + content_h;
+            {   /* clamp the scroll offset to the number of .care files */
+                i32 vis = (pkg_bottom - y) / PKG_ROW_H; if (vis < 1) vis = 1;
+                u32 tot = 0;
+                for (u32 i = 0; i < tmpd->child_count; i++) {
+                    const char *e = kstrrchr(tmpd->children[i]->name, '.');
+                    if (e && (kstrcmp(e, ".care") == 0 || kstrcmp(e, ".cpk") == 0)) tot++;
+                }
+                u32 maxs = (tot > (u32)vis) ? tot - (u32)vis : 0;
+                if (w->scroll > maxs) w->scroll = maxs;
+            }
+            u32 shown = 0;
+            for (u32 i = 0; i < tmpd->child_count; i++) {
                 fs_node_t *f = tmpd->children[i];
                 const char *ext = kstrrchr(f->name, '.');
                 bool is_care = ext && (kstrcmp(ext, ".care") == 0 || kstrcmp(ext, ".cpk") == 0);
                 if (!is_care) continue;
+                if (shown < w->scroll) { shown++; continue; }
+                if (y >= pkg_bottom) break;
                 bool sel = ((u32)i == w->pkgmgr_sel);
                 u32 bg = sel ? COL_SELECTION : COL_SURFACE2;
                 gfx_rect(cr.x + 4, y, cr.w - 8, PKG_ROW_H, bg);
@@ -132,6 +159,7 @@ void app_pkgmgr_draw(window_t *w){
                 gfx_str_centered(ib_x, y + 8, 66, "Install",
                                  sel ? COL_WHITE : COL_PRIMARY, ib_bg);
                 y += PKG_ROW_H;
+                shown++;
             }
         }
         gfx_str(cr.x + 12, cr.y + PKG_CONTENT_Y + content_h - 16,
@@ -252,7 +280,7 @@ void app_pkgmgr_click(window_t *w, i32 x, i32 y){
     if (y >= cr.y + PKG_TAB_Y && y < cr.y + PKG_SEP_Y) {
         i32 tab_w = (cr.w - 8) / 4;
         int t = (x - cr.x - 4) / tab_w;
-        if (t >= 0 && t <= 3) { w->pkgmgr_tab = (u32)t; w->pkgmgr_sel = 0; }
+        if (t >= 0 && t <= 3) { w->pkgmgr_tab = (u32)t; w->pkgmgr_sel = 0; w->scroll = 0; }
         return;
     }
 
@@ -261,7 +289,7 @@ void app_pkgmgr_click(window_t *w, i32 x, i32 y){
     if (w->pkgmgr_tab == PKG_TAB_INSTALLED) {
         i32 list_y = cr.y + PKG_CONTENT_Y + PKG_COL_H + 1;
         if (y < list_y) return;
-        u32 row = (u32)(y - list_y) / PKG_ROW_H;
+        u32 row = (u32)(y - list_y) / PKG_ROW_H + w->scroll;
         w->pkgmgr_sel = row;
         if (x >= cr.x + cr.w - 74) {
             u32 shown = 0;
@@ -282,7 +310,7 @@ void app_pkgmgr_click(window_t *w, i32 x, i32 y){
     } else if (w->pkgmgr_tab == PKG_TAB_INSTALL) {
         i32 list_y = cr.y + PKG_CONTENT_Y + 24;
         if (y < list_y) return;
-        u32 row = (u32)(y - list_y) / PKG_ROW_H;
+        u32 row = (u32)(y - list_y) / PKG_ROW_H + w->scroll;
         w->pkgmgr_sel = row;
         if (x >= cr.x + cr.w - 72) {
             fs_node_t *tmpd = vfs_find(vfs_root(), "tmp");

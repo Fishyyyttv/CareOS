@@ -1,158 +1,165 @@
 /* net/x25519.c -- Curve25519 Diffie-Hellman (RFC 7748)
- * Compact Montgomery ladder over GF(2^255-19).
- * Field elements are 32-byte little-endian. */
+ * Montgomery ladder over GF(2^255-19).
+ * Field elements are 5 x 51-bit limbs (radix 2^51), little-endian.
+ * Field arithmetic follows the public-domain curve25519-donna-c64 design,
+ * which keeps all products within a 128-bit accumulator. */
 #include "kernel.h"
 
-typedef u64 fe[4];   /* 4 x 64-bit limbs, each < 2^63 */
+typedef u64 fe[5];
+#define MASK51 0x7ffffffffffffULL
 
-#define P0 0xFFFFFFFFFFFFFFEDULL
-#define P1 0xFFFFFFFFFFFFFFFFULL
-#define P2 0xFFFFFFFFFFFFFFFFULL
-#define P3 0x7FFFFFFFFFFFFFFFULL
+static u64 load64(const u8 *b) {
+    u64 r=0;
+    for(int i=0;i<8;i++) r |= ((u64)b[i])<<(i*8);
+    return r;
+}
 
-static void fe_0(fe r)        { r[0]=r[1]=r[2]=r[3]=0; }
-static void fe_1(fe r)        { r[0]=1;r[1]=r[2]=r[3]=0; }
-static void fe_cp(fe d,const fe s){ d[0]=s[0];d[1]=s[1];d[2]=s[2];d[3]=s[3]; }
+static void fe_0(fe r){ r[0]=r[1]=r[2]=r[3]=r[4]=0; }
+static void fe_1(fe r){ r[0]=1; r[1]=r[2]=r[3]=r[4]=0; }
+static void fe_cp(fe d,const fe s){ for(int i=0;i<5;i++) d[i]=s[i]; }
 
-static void fe_cswap(fe a, fe b, int sw) {
+static void fe_cswap(fe a, fe b, u64 sw) {
     u64 m = (u64)(-(i64)sw);
-    for(int i=0;i<4;i++){ u64 t=(a[i]^b[i])&m; a[i]^=t; b[i]^=t; }
+    for(int i=0;i<5;i++){ u64 t=(a[i]^b[i])&m; a[i]^=t; b[i]^=t; }
 }
 
-/* reduce mod 2^255-19 */
-static void fe_reduce(fe r) {
-    /* If r >= p, subtract p. At most one subtraction needed. */
-    u64 borrow=0;
-    u64 t[4];
-    t[0]=r[0]-P0-(borrow=r[0]<P0?1:0);
-    /* use 128-bit style borrow */
-    /* simpler: check top bit */
-    u64 mask = (u64)(-(i64)((r[3]>>63)));
-    (void)mask;
-    /* simple reduction: subtract 19 if top bit set or > p */
-    /* for correctness at this scale, rely on field ops staying small */
-    (void)t; (void)borrow;
+/* out = a + b (limbs grow a bit; reduced by the next mul/square) */
+static void fe_add(fe out, const fe a, const fe b) {
+    for(int i=0;i<5;i++) out[i]=a[i]+b[i];
 }
 
-/* addition mod 2^255-19 */
-static void fe_add(fe r, const fe a, const fe b) {
-    u64 c=0;
-    for(int i=0;i<4;i++){ __uint128_t s=(__uint128_t)a[i]+b[i]+c; r[i]=(u64)s; c=(u64)(s>>64); }
-    /* reduce if carry or >= p */
-    if(c || r[3]>>63){
-        u64 carry=19;
-        for(int i=0;i<4;i++){
-            __uint128_t s=(__uint128_t)r[i]+carry;
-            r[i]=(u64)s; carry=(u64)(s>>64);
-        }
-        r[3]&=0x7FFFFFFFFFFFFFFFULL;
-    }
+/* out = a - b (mod p); add 2p to stay non-negative */
+static void fe_sub(fe out, const fe a, const fe b) {
+    out[0] = a[0] + 0xfffffffffffdaULL - b[0]; /* 2*(2^51-19) */
+    out[1] = a[1] + 0xffffffffffffeULL - b[1]; /* 2*(2^51-1)  */
+    out[2] = a[2] + 0xffffffffffffeULL - b[2];
+    out[3] = a[3] + 0xffffffffffffeULL - b[3];
+    out[4] = a[4] + 0xffffffffffffeULL - b[4];
 }
 
-static void fe_sub(fe r, const fe a, const fe b) {
-    i64 borrow=0;
-    u64 t[4];
-    for(int i=0;i<4;i++){
-        __int128 d=(__int128)a[i]-b[i]+borrow;
-        t[i]=(u64)d; borrow=(i64)(d>>64);
-    }
-    if(borrow){
-        /* add p = 2^255-19 */
-        u64 carry=19;
-        for(int i=0;i<4;i++){
-            __uint128_t s=(__uint128_t)t[i]+carry+(i==3?0x8000000000000000ULL:0);
-            /* just add 2^256 - 19 effectively */
-            (void)s;
-        }
-        /* simpler: add p back */
-        __int128 d2=(__int128)t[0]+P0; t[0]=(u64)d2; u64 c=(u64)((__uint128_t)d2>>64);
-        d2=(__int128)t[1]+P1+c;        t[1]=(u64)d2; c=(u64)((__uint128_t)d2>>64);
-        d2=(__int128)t[2]+P2+c;        t[2]=(u64)d2; c=(u64)((__uint128_t)d2>>64);
-        d2=(__int128)t[3]+P3+c;        t[3]=(u64)d2;
-    }
-    r[0]=t[0];r[1]=t[1];r[2]=t[2];r[3]=t[3];
+static void fe_mul(fe out, const fe in, const fe in2) {
+    __uint128_t t[5];
+    u64 r0=in[0],r1=in[1],r2=in[2],r3=in[3],r4=in[4];
+    u64 s0=in2[0],s1=in2[1],s2=in2[2],s3=in2[3],s4=in2[4];
+    u64 c;
+
+    t[0] = (__uint128_t)r0*s0;
+    t[1] = (__uint128_t)r0*s1 + (__uint128_t)r1*s0;
+    t[2] = (__uint128_t)r0*s2 + (__uint128_t)r2*s0 + (__uint128_t)r1*s1;
+    t[3] = (__uint128_t)r0*s3 + (__uint128_t)r3*s0 + (__uint128_t)r1*s2 + (__uint128_t)r2*s1;
+    t[4] = (__uint128_t)r0*s4 + (__uint128_t)r4*s0 + (__uint128_t)r3*s1 + (__uint128_t)r1*s3 + (__uint128_t)r2*s2;
+
+    r4*=19; r1*=19; r2*=19; r3*=19;
+
+    t[0] += (__uint128_t)r4*s1 + (__uint128_t)r1*s4 + (__uint128_t)r2*s3 + (__uint128_t)r3*s2;
+    t[1] += (__uint128_t)r4*s2 + (__uint128_t)r2*s4 + (__uint128_t)r3*s3;
+    t[2] += (__uint128_t)r4*s3 + (__uint128_t)r3*s4;
+    t[3] += (__uint128_t)r4*s4;
+
+                 r0=(u64)t[0]&MASK51; c=(u64)(t[0]>>51);
+    t[1]+=c;     r1=(u64)t[1]&MASK51; c=(u64)(t[1]>>51);
+    t[2]+=c;     r2=(u64)t[2]&MASK51; c=(u64)(t[2]>>51);
+    t[3]+=c;     r3=(u64)t[3]&MASK51; c=(u64)(t[3]>>51);
+    t[4]+=c;     r4=(u64)t[4]&MASK51; c=(u64)(t[4]>>51);
+    r0 += c*19;  c=r0>>51; r0&=MASK51;
+    r1 += c;     c=r1>>51; r1&=MASK51;
+    r2 += c;
+
+    out[0]=r0; out[1]=r1; out[2]=r2; out[3]=r3; out[4]=r4;
 }
 
-static void fe_mul(fe r, const fe a, const fe b) {
-    __uint128_t acc[4]={0,0,0,0};
-    /* schoolbook 4x4 with reduction */
-    for(int i=0;i<4;i++){
-        for(int j=0;j<4;j++){
-            int k=i+j;
-            __uint128_t prod=(__uint128_t)a[i]*b[j];
-            if(k<4) acc[k]+=prod;
-            else {
-                /* limb k >= 4: multiply by 38 (2*19) since 2^256 = 38 mod p */
-                acc[k-4]+=prod*38;
-            }
-        }
-    }
-    /* propagate carries */
-    u64 c=0;
-    for(int i=0;i<4;i++){
-        acc[i]+=c;
-        r[i]=(u64)acc[i];
-        c=(u64)(acc[i]>>64);
-    }
-    /* final carry reduction */
-    if(c){
-        __uint128_t s=(__uint128_t)r[0]+c*38;
-        r[0]=(u64)s; c=(u64)(s>>64);
-        for(int i=1;i<4&&c;i++){
-            s=(__uint128_t)r[i]+c; r[i]=(u64)s; c=(u64)(s>>64);
-        }
-    }
-    r[3]&=0x7FFFFFFFFFFFFFFFULL;
+static void fe_sq(fe out, const fe in) {
+    __uint128_t t[5];
+    u64 r0=in[0],r1=in[1],r2=in[2],r3=in[3],r4=in[4];
+    u64 c;
+    u64 d0=r0*2, d1=r1*2, d2=r2*2*19, d419=r4*19, d4=d419*2;
+
+    t[0] = (__uint128_t)r0*r0 + (__uint128_t)d4*r1 + (__uint128_t)d2*r3;
+    t[1] = (__uint128_t)d0*r1 + (__uint128_t)d4*r2 + (__uint128_t)r3*(r3*19);
+    t[2] = (__uint128_t)d0*r2 + (__uint128_t)r1*r1 + (__uint128_t)d4*r3;
+    t[3] = (__uint128_t)d0*r3 + (__uint128_t)d1*r2 + (__uint128_t)r4*d419;
+    t[4] = (__uint128_t)d0*r4 + (__uint128_t)d1*r3 + (__uint128_t)r2*r2;
+
+                 r0=(u64)t[0]&MASK51; c=(u64)(t[0]>>51);
+    t[1]+=c;     r1=(u64)t[1]&MASK51; c=(u64)(t[1]>>51);
+    t[2]+=c;     r2=(u64)t[2]&MASK51; c=(u64)(t[2]>>51);
+    t[3]+=c;     r3=(u64)t[3]&MASK51; c=(u64)(t[3]>>51);
+    t[4]+=c;     r4=(u64)t[4]&MASK51; c=(u64)(t[4]>>51);
+    r0 += c*19;  c=r0>>51; r0&=MASK51;
+    r1 += c;     c=r1>>51; r1&=MASK51;
+    r2 += c;
+
+    out[0]=r0; out[1]=r1; out[2]=r2; out[3]=r3; out[4]=r4;
 }
 
-static void fe_sq(fe r, const fe a) { fe_mul(r,a,a); }
-
-static void fe_inv(fe r, const fe a) {
-    /* a^(p-2) = a^(2^255-21) via square-and-multiply */
-    fe t; fe_cp(t,a);
-    /* p-2 binary: 2^255-21, all ones except bits 1,4 */
-    /* use addition chain */
-    fe a2,a9,a11,a2_5,a2_10,a2_20,a2_40,a2_50,a2_100,t2;
-    fe_sq(a2,a);
-    fe_sq(t,a2); fe_sq(t,t); fe_mul(a9,t,a);     /* a^9 */
-    fe_mul(a11,a9,a2);                             /* a^11 */
-    fe_sq(t,a11); fe_mul(a2_5,t,a9);              /* a^(2^5-1) */
-    fe_sq(t,a2_5);
-    for(int i=0;i<4;i++) fe_sq(t,t);
-    fe_mul(a2_10,t,a2_5);
-    fe_sq(t,a2_10);
-    for(int i=0;i<9;i++) fe_sq(t,t);
-    fe_mul(a2_20,t,a2_10);
-    fe_sq(t,a2_20);
-    for(int i=0;i<19;i++) fe_sq(t,t);
-    fe_mul(t2,t,a2_20);
-    fe_sq(t,t2);
-    for(int i=0;i<9;i++) fe_sq(t,t);
-    fe_mul(a2_50,t,a2_10);
-    fe_sq(t,a2_50);
-    for(int i=0;i<49;i++) fe_sq(t,t);
-    fe_mul(a2_100,t,a2_50);
-    fe_sq(t,a2_100);
-    for(int i=0;i<99;i++) fe_sq(t,t);
-    fe_mul(t,t,a2_100);
-    fe_sq(t,t);
-    for(int i=0;i<49;i++) fe_sq(t,t);
-    fe_mul(t,t,a2_50);
-    fe_sq(t,t); fe_sq(t,t); fe_sq(t,t); fe_sq(t,t); fe_sq(t,t);
-    fe_mul(r,t,a11);
+static void fe_sq_times(fe out, const fe in, int n) {
+    fe t; fe_cp(t,in);
+    for(int i=0;i<n;i++) fe_sq(t,t);
+    fe_cp(out,t);
 }
 
-static void fe_load(fe r, const u8 *b) {
-    for(int i=0;i<4;i++){
-        r[i]=0;
-        for(int j=0;j<8;j++) r[i]|=((u64)b[i*8+j])<<(j*8);
-    }
-    r[3]&=0x7FFFFFFFFFFFFFFFULL;
+/* out = 1/z  (z^(p-2)) via the donna addition chain */
+static void fe_inv(fe out, const fe z) {
+    fe a,t0,b,c;
+    fe_sq_times(a,z,1);                 /* 2 */
+    fe_sq_times(t0,a,2);                /* 8 */
+    fe_mul(b,t0,z);                     /* 9 */
+    fe_mul(a,b,a);                      /* 11 */
+    fe_sq_times(t0,a,1);                /* 22 */
+    fe_mul(b,t0,b);                     /* 2^5 - 1 */
+    fe_sq_times(t0,b,5);                fe_mul(b,t0,b);   /* 2^10 - 1 */
+    fe_sq_times(t0,b,10);               fe_mul(c,t0,b);   /* 2^20 - 1 */
+    fe_sq_times(t0,c,20);               fe_mul(t0,t0,c);  /* 2^40 - 1 */
+    fe_sq_times(t0,t0,10);              fe_mul(b,t0,b);   /* 2^50 - 1 */
+    fe_sq_times(t0,b,50);               fe_mul(c,t0,b);   /* 2^100 - 1 */
+    fe_sq_times(t0,c,100);              fe_mul(t0,t0,c);  /* 2^200 - 1 */
+    fe_sq_times(t0,t0,50);              fe_mul(t0,t0,b);  /* 2^250 - 1 */
+    fe_sq_times(t0,t0,5);               fe_mul(out,t0,a); /* 2^255 - 21 */
 }
 
-static void fe_store(u8 *b, const fe a) {
-    for(int i=0;i<4;i++)
-        for(int j=0;j<8;j++) b[i*8+j]=(u8)(a[i]>>(j*8));
+static void fe_expand(fe out, const u8 *in) {
+    out[0] =  load64(in)       & MASK51;
+    out[1] = (load64(in+6)>>3) & MASK51;
+    out[2] = (load64(in+12)>>6)& MASK51;
+    out[3] = (load64(in+19)>>1)& MASK51;
+    out[4] = (load64(in+24)>>12)& MASK51;
+}
+
+static void fe_contract(u8 *out, const fe input) {
+    u64 t[5]; for(int i=0;i<5;i++) t[i]=input[i];
+
+    #define CARRY \
+        t[1]+=t[0]>>51; t[0]&=MASK51; \
+        t[2]+=t[1]>>51; t[1]&=MASK51; \
+        t[3]+=t[2]>>51; t[2]&=MASK51; \
+        t[4]+=t[3]>>51; t[3]&=MASK51; \
+        t[0]+=19*(t[4]>>51); t[4]&=MASK51;
+    CARRY; CARRY;
+
+    /* At this point 0 <= t < 2^255. Add 19 and carry to detect >= p. */
+    t[0]+=19; CARRY;
+
+    /* Subtract p by adding 2^255-19 and masking off 2^255. */
+    t[0]+=0x8000000000000ULL-19;
+    t[1]+=0x8000000000000ULL-1;
+    t[2]+=0x8000000000000ULL-1;
+    t[3]+=0x8000000000000ULL-1;
+    t[4]+=0x8000000000000ULL-1;
+    t[1]+=t[0]>>51; t[0]&=MASK51;
+    t[2]+=t[1]>>51; t[1]&=MASK51;
+    t[3]+=t[2]>>51; t[2]&=MASK51;
+    t[4]+=t[3]>>51; t[3]&=MASK51;
+    t[4]&=MASK51;
+    #undef CARRY
+
+    u64 w0 =  t[0]        | (t[1]<<51);
+    u64 w1 = (t[1]>>13)   | (t[2]<<38);
+    u64 w2 = (t[2]>>26)   | (t[3]<<25);
+    u64 w3 = (t[3]>>39)   | (t[4]<<12);
+    for(int i=0;i<8;i++) out[i]    =(u8)(w0>>(i*8));
+    for(int i=0;i<8;i++) out[8+i]  =(u8)(w1>>(i*8));
+    for(int i=0;i<8;i++) out[16+i] =(u8)(w2>>(i*8));
+    for(int i=0;i<8;i++) out[24+i] =(u8)(w3>>(i*8));
 }
 
 /* Montgomery ladder scalar multiplication */
@@ -160,38 +167,37 @@ void x25519(u8 *out, const u8 *scalar, const u8 *point) {
     u8 s[32]; kmemcpy(s,scalar,32);
     s[0]&=248; s[31]&=127; s[31]|=64;
 
-    fe x1,x2,x3,z2,z3,tmp0,tmp1;
-    fe_load(x1,point);
+    fe x1,x2,z2,x3,z3;
+    fe_expand(x1,point);
     fe_1(x2); fe_0(z2);
     fe_cp(x3,x1); fe_1(z3);
 
-    int swap=0;
+    u64 swap=0;
     for(int b=254;b>=0;b--){
-        int bit=(s[b/8]>>(b%8))&1;
+        u64 bit=(s[b/8]>>(b%8))&1;
         swap^=bit;
         fe_cswap(x2,x3,swap);
         fe_cswap(z2,z3,swap);
         swap=bit;
 
-        fe_sub(tmp0,x3,z3); fe_sub(tmp1,x2,z2);
-        fe_add(x2,x2,z2);   fe_add(z2,x3,z3);
-        fe_mul(z3,tmp0,x2); fe_mul(z2,z2,tmp1);
-        fe_sq(tmp0,tmp1);   fe_sq(tmp1,x2);
-        fe_add(x3,z3,z2);   fe_sub(z2,z3,z2);
-        fe_mul(x2,tmp1,tmp0);
-        fe_sub(tmp1,tmp1,tmp0);
-        fe_sq(z2,z2);
-        /* a24 = 121665 */
-        fe a24; fe_0(a24); a24[0]=121665;
-        fe_mul(z3,tmp1,a24);
-        fe_sq(x3,x3);
-        fe_add(tmp0,tmp0,z3);
-        fe_mul(z3,x1,z2);
-        fe_mul(z2,tmp1,tmp0);
+        /* RFC 7748 Montgomery ladder step */
+        fe A,AA,B,BB,E,C,D,DA,CB,t;
+        fe_add(A,x2,z2);   fe_sq(AA,A);
+        fe_sub(B,x2,z2);   fe_sq(BB,B);
+        fe_sub(E,AA,BB);
+        fe_add(C,x3,z3);
+        fe_sub(D,x3,z3);
+        fe_mul(DA,D,A);
+        fe_mul(CB,C,B);
+        fe_add(t,DA,CB);   fe_sq(x3,t);            /* x3 = (DA+CB)^2 */
+        fe_sub(t,DA,CB);   fe_sq(t,t); fe_mul(z3,x1,t); /* z3 = x1*(DA-CB)^2 */
+        fe_mul(x2,AA,BB);                          /* x2 = AA*BB */
+        { fe a24; fe_0(a24); a24[0]=121665;
+          fe_mul(t,a24,E); fe_add(t,AA,t); fe_mul(z2,E,t); } /* z2 = E*(AA+a24*E) */
     }
     fe_cswap(x2,x3,swap);
     fe_cswap(z2,z3,swap);
     fe_inv(z2,z2);
     fe_mul(x2,x2,z2);
-    fe_store(out,x2);
+    fe_contract(out,x2);
 }

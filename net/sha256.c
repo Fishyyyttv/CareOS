@@ -76,9 +76,11 @@ void hmac_sha256(const u8 *key, u32 klen, const u8 *msg, u32 mlen, u8 *out) {
     else kmemcpy(k, key, klen);
     for (int i=0;i<64;i++) { ipad[i]=k[i]^0x36; opad[i]=k[i]^0x5c; }
 
-    /* inner = SHA256(ipad || msg) — done in two-shot via manual padding */
-    /* use a temporary buffer approach */
-    u8 *tmp = (u8*)kmalloc(64 + mlen);
+    /* inner = SHA256(ipad || msg) — done in two-shot via manual padding.
+     * The buffer must also hold the outer block SHA256(opad || inner), which is
+     * 64 + 32 bytes, so size for the larger of the two (mlen may be < 32). */
+    u32 tmpsz = 64 + (mlen > 32 ? mlen : 32);
+    u8 *tmp = (u8*)kmalloc(tmpsz);
     if (!tmp) return;
     kmemcpy(tmp, ipad, 64);
     kmemcpy(tmp+64, msg, mlen);

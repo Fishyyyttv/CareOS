@@ -208,12 +208,26 @@ void paging_init(void) {
 }
 
 void paging_map_mmio(u32 phys_start, u32 size) {
-    u64 start = (u64)phys_start & ~0xFFFULL;
-    u64 end   = ((u64)phys_start + size + 4095) & ~0xFFFULL;
-    for (u64 v = start; v < end; v += PAGE_SIZE) {
-        paging_map_internal(kernel_pml4, v, v, PDE_PRESENT | PDE_RW | PDE_PCD);
+    /* Physical 0-4GB is ALREADY identity-mapped with 2MB huge pages (see
+     * paging_init), so device MMIO is reachable the moment paging is on. We must
+     * NOT walk down to 4KB PTEs here: the covering PD entry is a huge page
+     * (PDE_4MB), and paging_map_internal only tests PDE_PRESENT -- it would
+     * mistake the huge page's frame address for a page-table pointer and write
+     * PTE bytes straight into the device's MMIO registers. With the e1000 that
+     * scribbled its CTRL register and triple-faulted VirtualBox (BAR at
+     * 0xf0000000); QEMU (0xfeb80000) only survived because the stray write hit
+     * dead device space it ignores. All a device mapping actually needs is
+     * cache-disable, so set PCD on the huge page(s) that already cover it. */
+    pde_t *pds[4] = { kernel_pd1, kernel_pd2, kernel_pd3, kernel_pd4 };
+    u64 start = (u64)phys_start & ~0x1FFFFFULL;                 /* 2MB align down */
+    u64 end   = ((u64)phys_start + size + 0x1FFFFFULL) & ~0x1FFFFFULL;
+    for (u64 p = start; p < end && p < 0x100000000ULL; p += 0x200000ULL) {
+        u32 gb  = (u32)(p >> 30);          /* which 1GB PD: 0..3 */
+        u32 idx = (u32)((p >> 21) & 0x1FF);/* which 2MB entry within it */
+        pds[gb][idx] |= PDE_PCD;
+        __asm__ volatile ("invlpg (%0)" : : "r"(p) : "memory");
     }
-    serial_write("[paging] mmio mapped\n");
+    serial_write("[paging] mmio mapped (uncached huge page)\n");
 }
 
 pde_t *paging_create_dir(void) {

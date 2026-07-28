@@ -4,8 +4,8 @@
 /* ── Layout ──────────────────────────────────────────────────────── */
 #define BROW_BAR_H    48
 #define BROW_STAT_H   24
-#define BROW_CONT_MAX 16384
-#define BROW_RESP_SZ  32768
+#define BROW_CONT_MAX 65536      /* must match window_t.browser_content[] */
+#define BROW_RESP_SZ  131072     /* raw HTTP response incl. headers */
 #define BROW_LINK_MAX 64
 #define BROW_TAB_H    30
 #define BROW_FIND_H   28
@@ -90,6 +90,53 @@ static void extract_href(const char *attrs, char *href, u32 max) {
         }
         p++;
     }
+}
+
+/* Case-insensitive lookup of a named attribute's value within a tag's attribute
+ * string. Matches only at a token boundary so "type" won't match inside another
+ * attribute name. Returns true and fills `out` when found. */
+static bool extract_attr(const char *attrs, const char *key, char *out, u32 max) {
+    u32 klen = (u32)kstrlen(key);
+    const char *p = attrs;
+    while (*p) {
+        bool boundary = (p == attrs) || p[-1]==' ' || p[-1]=='\t' || p[-1]=='\n';
+        if (boundary) {
+            u32 i = 0;
+            while (i < klen && p[i]) {
+                char a=p[i], b=key[i];
+                if (a>='A'&&a<='Z') a+=32;
+                if (b>='A'&&b<='Z') b+=32;
+                if (a!=b) break;
+                i++;
+            }
+            if (i == klen && p[klen]=='=') {
+                const char *v = p + klen + 1;
+                char q = 0;
+                if (*v=='"'||*v=='\'') q=*v++;
+                u32 o = 0;
+                while (*v && o < max-1) {
+                    if (q && *v==q) break;
+                    if (!q && (*v==' '||*v=='>')) break;
+                    /* Decode the handful of entities that show up in visible
+                     * attribute values (e.g. value="Next Page &gt;"). */
+                    if (*v=='&') {
+                        if      (kstrncmp(v,"&gt;",4)==0)   { out[o++]='>'; v+=4; continue; }
+                        else if (kstrncmp(v,"&lt;",4)==0)   { out[o++]='<'; v+=4; continue; }
+                        else if (kstrncmp(v,"&amp;",5)==0)  { out[o++]='&'; v+=5; continue; }
+                        else if (kstrncmp(v,"&quot;",6)==0) { out[o++]='"'; v+=6; continue; }
+                        else if (kstrncmp(v,"&#39;",5)==0)  { out[o++]='\'';v+=5; continue; }
+                        else if (kstrncmp(v,"&nbsp;",6)==0) { out[o++]=' '; v+=6; continue; }
+                    }
+                    out[o++]=*v++;
+                }
+                out[o]='\0';
+                return true;
+            }
+        }
+        p++;
+    }
+    out[0]='\0';
+    return false;
 }
 
 static void extract_title(const char *html, char *title, u32 max) {
@@ -295,7 +342,12 @@ static i32 render_html(rctx_t *c, const char *html) {
                     c->col_idx=0; c->cy+=2; c->cx=c->lm;
                 }
                 else if (tag_eq(name,"td")||tag_eq(name,"th")) {
-                    if (c->col_idx>0) c->cx=c->lm+c->col_idx*c->table_col_w;
+                    /* Flow cells inline with a small gap rather than snapping to
+                     * fixed column x-positions. The old grid math
+                     * (lm + col_idx*table_col_w) pushed any table wider than 3
+                     * columns -- e.g. DuckDuckGo Lite's region selector -- off
+                     * the right margin, which is what scattered the layout. */
+                    if (c->col_idx>0 && c->cx>c->lm) { r_char(c,' '); r_char(c,' '); }
                     c->col_idx++;
                     if (tag_eq(name,"th")) c->bold=true;
                 }
@@ -314,25 +366,80 @@ static i32 render_html(rctx_t *c, const char *html) {
                     }
                 }
                 else if (tag_eq(name,"input")) {
-                    i32 iw2=100, ih2=FH+6;
+                    char itype[16]; extract_attr(attrs,"type",itype,sizeof(itype));
+                    for(char*t=itype;*t;t++) if(*t>='A'&&*t<='Z') *t+=32;
+                    if(itype[0]=='\0') kstrcpy(itype,"text");
+
+                    if (tag_eq(itype,"hidden")) {
+                        /* Invisible control: draw nothing (these were showing up
+                         * as a scatter of empty boxes on form-heavy pages). */
+                    }
+                    else if (tag_eq(itype,"submit")||tag_eq(itype,"button")||tag_eq(itype,"reset")) {
+                        char val[48]; if(!extract_attr(attrs,"value",val,sizeof(val))) kstrcpy(val,"Submit");
+                        i32 bw2=(i32)kstrlen(val)*FW+16; if(bw2<40) bw2=40;
+                        i32 bh2=FH+8;
+                        if(c->cx+bw2>c->rm) r_nl(c);
+                        if(c->cy>=c->ct&&c->cy+bh2<=c->cb){
+                            gfx_rect_rounded(c->cx,c->cy,bw2,bh2,4,COL_PRIMARY);
+                            gfx_str_clipped(c->cx+8,c->cy+4,bw2-12,val,COL_WHITE,COL_TRANSPARENT);
+                        }
+                        c->cx+=bw2+6;
+                    }
+                    else if (tag_eq(itype,"checkbox")||tag_eq(itype,"radio")) {
+                        bool is_radio = tag_eq(itype,"radio");
+                        bool checked  = bs_strstr(attrs,"checked") != 0;
+                        i32 sz=FH+2;
+                        if(c->cx+sz>c->rm) r_nl(c);
+                        if(c->cy>=c->ct&&c->cy+sz<=c->cb){
+                            gfx_rect_rounded_outline(c->cx,c->cy,sz,sz, is_radio?sz/2:3, COL_BORDER);
+                            if(checked) gfx_rect_rounded(c->cx+3,c->cy+3,sz-6,sz-6,2,COL_PRIMARY);
+                        }
+                        c->cx+=sz+4;
+                    }
+                    else { /* text / search / email / url / password / number ... */
+                        char val[48];
+                        if(!extract_attr(attrs,"value",val,sizeof(val)))
+                            extract_attr(attrs,"placeholder",val,sizeof(val));
+                        i32 iw2=150, ih2=FH+6;
+                        if(c->cx+iw2>c->rm) r_nl(c);
+                        if(c->cy>=c->ct&&c->cy+ih2<=c->cb){
+                            gfx_rect_rounded(c->cx,c->cy,iw2,ih2,4,COL_INPUT_BG);
+                            gfx_rect_rounded_outline(c->cx,c->cy,iw2,ih2,4,COL_BORDER);
+                            if(val[0]) gfx_str_clipped(c->cx+5,c->cy+3,iw2-10,val,COL_DIM,COL_TRANSPARENT);
+                        }
+                        c->cx+=iw2+6;
+                    }
+                }
+                else if (tag_eq(name,"button")) {
+                    /* Draw a pill; the button's inner label renders on top of it
+                     * as normal flow text, so don't hardcode a caption. */
+                    i32 bw2=60, bh2=FH+8;
+                    if(c->cx+bw2>c->rm) r_nl(c);
+                    if(c->cy>=c->ct&&c->cy+bh2<=c->cb)
+                        gfx_rect_rounded(c->cx,c->cy,bw2,bh2,4,COL_SURFACE2);
+                }
+                else if (tag_eq(name,"select")||tag_eq(name,"textarea")) {
+                    /* Collapse into one control. Without this, a <select>'s dozens
+                     * of <option> labels (e.g. DuckDuckGo Lite's country list) all
+                     * spilled out as plain text. Skip the inner content. */
+                    i32 iw2=150, ih2=FH+6;
                     if(c->cx+iw2>c->rm) r_nl(c);
                     if(c->cy>=c->ct&&c->cy+ih2<=c->cb){
                         gfx_rect_rounded(c->cx,c->cy,iw2,ih2,4,COL_INPUT_BG);
                         gfx_rect_rounded_outline(c->cx,c->cy,iw2,ih2,4,COL_BORDER);
+                        if(tag_eq(name,"select"))
+                            gfx_str(c->cx+iw2-13,c->cy+3,"v",COL_DIM,COL_TRANSPARENT);
                     }
-                    c->cx+=iw2+4;
-                }
-                else if (tag_eq(name,"button")) {
-                    i32 bw2=60, bh2=FH+8;
-                    if(c->cx+bw2>c->rm) r_nl(c);
-                    if(c->cy>=c->ct&&c->cy+bh2<=c->cb){
-                        gfx_rect_rounded(c->cx,c->cy,bw2,bh2,4,COL_PRIMARY);
-                        gfx_str(c->cx+6,c->cy+4,"Go",COL_WHITE,COL_TRANSPARENT);
-                    }
-                    c->cx+=bw2+4;
+                    c->cx+=iw2+6;
+                    c->skip=true;   /* hide <option>/<textarea> body */
                 }
             } else { /* closing */
                 if (tag_eq(name,"head")||tag_eq(name,"script")||tag_eq(name,"style"))
+                    { c->skip=false; continue; }
+                /* Must clear the select/textarea skip BEFORE the generic skip
+                 * guard below, or the guard would swallow this closing tag and
+                 * leave the rest of the page hidden. */
+                if (tag_eq(name,"select")||tag_eq(name,"textarea"))
                     { c->skip=false; continue; }
                 if (c->skip) continue;
 
@@ -429,6 +536,45 @@ static i32 render_html(rctx_t *c, const char *html) {
     return c->cy;
 }
 
+/* Resolve href against the page's base URL into an absolute http(s) URL.
+ * Handles absolute, protocol-relative (//host), absolute-path (/p),
+ * query-only (?q=), and simple relative paths -- enough for real links and the
+ * 30x Location headers DuckDuckGo's result redirects use. */
+static void bs_url_resolve(const char *base, const char *href, char *out, u32 max) {
+    if (!href || !*href) { kstrncpy(out, base, max - 1); out[max - 1] = '\0'; return; }
+    if (kstrncmp(href, "http://", 7) == 0 || kstrncmp(href, "https://", 8) == 0) {
+        kstrncpy(out, href, max - 1); out[max - 1] = '\0'; return;
+    }
+    const char *scheme = (kstrncmp(base, "https://", 8) == 0) ? "https" : "http";
+    const char *bh = base;
+    if (kstrncmp(base, "https://", 8) == 0) bh = base + 8;
+    else if (kstrncmp(base, "http://", 7) == 0) bh = base + 7;
+
+    char host[160]; u32 hl = 0;
+    while (bh[hl] && bh[hl] != '/' && hl < 159) { host[hl] = bh[hl]; hl++; }
+    host[hl] = '\0';
+    const char *bpath = bh + hl;
+    if (!*bpath) bpath = "/";
+
+    if (href[0] == '/' && href[1] == '/') {            /* protocol-relative */
+        ksprintf(out, "%s:%s", scheme, href);
+    } else if (href[0] == '/') {                        /* absolute path */
+        ksprintf(out, "%s://%s%s", scheme, host, href);
+    } else if (href[0] == '?') {                        /* query on current path */
+        char pnoq[256]; u32 pi = 0;
+        for (const char *q = bpath; *q && *q != '?' && pi < 255; q++) pnoq[pi++] = *q;
+        pnoq[pi] = '\0';
+        ksprintf(out, "%s://%s%s%s", scheme, host, pnoq, href);
+    } else {                                            /* relative to base dir */
+        char dir[256]; const char *last = bpath;
+        for (const char *q = bpath; *q; q++) if (*q == '/') last = q;
+        u32 dl = (u32)(last - bpath) + 1; if (dl > 255) dl = 255;
+        kmemcpy(dir, bpath, dl); dir[dl] = '\0';
+        ksprintf(out, "%s://%s%s%s", scheme, host, dir, href);
+    }
+    out[max - 1] = '\0';
+}
+
 /* ── Navigation ──────────────────────────────────────────────────── */
 static void app_browser_navigate(window_t *w, const char *url) {
     kstrncpy(w->browser_url, url, 255);
@@ -454,16 +600,40 @@ static void app_browser_navigate(window_t *w, const char *url) {
         ksprintf(g_status,"Connecting to %s (HTTPS)...", hbuf);
         int n = https_get(hbuf, hpath, g_resp, BROW_RESP_SZ-1);
         if(n<=0){
-            kstrcpy(w->browser_content,
-                "<h1>TLS Handshake Failed</h1>"
-                "<p>Could not establish a secure connection. "
-                "The server may not support TLS 1.3 or x25519.</p>");
-            kstrcpy(w->browser_title,"Error"); kstrcpy(g_status,"TLS failed");
+            extern char g_net_diag[];
+            ksprintf(w->browser_content,
+                "<h1>Connection Failed</h1>"
+                "<p>Could not load this page over HTTPS.</p>"
+                "<p>Stage: %s</p>",
+                g_net_diag[0] ? g_net_diag : "unknown");
+            kstrcpy(w->browser_title,"Error");
+            ksprintf(g_status,"Failed: %s", g_net_diag[0]?g_net_diag:"unknown");
             w->browser_loading=false; return;
         }
         g_resp[n]='\0';
         const char *body=bs_mfind(g_resp,(u32)n,"\r\n\r\n",4);
         if(body) body+=4; else body=g_resp;
+
+        /* Follow 30x redirects (DuckDuckGo result links 302 through /l/?uddg=). */
+        if (kstrncmp(g_resp,"HTTP/",5)==0 && g_redirect_depth<6) {
+            int code=0; const char *sp=g_resp+5;
+            while(*sp&&*sp!=' ')sp++; while(*sp==' ')sp++;
+            for(int i=0;i<3&&sp[i]>='0'&&sp[i]<='9';i++) code=code*10+(sp[i]-'0');
+            if(code==301||code==302||code==303||code==307||code==308){
+                const char *loc=bs_strstr(g_resp,"Location: ");
+                if(!loc) loc=bs_strstr(g_resp,"location: ");
+                if(loc){
+                    loc+=10; char rawloc[512]={0}; u32 ui=0;
+                    while(loc[ui]&&loc[ui]!='\r'&&loc[ui]!='\n'&&ui<511){ rawloc[ui]=loc[ui]; ui++; }
+                    rawloc[ui]='\0';
+                    char new_url[512]; bs_url_resolve(url,rawloc,new_url,sizeof(new_url));
+                    w->browser_loading=false;
+                    g_redirect_depth++; app_browser_navigate(w,new_url); g_redirect_depth--;
+                    return;
+                }
+            }
+        }
+
         extract_title(body,w->browser_title,127);
         if(!w->browser_title[0]) kstrncpy(w->browser_title,hbuf,127);
         u32 blen=(u32)(n-(int)(body-g_resp));
@@ -544,10 +714,10 @@ static void app_browser_navigate(window_t *w, const char *url) {
             if (!loc) loc = bs_strstr(g_resp, "location: ");
             if (loc) {
                 loc += 10;
-                char new_url[512]={0}; u32 ui=0;
-                while (loc[ui]&&loc[ui]!='\r'&&loc[ui]!='\n'&&ui<511)
-                    new_url[ui]=loc[ui++];
-                new_url[ui]='\0';
+                char rawloc[512]={0}; u32 ui=0;
+                while (loc[ui]&&loc[ui]!='\r'&&loc[ui]!='\n'&&ui<511) { rawloc[ui]=loc[ui]; ui++; }
+                rawloc[ui]='\0';
+                char new_url[512]; bs_url_resolve(url, rawloc, new_url, sizeof(new_url));
                 w->browser_loading = false;
                 g_redirect_depth++;
                 app_browser_navigate(w, new_url);
@@ -599,12 +769,13 @@ static void smart_navigate(window_t *w, const char *input) {
             if (*q==' ') has_space=true;
         }
         if (has_dot && !has_space) {
-            ksprintf(url, "http://%s", input);
+            ksprintf(url, "https://%s", input);
         } else {
             char enc[256];
             url_encode(input, enc, sizeof(enc));
-            /* Google still serves a plain HTTP search page; DuckDuckGo redirects to HTTPS. */
-            ksprintf(url, "http://www.google.com/search?q=%s", enc);
+            /* DuckDuckGo Lite: a JS-free, text-first results page built for
+             * exactly this kind of browser. Served over HTTPS. */
+            ksprintf(url, "https://lite.duckduckgo.com/lite/?q=%s", enc);
         }
     }
 
@@ -764,11 +935,11 @@ static void draw_home(window_t *w, rect_t cr) {
     cy += FH + 10;
 
     const char *labels[] = {
-        "Google Search", "example.com", "info.cern.ch", "httpforever.com"
+        "DuckDuckGo Search", "example.com (HTTPS test)", "Wikipedia: CareOS", "info.cern.ch (first website)"
     };
     const char *urls[] = {
-        "http://www.google.com/search?q=CareOS", "http://example.com",
-        "http://info.cern.ch", "http://httpforever.com"
+        "https://lite.duckduckgo.com/lite/?q=CareOS", "https://example.com",
+        "https://en.wikipedia.org/wiki/CareOS", "http://info.cern.ch"
     };
     for (int i = 0; i < 4; i++) {
         i32 rh = FH + 12;
@@ -1226,7 +1397,9 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
         for (u32 i = 0; i < g_nlinks; i++) {
             blink_t *l = &g_links[i];
             if (x>=l->x&&x<l->x+l->w&&y>=l->y&&y<l->y+l->h) {
-                smart_navigate(w, l->url);
+                /* Resolve relative / protocol-relative hrefs against this page. */
+                char abs[512]; bs_url_resolve(w->browser_url, l->url, abs, sizeof(abs));
+                app_browser_navigate(w, abs);
                 return;
             }
         }

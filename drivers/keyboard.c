@@ -12,6 +12,14 @@ static bool shift_down   = false;
 static bool ctrl_down    = false;
 static bool alt_down     = false;
 static bool caps_lock    = false;
+/* Super/Meta ("Windows") key. Arrives as the extended sequence 0xE0 0x5B (left)
+ * / 0x5C (right); the driver ignored 0xE0 entirely before, so these -- and the
+ * arrow keys -- were undecoded. A lone press-and-release with no other key in
+ * between latches a "tap", which the desktop reads to summon the launcher. */
+static bool super_down   = false;
+static bool super_used   = false;   /* another key was pressed during the hold */
+static bool e0_prefix    = false;   /* previous byte was the 0xE0 extend marker */
+static volatile bool super_tap_latch = false;
 
 /* US QWERTY scancode-to-ASCII (unshifted) */
 static const char sc_normal[128] = {
@@ -50,8 +58,28 @@ void kb_push_char(char c) {
 static void keyboard_irq(registers_t *r) {
     (void)r;
     u8 sc = inb(KB_DATA_PORT);
+
+    /* Extended-key marker: the real key code is in the next byte. */
+    if (sc == 0xE0) { e0_prefix = true; return; }
+
     bool released = (sc & 0x80) != 0;
     u8   key      = sc & 0x7F;
+
+    if (e0_prefix) {
+        e0_prefix = false;
+        if (key == 0x5B || key == 0x5C) {          /* left / right Super */
+            if (!released) { super_down = true; super_used = false; }
+            else { if (super_down && !super_used) super_tap_latch = true; super_down = false; }
+            return;
+        }
+        /* Any other extended key (arrows, etc.) counts as "used" so it cannot be
+         * mistaken for a bare Super tap, then is otherwise ignored here. */
+        if (super_down && !released) super_used = true;
+        return;
+    }
+
+    /* Any ordinary key pressed while Super is held cancels the tap-to-open. */
+    if (!released && super_down) super_used = true;
 
     /* Track modifiers */
     if (key == 0x2A || key == 0x36) { shift_down = !released; return; }
@@ -94,4 +122,12 @@ void keyboard_flush(void) { kb_head = kb_tail = 0; }
 bool keyboard_ctrl_held(void) { return ctrl_down; }
 bool keyboard_alt_held(void) { return alt_down; }
 bool keyboard_shift_held(void) { return shift_down; }
+bool keyboard_super_held(void) { return super_down; }
+
+/* One-shot: true once after a lone Super tap, then clears. */
+bool keyboard_super_tapped(void) {
+    bool v = super_tap_latch;
+    super_tap_latch = false;
+    return v;
+}
 

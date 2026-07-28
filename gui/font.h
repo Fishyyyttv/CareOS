@@ -19,11 +19,15 @@ typedef struct {
 
 typedef struct {
     u8             px;
-    u8             advance;
+    u8             advance;    /* nominal cell width (monospace, or a fallback) */
     u8             line_h;
     u8             baseline;
     const glyph_t *glyphs;
     const u8      *coverage;
+    /* Per-glyph horizontal advance for proportional faces, indexed the same as
+     * glyphs[] (char - FONT_FIRST_CH). NULL for monospace faces, in which case
+     * every glyph uses `advance` and rendering is byte-for-byte unchanged. */
+    const u8      *advances;
 } font_face_t;
 
 typedef struct {

@@ -37,6 +37,7 @@ class Face:
     baseline: int
     glyphs: List[Glyph] = field(default_factory=list)
     coverage: bytearray = field(default_factory=bytearray)
+    advances: List[int] = field(default_factory=list)   # per-glyph, proportional
 
 
 def build_face(ttf_path: str, px: int) -> Face:
@@ -50,13 +51,13 @@ def build_face(ttf_path: str, px: int) -> Face:
 
     glyphs: List[Glyph] = []
     coverage = bytearray()
-    advances = set()
+    adv_list: List[int] = []
 
     for code in range(FIRST_CH, LAST_CH + 1):
         face.load_char(chr(code), freetype.FT_LOAD_RENDER)
         slot = face.glyph
         bmp = slot.bitmap
-        advances.add(slot.advance.x >> 6)
+        adv_list.append(max(0, min(255, slot.advance.x >> 6)))
 
         w, h, pitch = bmp.width, bmp.rows, bmp.pitch
         offset = len(coverage)
@@ -67,11 +68,19 @@ def build_face(ttf_path: str, px: int) -> Face:
 
         glyphs.append(Glyph(w, h, slot.bitmap_left, slot.bitmap_top, offset))
 
-    if len(advances) != 1:
-        sys.exit(f"error: {ttf_path} is not monospace at {px}px; advances={sorted(advances)}")
+    # Both monospace and proportional faces are supported. The nominal cell
+    # width (used where a single number is wanted, e.g. GFX_FONT_W) is the space
+    # advance; the per-glyph list is emitted only when the face is proportional.
+    if len(set(adv_list)) != 1:
+        print(f"note: {ttf_path} at {px}px is proportional "
+              f"(advances {min(adv_list)}..{max(adv_list)})")
+    nominal = adv_list[ord(' ') - FIRST_CH]
+    if nominal <= 0:
+        nominal = max(adv_list)
 
-    return Face(px=px, advance=advances.pop(), line_h=line_h,
-                baseline=baseline, glyphs=glyphs, coverage=coverage)
+    return Face(px=px, advance=nominal, line_h=line_h,
+                baseline=baseline, glyphs=glyphs, coverage=coverage,
+                advances=adv_list)
 
 
 def _fits_u8(name, value):
@@ -123,14 +132,25 @@ def emit_c(name: str, symbol: str, faces: List[Face], out_path: str, src_note: s
             a(f"    {{ {g.w},{g.h},{g.bearing_x},{g.bearing_y},{g.offset} }},")
         a("};")
         a("")
+        # Proportional faces carry a per-glyph advance table; monospace faces
+        # omit it (the face's single `advance` covers every glyph) so their
+        # output stays byte-for-byte identical to before.
+        if len(set(f.advances)) > 1:
+            for v in f.advances:
+                _fits_u8("advance", v)
+            a(f"static const u8 {symbol}_adv_{f.px}[{GLYPH_COUNT}] = {{")
+            a("    " + ",".join(str(v) for v in f.advances) + ",")
+            a("};")
+            a("")
 
     a(f"const font_family_t font_{symbol} = {{")
     a(f'    .name = "{name}",')
     a("    .faces = {")
     for f in faces:
+        adv = f", .advances={symbol}_adv_{f.px}" if len(set(f.advances)) > 1 else ""
         a(f"        {{ .px={f.px}, .advance={f.advance}, .line_h={f.line_h}, "
           f".baseline={f.baseline}, .glyphs={symbol}_glyphs_{f.px}, "
-          f".coverage={symbol}_cov_{f.px} }},")
+          f".coverage={symbol}_cov_{f.px}{adv} }},")
     a("    },")
     a("};")
     a("")

@@ -54,7 +54,7 @@ void aes128_encrypt(const aes128_ctx_t *ctx, const u8 *in, u8 *out) {
         /* ShiftRows */
         u8 t;
         t=s[1];s[1]=s[5];s[5]=s[9];s[9]=s[13];s[13]=t;
-        t=s[2];s[2]=s[10];u8 t2=s[6];s[6]=s[14];s[14]=t;s[10]=t2;
+        t=s[2];s[2]=s[10];s[10]=t; t=s[6];s[6]=s[14];s[14]=t;   /* row2: swap halves */
         t=s[15];s[15]=s[11];s[11]=s[7];s[7]=s[3];s[3]=t;
         /* MixColumns (skip on last round) */
         if(r<10){

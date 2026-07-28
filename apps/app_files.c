@@ -282,6 +282,23 @@ void app_files_draw(window_t *w){
 
     i32 list_bottom = cr.y+cr.h - (w->tab!=FM_MODE_BROWSE ? 24 : 0) - FM_STA;
 
+    /* w->scroll is the first visible row; clamp it to the content so the wheel
+     * can page through a long folder but never scrolls past the last screenful. */
+    {
+        u32 total = w->fm_dir ? w->fm_dir->child_count : 0;
+        if (s_grid_view) {
+            i32 cwg = 76, chg = 76, colsg = (list_rw - 8) / cwg; if (colsg < 1) colsg = 1;
+            i32 visr = (list_bottom - (list_y + 6)) / chg; if (visr < 1) visr = 1;
+            u32 totr = (total + (u32)colsg - 1) / (u32)colsg;
+            u32 maxs = (totr > (u32)visr) ? totr - (u32)visr : 0;
+            if (w->scroll > maxs) w->scroll = maxs;
+        } else {
+            i32 visr = (list_bottom - list_y) / FM_ROW; if (visr < 1) visr = 1;
+            u32 maxs = (total > (u32)visr) ? total - (u32)visr : 0;
+            if (w->scroll > maxs) w->scroll = maxs;
+        }
+    }
+
     if (s_grid_view) {
         /* Grid / Gallery View */
         i32 cw = 76;
@@ -292,8 +309,9 @@ void app_files_draw(window_t *w){
         for (u32 i = 0; i < w->fm_dir->child_count; i++) {
             i32 col = (i32)i % cols;
             i32 row = (i32)i / cols;
+            if ((u32)row < w->scroll) continue;                 /* scrolled above */
             i32 gx = tx + 6 + col * cw;
-            i32 gy = list_y + 6 + row * ch;
+            i32 gy = list_y + 6 + (row - (i32)w->scroll) * ch;
             if (gy + ch > list_bottom) break;
 
             fs_node_t *child = w->fm_dir->children[i];
@@ -334,7 +352,7 @@ void app_files_draw(window_t *w){
     } else {
         /* Standard List View */
         i32 fy = list_y;
-        for(u32 i=0;i<w->fm_dir->child_count && fy<list_bottom; i++){
+        for(u32 i=w->scroll;i<w->fm_dir->child_count && fy<list_bottom; i++){
             fs_node_t *child = w->fm_dir->children[i];
             bool sel = (i == w->fm_sel);
             bool is_hover = (s_mouse_x >= tx + 1 && s_mouse_x < tx + list_rw - 1 &&
@@ -543,11 +561,11 @@ void app_files_key(window_t *w, char c){
     case '\n': /* Enter -- navigate into dir */
         if(cnt>0 && w->fm_sel<cnt){
             fs_node_t *ch=w->fm_dir->children[w->fm_sel];
-            if(ch->type==FS_DIR){ w->fm_dir=ch; w->fm_sel=0; }
+            if(ch->type==FS_DIR){ w->fm_dir=ch; w->fm_sel=0; w->scroll=0; }
         }
         break;
     case '\b': /* Backspace -- go up */
-        if(w->fm_dir->parent){ w->fm_dir=w->fm_dir->parent; w->fm_sel=0; }
+        if(w->fm_dir->parent){ w->fm_dir=w->fm_dir->parent; w->fm_sel=0; w->scroll=0; }
         break;
     case '\x7F': /* Delete */
     case 'd':
@@ -632,7 +650,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
             const char *p = FM_PLACES[idx];
             if(kstrcmp(p,"~")==0) p = user_current_uid()==0?"/root":"/home/user";
             fs_node_t *d = vfs_resolve_path(p);
-            if(d){ w->fm_dir=d; w->fm_sel=0; }
+            if(d){ w->fm_dir=d; w->fm_sel=0; w->scroll=0; }
         }
         return;
     }
@@ -695,7 +713,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
                 fs_node_t *d = vfs_resolve_path(s_breadcrumbs[b].path);
                 if(d){
                     w->fm_dir = d;
-                    w->fm_sel = 0;
+                    w->fm_sel = 0; w->scroll = 0;
                     return;
                 }
             }
@@ -721,7 +739,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
             i32 rel_y = y - (list_top + 6);
             if (rel_x >= 0 && rel_y >= 0) {
                 i32 col = rel_x / cw;
-                i32 row = rel_y / ch;
+                i32 row = rel_y / ch + (i32)w->scroll;
                 if (col < cols) {
                     u32 idx = (u32)(row * cols + col);
                     if (idx < w->fm_dir->child_count) {
@@ -730,7 +748,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
                 }
             }
         } else {
-            u32 row = (u32)(y - list_top) / FM_ROW;
+            u32 row = (u32)(y - list_top) / FM_ROW + w->scroll;
             if (row < w->fm_dir->child_count) {
                 target_idx = row;
             }
@@ -742,7 +760,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
                 fs_node_t *child = w->fm_dir->children[target_idx];
                 if (child->type == FS_DIR) {
                     w->fm_dir = child;
-                    w->fm_sel = 0;
+                    w->fm_sel = 0; w->scroll = 0;
                 } else {
                     /* Open text file in editor */
                     window_t *ew = wm_open(APP_EDITOR, "Editor",

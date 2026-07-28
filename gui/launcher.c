@@ -46,9 +46,29 @@ static const launcher_token_t launcher_icons[] = {
 };
 
 typedef struct {
-    u32 app_index; /* Index in appdb */
-    int score;     /* Fuzzy match score */
+    u32  app_index;  /* index in appdb, OR index in launcher_actions if is_action */
+    int  score;      /* fuzzy match score */
+    bool is_action;  /* true: a system command rather than an app */
 } matched_app_t;
+
+/* System actions Spotlight can run alongside apps, so "shut", "restart",
+ * "lock", "theme" surface commands. Power actions use the kernel primitives. */
+typedef enum { ACT_SHUTDOWN, ACT_RESTART, ACT_LOCK, ACT_THEME } launcher_act_t;
+typedef struct {
+    const char *title;
+    const char *subtitle;
+    const char *keywords;   /* extra search terms */
+    u8          kind;
+    u32         color;
+} launcher_action_t;
+
+static const launcher_action_t launcher_actions[] = {
+    { "Shut Down",    "Power off the computer",    "shutdown power off poweroff halt", ACT_SHUTDOWN, rgb(0xf5,0x60,0x60) },
+    { "Restart",      "Reboot the computer",       "restart reboot",                   ACT_RESTART,  rgb(0xfb,0x92,0x3c) },
+    { "Lock Screen",  "Lock and require sign-in",  "lock screen signout logout",       ACT_LOCK,     rgb(0x55,0x9a,0xff) },
+    { "Toggle Theme", "Switch light / dark",       "theme dark light appearance mode", ACT_THEME,    rgb(0xa7,0x8b,0xfa) },
+};
+#define LAUNCHER_ACTION_COUNT ((u32)(sizeof(launcher_actions) / sizeof(launcher_actions[0])))
 
 /* Launcher & Spotlight Search State */
 static char search_query[64] = {0};
@@ -57,6 +77,7 @@ static int  selected_index = 0;
 static matched_app_t matched_apps[LAUNCHER_MAX_MATCHES];
 static u32  matched_count = 0;
 static bool prev_launcher_open = false;
+static int  s_action_hit = -1;   /* action index clicked this pass, or -1 */
 
 static u32 launcher_strlen(const char *s) {
     if (!s) return 0;
@@ -142,8 +163,25 @@ static int launcher_score_entry(const app_entry_t *entry, const char *query) {
 /* Update and sort fuzzy matched apps */
 static void launcher_update_matches(void) {
     matched_count = 0;
+
+    /* System actions first (only while searching), lightly boosted so a typed
+     * command like "shut" or "lock" ranks near the top. */
+    if (search_len > 0) {
+        for (u32 i = 0; i < LAUNCHER_ACTION_COUNT && matched_count < LAUNCHER_MAX_MATCHES; i++) {
+            int s1 = fuzzy_score_string(search_query, launcher_actions[i].title);
+            int s2 = fuzzy_score_string(search_query, launcher_actions[i].keywords);
+            int sc = s1 > s2 ? s1 : s2;
+            if (sc > 0) {
+                matched_apps[matched_count].app_index = i;
+                matched_apps[matched_count].score = sc + 40;
+                matched_apps[matched_count].is_action = true;
+                matched_count++;
+            }
+        }
+    }
+
     u32 total = appdb_count();
-    if (total > LAUNCHER_MAX_MATCHES) total = LAUNCHER_MAX_MATCHES;
+    if (total > LAUNCHER_MAX_MATCHES - matched_count) total = LAUNCHER_MAX_MATCHES - matched_count;
 
     for (u32 i = 0; i < total; i++) {
         const app_entry_t *entry = appdb_get(i);
@@ -153,6 +191,7 @@ static void launcher_update_matches(void) {
         if (score > 0) {
             matched_apps[matched_count].app_index = i;
             matched_apps[matched_count].score = score;
+            matched_apps[matched_count].is_action = false;
             matched_count++;
         }
     }
@@ -220,6 +259,21 @@ static void launcher_open_entry(const app_entry_t *entry) {
         return;
     }
     notify_push(entry->name, out[0] ? out : "Finished", COL_ACCENT);
+}
+
+/* Run a system action chosen from the search results. */
+static void launcher_run_action(u8 kind) {
+    launcher_open = false;
+    switch (kind) {
+    case ACT_SHUTDOWN: power_shutdown();   break;   /* does not return */
+    case ACT_RESTART:  power_reboot();      break;   /* does not return */
+    case ACT_LOCK:     g_lock_request = true; break;
+    case ACT_THEME:
+        theme_switch(!g_theme->is_dark);
+        settings_set_theme(g_theme->is_dark ? 0u : 1u);
+        break;
+    default: break;
+    }
 }
 
 /* Single pass over launcher UI for rendering (draw=true) or hit-testing (draw=false) */
@@ -290,6 +344,7 @@ static int launcher_render(mouse_t *m, bool draw) {
     }
 
     int hit = -1;
+    s_action_hit = -1;
 
     /* Mode 1: Default Grid View (Empty query) */
     if (search_len == 0) {
@@ -351,9 +406,7 @@ static int launcher_render(mouse_t *m, bool draw) {
             }
         } else {
             for (u32 idx = 0; idx < matched_count && (i32)idx < max_visible; idx++) {
-                u32 app_idx = matched_apps[idx].app_index;
-                const app_entry_t *entry = appdb_get(app_idx);
-                if (!entry) continue;
+                bool is_action = matched_apps[idx].is_action;
 
                 rect_t row_rect = rect_make(list_x, list_y + (i32)idx * row_h, list_w, row_h - 4);
                 bool hover = rect_contains(row_rect, m->x, m->y);
@@ -362,7 +415,10 @@ static int launcher_render(mouse_t *m, bool draw) {
                 if (hover) {
                     selected_index = (int)idx;
                     is_sel = true;
-                    if (m->left_clicked) hit = (int)app_idx;
+                    if (m->left_clicked) {
+                        if (is_action) s_action_hit = (int)matched_apps[idx].app_index;
+                        else           hit          = (int)matched_apps[idx].app_index;
+                    }
                 }
 
                 if (draw) {
@@ -373,27 +429,30 @@ static int launcher_render(mouse_t *m, bool draw) {
                         gfx_rect_rounded(row_rect.x, row_rect.y, row_rect.w, row_rect.h, CDL_R_BUTTON, COL_SURFACE2);
                     }
 
-                    /* Icon */
                     i32 icon_sz = 32;
-                    icon_draw(entry->icon, row_rect.x + 12, row_rect.y + (row_rect.h - icon_sz) / 2,
-                              icon_sz, launcher_icon_id(entry),
-                              is_sel ? COL_PRIMARY : COL_ACCENT);
+                    i32 icon_y  = row_rect.y + (row_rect.h - icon_sz) / 2;
 
-                    /* Title */
-                    gfx_str(row_rect.x + 56, row_rect.y + 10, entry->name, COL_TEXT, COL_TRANSPARENT);
-
-                    /* Subtitle: Category & Exec */
-                    char sub[128];
-                    if (entry->category[0]) {
-                        ksprintf(sub, "%s  *  %s", entry->category, entry->exec);
+                    if (is_action) {
+                        const launcher_action_t *act = &launcher_actions[matched_apps[idx].app_index];
+                        /* Coloured command chip with the action's initial. */
+                        gfx_rect_rounded(row_rect.x + 12, icon_y, icon_sz, icon_sz, CDL_R_BUTTON, act->color);
+                        char g[2] = { act->title[0], 0 };
+                        gfx_str_ex(row_rect.x + 12 + (icon_sz - FONT_W) / 2, icon_y + (icon_sz - gfx_line_h_ex(FONT_H3)) / 2,
+                                   g, COL_WHITE, COL_TRANSPARENT, FONT_H3);
+                        gfx_str(row_rect.x + 56, row_rect.y + 10, act->title, COL_TEXT, COL_TRANSPARENT);
+                        gfx_str_clipped(row_rect.x + 56, row_rect.y + 28, row_rect.w - 180, act->subtitle, COL_DIM, COL_TRANSPARENT);
+                        if (is_sel) gfx_str_right(row_rect.x + row_rect.w - 16, row_rect.y + 17, 100, "[Enter] Run", COL_ACCENT, COL_TRANSPARENT);
                     } else {
-                        ksprintf(sub, "%s", entry->exec);
-                    }
-                    gfx_str_clipped(row_rect.x + 56, row_rect.y + 28, row_rect.w - 180, sub, COL_DIM, COL_TRANSPARENT);
-
-                    /* Launch hint for active selection */
-                    if (is_sel) {
-                        gfx_str_right(row_rect.x + row_rect.w - 16, row_rect.y + 17, 100, "[Enter] Launch", COL_ACCENT, COL_TRANSPARENT);
+                        const app_entry_t *entry = appdb_get(matched_apps[idx].app_index);
+                        if (!entry) continue;
+                        icon_draw(entry->icon, row_rect.x + 12, icon_y, icon_sz, launcher_icon_id(entry),
+                                  is_sel ? COL_PRIMARY : COL_ACCENT);
+                        gfx_str(row_rect.x + 56, row_rect.y + 10, entry->name, COL_TEXT, COL_TRANSPARENT);
+                        char sub[128];
+                        if (entry->category[0]) ksprintf(sub, "%s  *  %s", entry->category, entry->exec);
+                        else                    ksprintf(sub, "%s", entry->exec);
+                        gfx_str_clipped(row_rect.x + 56, row_rect.y + 28, row_rect.w - 180, sub, COL_DIM, COL_TRANSPARENT);
+                        if (is_sel) gfx_str_right(row_rect.x + row_rect.w - 16, row_rect.y + 17, 100, "[Enter] Launch", COL_ACCENT, COL_TRANSPARENT);
                     }
                 }
             }
@@ -433,7 +492,9 @@ void launcher_handle_mouse(mouse_t *m) {
     if (!launcher_open || !m->left_clicked) return;
 
     int hit = launcher_render(m, false);
-    if (hit >= 0) {
+    if (s_action_hit >= 0) {
+        launcher_run_action(launcher_actions[s_action_hit].kind);
+    } else if (hit >= 0) {
         launcher_open_entry(appdb_get((u32)hit));
     } else {
         /* Check if clicked outside launcher window */
@@ -462,8 +523,10 @@ void launcher_handle_key(char c) {
     if (c == '\n' || c == 13) {
         launcher_update_matches();
         if (matched_count > 0 && selected_index >= 0 && selected_index < (int)matched_count) {
-            u32 app_idx = matched_apps[selected_index].app_index;
-            launcher_open_entry(appdb_get(app_idx));
+            if (matched_apps[selected_index].is_action)
+                launcher_run_action(launcher_actions[matched_apps[selected_index].app_index].kind);
+            else
+                launcher_open_entry(appdb_get(matched_apps[selected_index].app_index));
         } else {
             u32 total = appdb_count();
             for (u32 i = 0; i < total; i++) {

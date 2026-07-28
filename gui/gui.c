@@ -149,12 +149,6 @@ static void draw_elite_wallpaper(void) {
  * valid (one memcpy), otherwise render it the slow way once and cache the
  * result. draw_elite_wallpaper() is still used directly on the login/lock
  * screens, which composite changing overlays on top and are not hot paths. */
-static void draw_wallpaper_cached(void) {
-    if (gfx_wallpaper_cache_blit()) return;
-    draw_elite_wallpaper();
-    gfx_wallpaper_cache_capture();
-}
-
 static void draw_status_wifi(i32 x, i32 y, bool up) {
     u32 col = up ? COL_TEXT : COL_MUTED;
     gfx_hline(x + 2, y + 8, 12, col);
@@ -205,6 +199,9 @@ static nc_item_t s_nc_items[NC_MAX_ITEMS];
 static int s_nc_count = 0;
 static bool s_notif_center_open = false;
 static i32 s_notif_center_anim_x = 0;
+
+/* Honoured by the desktop loop: lock the session on the next iteration. */
+volatile bool g_lock_request = false;
 static bool s_nc_inited = false;
 
 static void control_center_add_notif(const char *title, const char *body, u32 color) {
@@ -300,9 +297,20 @@ static void draw_top_bar(const mouse_t *m) {
         gfx_rect_rounded(bell_x, 4, bell_w + clk_w + fw * 2 - 4, TOPBAR_H - 8, 6, COL_SURFACE2);
     }
 
-    gfx_str(bell_x + 6, ty, "[N]", s_notif_center_open ? COL_WHITE : COL_ACCENT, COL_TRANSPARENT);
+    /* A little drawn bell instead of literal "[N]" text. */
+    {
+        u32 bc  = s_notif_center_open ? COL_WHITE : COL_ACCENT;
+        i32 bx  = bell_x + 13;
+        i32 byc = TOPBAR_H / 2;
+        gfx_circle_fill(bx, byc - 8, 2, bc);          /* handle           */
+        gfx_circle_fill(bx, byc - 1, 6, bc);          /* dome             */
+        gfx_rect(bx - 6, byc - 1, 13, 5, bc);         /* body             */
+        gfx_rect_rounded(bx - 8, byc + 3, 17, 3, 1, bc); /* flared rim    */
+        gfx_circle_fill(bx, byc + 8, 2, bc);          /* clapper          */
+    }
     if (s_nc_count > 0) {
-        gfx_circle_fill(bell_x + bell_w - 8, 8, 4, COL_RED);
+        gfx_circle_fill(bell_x + bell_w - 6, 9, 4, COL_RED);
+        gfx_circle(bell_x + bell_w - 6, 9, 4, g_theme->taskbar);
     }
 
     gfx_str(tx, ty, clock_s, COL_WHITE, COL_TRANSPARENT);
@@ -832,11 +840,9 @@ static login_layout_t login_make_layout(const login_state_t *s) {
 }
 
 static void draw_glass_panel(rect_t r, i32 radius) {
-    /* Cleaner, more solid professional surface */
-    gfx_shadow_ext(r.x, r.y, r.w, r.h, 10);
-    gfx_rect_rounded(r.x, r.y, r.w, r.h, radius, COL_SURFACE);
-    gfx_rect_blend(r.x, r.y, r.w, r.h, COL_GLASS_TINT, g_theme->is_dark ? 40 : 25);
-    gfx_rect_rounded_outline(r.x, r.y, r.w, r.h, radius, COL_BORDER);
+    /* Real frosted glass (blurred backdrop + tint + sheen + hairline), matching
+     * the dock/sidebar/widgets. Callers add their own soft shadow. */
+    gfx_glass_panel(r.x, r.y, r.w, r.h, radius);
 }
 
 static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
@@ -850,7 +856,8 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     draw_elite_wallpaper();
     gfx_rect_blend(0, 0, sw, sh, COL_BLACK, 96);
 
-    draw_glass_panel(l.panel, 18);
+    gfx_shadow_soft(l.panel.x, l.panel.y, l.panel.w, l.panel.h, CDL_R_CARD);
+    draw_glass_panel(l.panel, CDL_R_CARD);
 
     /* Branding Header */
     gfx_circle_fill(l.avatar.x + l.avatar.w / 2, l.avatar.y + l.avatar.h / 2, l.avatar.w / 2, COL_PRIMARY);
@@ -924,8 +931,7 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     button_draw(&l.primary_btn);
     button_draw(&l.secondary_btn);
 
-    /* Footer / Status */
-    gfx_rect_rounded(l.status_bar.x, l.status_bar.y, l.status_bar.w, l.status_bar.h, 12, COL_SURFACE2);
+    /* Footer / Status — plain centred text, not a button-like filled bar. */
     gfx_str_centered(l.status_bar.x, l.status_ty, l.status_bar.w, s->status, s->status_color, COL_TRANSPARENT);
 
     gfx_str_centered(l.panel.x, l.footer_y, l.panel.w,
@@ -1302,10 +1308,12 @@ void gui_run(void) {
 
     serial_write("  [gui_run] entering main loop\n");
 
+    widgets_init();
+
     mouse.x = sw / 2;
     mouse.y = sh / 2;
 
-    u32 last_sysmon = 0, last_netmon = 0, last_notify = 0;
+    u32 last_sysmon = 0, last_netmon = 0, last_notify = 0, last_slow = 0;
     bool needs_redraw = true;
     u32 lx = 0, ly = 0;
     bool lb = false;
@@ -1351,10 +1359,31 @@ void gui_run(void) {
                 else { window_t *fw = wm_focused(); if (fw) wm_handle_key(c, fw); }
             }
 
+            /* Tap Super to summon / dismiss the Spotlight launcher, like GNOME
+             * or Windows. Polled every frame (it is a modifier, not a char). */
+            if (keyboard_super_tapped()) {
+                launcher_open = !launcher_open;
+                if (launcher_open) { s_notif_center_open = false; s_control_center_open = false; }
+                g_last_activity_tick = timer_get_ticks();
+                activity = true;
+            }
+
             mouse_update(&mouse);
             if (mouse.x != lx || mouse.y != ly || mouse.left != lb || mouse.left_clicked || mouse.right_clicked || mouse.scroll_delta != 0) {
                 activity = true; lx = mouse.x; ly = mouse.y; lb = mouse.left;
                 g_last_activity_tick = timer_get_ticks();
+            }
+            /* A left click ripples out from the cursor, everywhere. */
+            if (mouse.left_clicked) { gfx_ripple(mouse.x, mouse.y, COL_ACCENT); activity = true; }
+            /* Keep redrawing while any ripple is still blooming. */
+            if (gfx_ripples_active()) activity = true;
+
+            /* Explicit lock request (Spotlight "Lock Screen", a power menu, ...). */
+            if (g_lock_request) {
+                g_lock_request = false;
+                run_login_flow(&mouse);
+                g_last_activity_tick = timer_get_ticks();
+                needs_redraw = true;
             }
 
             /* Idle / Screensaver Check (10 minutes = 600,000 ms, screensaver at 30,000 ms) */
@@ -1388,16 +1417,43 @@ void gui_run(void) {
                 if (sm) app_sysmon_tick(sm);
                 if (nm) app_netmon_tick(nm);
                 last_sysmon = now;
-                activity = true; /* For clock update */
+                if (sm || nm) activity = true;   /* live graphs, only while a monitor is open */
             }
-            if (now - last_netmon >= 100) { net_poll(); last_netmon = now; activity = true; }
-            if (now - last_notify >= 10) { notify_tick(); last_notify = now; activity = true; }
+            if (now - last_netmon >= 100) { net_poll(); last_netmon = now; }
+            if (now - last_notify >= 10)  { notify_tick(); last_notify = now; }
+
+            /* Low-rate heartbeat: keeps on-screen clocks/meters ticking without
+             * recompositing the whole glass desktop at 100 Hz while idle. Input
+             * and animations (above) still drive full-rate redraws when needed. */
+            if (now - last_slow >= 250) { last_slow = now; activity = true; }
 
             if (activity) needs_redraw = true;
 
             if (needs_redraw) {
-                draw_wallpaper_cached();
-                desktop_draw();
+                /* The desktop backdrop (wallpaper + frosted sidebar + widget
+                 * panels) is expensive to composite -- a per-frame blur and soft
+                 * shadow. It only changes when the chrome does: the clock/meters
+                 * tick (~2 Hz here), the pointer hovers the sidebar or widgets,
+                 * or the theme changes. Cache the composited backdrop and blit it
+                 * (one memcpy) on every other frame; windows/taskbar/cursor still
+                 * draw on top at full rate. This is what makes dragging and
+                 * typing smooth instead of paying ~700 Mcyc of blur each frame. */
+                static u32 last_backdrop_ms = 0;
+                bool over_chrome = (mouse.x < (i32)SIDEBAR_W) ||
+                                   (mouse.x > (i32)SCREEN_W - 360);
+                bool rebuild = over_chrome || (now - last_backdrop_ms >= 500);
+
+                if (rebuild || !gfx_desktop_cache_blit()) {
+                    if (!gfx_wallpaper_cache_blit()) {
+                        draw_elite_wallpaper();
+                        gfx_wallpaper_cache_capture();
+                    }
+                    desktop_draw();
+                    widgets_draw(&mouse);
+                    gfx_desktop_cache_capture();
+                    last_backdrop_ms = now;
+                }
+
                 wm_draw_all();
                 taskbar_draw();
                 draw_top_bar(&mouse);
@@ -1411,10 +1467,15 @@ void gui_run(void) {
                     gfx_rect_blend(0, 0, (i32)SCREEN_W, (i32)SCREEN_H, COL_BLACK, dim);
                 }
 
+                gfx_ripples_draw();
                 mouse_draw_cursor(mouse.x, mouse.y);
                 gfx_flip();
                 needs_redraw = false;
             }
+
+            /* Default the pointer to the arrow each frame; wm_handle_mouse
+             * upgrades it to a resize/move shape when over a window edge. */
+            g_cursor_shape = CURSOR_ARROW;
 
             /* Handle input every frame to ensure responsiveness */
             if (!notify_handle_mouse(&mouse)) {
@@ -1426,6 +1487,8 @@ void gui_run(void) {
                     needs_redraw = true;
                 } else if (launcher_open) {
                     launcher_handle_mouse(&mouse);
+                } else if (widgets_handle_mouse(&mouse)) {
+                    needs_redraw = true;
                 } else {
                     taskbar_handle_mouse(&mouse);
                     desktop_handle_mouse(&mouse);

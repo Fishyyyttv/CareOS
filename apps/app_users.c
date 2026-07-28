@@ -92,10 +92,18 @@ void app_users_draw(window_t *w){
     gfx_str_ex(cr.x + 14, cr.y + UM_HDR_TOP, "User Accounts", COL_TEXT, COL_TRANSPARENT, FONT_H2);
     gfx_str(cr.x + 14, cr.y + UM_HDR_SUB_Y, "Local account database", g_theme->muted, COL_TRANSPARENT);
 
-    /* User rows */
-    for (u32 i = 0; i < count; i++) {
+    /* User rows (scrollable when the account list is long). */
+    i32 um_pitch   = UM_ROW_H + UM_ROW_GAP;
+    i32 um_list_bot = cr.y + cr.h - 8;
+    {
+        i32 vis = (um_list_bot - (cr.y + UM_LIST_START)) / um_pitch; if (vis < 1) vis = 1;
+        u32 maxs = (count > (u32)vis) ? count - (u32)vis : 0;
+        if (w->scroll > maxs) w->scroll = maxs;
+    }
+    for (u32 i = w->scroll; i < count; i++) {
         user_t *u = list[i];
-        i32 ry = cr.y + UM_LIST_START + (i32)i * (UM_ROW_H + UM_ROW_GAP);
+        i32 ry = cr.y + UM_LIST_START + ((i32)i - (i32)w->scroll) * um_pitch;
+        if (ry + UM_ROW_H > um_list_bot) break;
         bool sel = (u->uid == w->um_sel) || (!w->um_sel && u->uid == user_current_uid());
         gfx_rect_rounded(cr.x + 8, ry, list_w - 16, UM_ROW_H, 8,
                          sel ? COL_SELECTION : g_theme->surface3);
@@ -272,9 +280,11 @@ void app_users_click(window_t *w, i32 x, i32 y){
     i32 dpx    = det_x + 14;
     i32 dpw    = det_w - 28;
 
-    /* User list rows */
-    for (u32 i = 0; i < count; i++) {
-        i32 ry = cr.y + UM_LIST_START + (i32)i * (UM_ROW_H + UM_ROW_GAP);
+    /* User list rows (mirror the scrolled layout from draw). */
+    i32 um_pitch = UM_ROW_H + UM_ROW_GAP;
+    for (u32 i = w->scroll; i < count; i++) {
+        i32 ry = cr.y + UM_LIST_START + ((i32)i - (i32)w->scroll) * um_pitch;
+        if (ry + UM_ROW_H > cr.y + cr.h) break;
         if (rect_contains(rect_make(cr.x + 8, ry, list_w - 16, UM_ROW_H), x, y)) {
             w->um_sel = list[i]->uid;
             return;

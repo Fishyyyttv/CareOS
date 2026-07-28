@@ -79,8 +79,8 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 += accel_q8(dx);
-            accum_dy_q8 -= accel_q8(dy);
+            accum_dx_q8 -= accel_q8(dx);   /* flip both axes to match the host pointer */
+            accum_dy_q8 += accel_q8(dy);
         }
         break;
     case 3:
@@ -95,8 +95,8 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 += accel_q8(dx);
-            accum_dy_q8 -= accel_q8(dy);
+            accum_dx_q8 -= accel_q8(dx);   /* flip both axes to match the host pointer */
+            accum_dy_q8 += accel_q8(dy);
         }
 
         /* M-06: scroll wheel (4th byte, signed) */
@@ -246,6 +246,51 @@ static const u16 cur_outl[19] = {
 static i32 draw_x_q8 = 0, draw_y_q8 = 0;
 static bool draw_seeded = false;
 
+/* Current pointer shape, set by wm_handle_mouse from what is under the cursor. */
+cursor_shape_t g_cursor_shape = CURSOR_ARROW;
+
+/* Resize / move pointers: double-headed arrows drawn as a dark shadow pass then
+ * a white pass, so they stay visible over any window or wallpaper. */
+static void draw_resize_cursor(i32 cx, i32 cy, cursor_shape_t s) {
+    const i32 L = 9, hs = 4;
+    for (int pass = 0; pass < 2; pass++) {
+        i32 X = cx + (pass == 0 ? 1 : 0);
+        i32 Y = cy + (pass == 0 ? 1 : 0);
+        u32 c = pass == 0 ? rgb(0x08, 0x08, 0x10) : COL_WHITE;
+        switch (s) {
+        case CURSOR_RESIZE_H:
+            gfx_line(X - L, Y, X + L, Y, c);
+            gfx_triangle_fill(X - L, Y, X - L + hs, Y - hs, X - L + hs, Y + hs, c);
+            gfx_triangle_fill(X + L, Y, X + L - hs, Y - hs, X + L - hs, Y + hs, c);
+            break;
+        case CURSOR_RESIZE_V:
+            gfx_line(X, Y - L, X, Y + L, c);
+            gfx_triangle_fill(X, Y - L, X - hs, Y - L + hs, X + hs, Y - L + hs, c);
+            gfx_triangle_fill(X, Y + L, X - hs, Y + L - hs, X + hs, Y + L - hs, c);
+            break;
+        case CURSOR_RESIZE_NWSE:
+            gfx_line(X - L, Y - L, X + L, Y + L, c);
+            gfx_triangle_fill(X - L, Y - L, X - L + hs + 1, Y - L, X - L, Y - L + hs + 1, c);
+            gfx_triangle_fill(X + L, Y + L, X + L - hs - 1, Y + L, X + L, Y + L - hs - 1, c);
+            break;
+        case CURSOR_RESIZE_NESW:
+            gfx_line(X + L, Y - L, X - L, Y + L, c);
+            gfx_triangle_fill(X + L, Y - L, X + L - hs - 1, Y - L, X + L, Y - L + hs + 1, c);
+            gfx_triangle_fill(X - L, Y + L, X - L + hs + 1, Y + L, X - L, Y + L - hs - 1, c);
+            break;
+        case CURSOR_MOVE:
+            gfx_line(X - L, Y, X + L, Y, c);
+            gfx_line(X, Y - L, X, Y + L, c);
+            gfx_triangle_fill(X - L, Y, X - L + hs, Y - hs, X - L + hs, Y + hs, c);
+            gfx_triangle_fill(X + L, Y, X + L - hs, Y - hs, X + L - hs, Y + hs, c);
+            gfx_triangle_fill(X, Y - L, X - hs, Y - L + hs, X + hs, Y - L + hs, c);
+            gfx_triangle_fill(X, Y + L, X - hs, Y + L - hs, X + hs, Y + L - hs, c);
+            break;
+        default: break;
+        }
+    }
+}
+
 void mouse_draw_cursor(i32 x, i32 y) {
     i32 target_x_q8 = x << 8;
     i32 target_y_q8 = y << 8;
@@ -268,6 +313,13 @@ void mouse_draw_cursor(i32 x, i32 y) {
 
     x = draw_x_q8 >> 8;
     y = draw_y_q8 >> 8;
+
+    /* Resize / move pointers replace the arrow so it's obvious a drag will
+     * grab that edge. Centred just under the hotspot. */
+    if (g_cursor_shape != CURSOR_ARROW) {
+        draw_resize_cursor(x + 3, y + 3, g_cursor_shape);
+        return;
+    }
 
     /* Shadow pass (offset by 1,1, dark) */
     for (i32 row = 0; row < 19; row++) {

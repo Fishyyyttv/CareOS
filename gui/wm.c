@@ -123,10 +123,10 @@ static void draw_desktop_icon(const desktop_icon_t *ic) {
 
     /* Hover / active highlight */
     if (ic->hover) {
-        gfx_rect_rounded(r.x + 2, r.y + 1, r.w - 4, r.h - 2, 8, COL_HOVER);
-        gfx_rect_rounded_outline(r.x + 2, r.y + 1, r.w - 4, r.h - 2, 8, COL_BORDER);
+        gfx_rect_rounded(r.x + 2, r.y + 1, r.w - 4, r.h - 2, CDL_R_BUTTON, COL_HOVER);
+        gfx_rect_rounded_outline(r.x + 2, r.y + 1, r.w - 4, r.h - 2, CDL_R_BUTTON, COL_ACCENT);
     } else if (ic->selected) {
-        gfx_rect_rounded(r.x + 2, r.y + 1, r.w - 4, r.h - 2, 8, COL_SELECTION);
+        gfx_rect_rounded(r.x + 2, r.y + 1, r.w - 4, r.h - 2, CDL_R_BUTTON, COL_SELECTION);
     }
 
     /* Icon — left-aligned with consistent padding */
@@ -147,11 +147,10 @@ void desktop_draw(void) {
     i32 panel_x = SIDEBAR_PANEL_X;
     i32 panel_w = SIDEBAR_W - SIDEBAR_PANEL_X * 2;
 
-    /* Sidebar glass panel */
-    gfx_rect_rounded(panel_x, panel_y, panel_w, panel_h, 12, g_theme->taskbar);
-    gfx_rect_blend(panel_x, panel_y, panel_w, panel_h, COL_GLASS_TINT,
-                   g_theme->is_dark ? 16 : 55);
-    gfx_rect_rounded_outline(panel_x, panel_y, panel_w, panel_h, 12, COL_BORDER);
+    /* Sidebar: the same frosted glass the dock and widgets use, so the whole
+     * desktop reads as one material instead of a flat opaque slab. */
+    gfx_shadow_soft(panel_x, panel_y, panel_w, panel_h, CDL_R_CARD);
+    gfx_glass_panel(panel_x, panel_y, panel_w, panel_h, CDL_R_CARD);
 
     /* App rows */
     for (int i = 0; i < ICON_COUNT; i++) {
@@ -419,7 +418,10 @@ void wm_maximize(window_t *w) {
         w->maximized = false;
     } else {
         w->restore_rect = w->rect;
-        w->rect = rect_make(0, 0, (i32)SCREEN_W, (i32)SCREEN_H - (i32)TASKBAR_H);
+        /* Start below the top bar (which draws over windows) so the titlebar and
+         * its min/max/close buttons stay reachable, and stop above the dock. */
+        w->rect = rect_make(0, (i32)TOPBAR_H, (i32)SCREEN_W,
+                            (i32)SCREEN_H - (i32)TOPBAR_H - (i32)TASKBAR_H);
         w->maximized = true;
     }
 }
@@ -482,8 +484,9 @@ void wm_snap_focused(int mode) {
         return;
     }
 
-    i32 sw = (i32)SCREEN_W;
-    i32 sh = (i32)SCREEN_H - (i32)TASKBAR_H;
+    i32 sw  = (i32)SCREEN_W;
+    i32 top = (i32)TOPBAR_H;                                    /* below the menu bar */
+    i32 sh  = (i32)SCREEN_H - top - (i32)TASKBAR_H;             /* usable height       */
 
     w->maximized = false;
     w->animating = true;
@@ -492,45 +495,60 @@ void wm_snap_focused(int mode) {
 
     switch (mode) {
     case SNAP_LEFT:
-        w->target_rect = rect_make(0, 0, sw/2, sh); break;
+        w->target_rect = rect_make(0, top, sw/2, sh); break;
     case SNAP_RIGHT:
-        w->target_rect = rect_make(sw/2, 0, sw-sw/2, sh); break;
+        w->target_rect = rect_make(sw/2, top, sw-sw/2, sh); break;
     case SNAP_TOP:
-        w->target_rect = rect_make(0, 0, sw, sh/2); break;
+        w->target_rect = rect_make(0, top, sw, sh/2); break;
     case SNAP_BOTTOM:
-        w->target_rect = rect_make(0, sh/2, sw, sh-sh/2); break;
+        w->target_rect = rect_make(0, top + sh/2, sw, sh-sh/2); break;
     case SNAP_TL:
-        w->target_rect = rect_make(0, 0, sw/2, sh/2); break;
+        w->target_rect = rect_make(0, top, sw/2, sh/2); break;
     case SNAP_TR:
-        w->target_rect = rect_make(sw/2, 0, sw-sw/2, sh/2); break;
+        w->target_rect = rect_make(sw/2, top, sw-sw/2, sh/2); break;
     case SNAP_BL:
-        w->target_rect = rect_make(0, sh/2, sw/2, sh-sh/2); break;
+        w->target_rect = rect_make(0, top + sh/2, sw/2, sh-sh/2); break;
     case SNAP_BR:
-        w->target_rect = rect_make(sw/2, sh/2, sw-sw/2, sh-sh/2); break;
+        w->target_rect = rect_make(sw/2, top + sh/2, sw-sw/2, sh-sh/2); break;
     }
 }
 
-/* -- Detect resize edge under cursor (10px border zone = actually grabbable) */
-#define EDGE_ZONE 10
+/* -- Detect resize edge under cursor. A wider zone is much easier to grab, and
+ *    corners get an even wider hit box so diagonal resize is forgiving. */
+#define EDGE_ZONE 14
+static cursor_shape_t edge_to_cursor(u32 edge) {
+    switch (edge) {
+    case RESIZE_LEFT: case RESIZE_RIGHT:  return CURSOR_RESIZE_H;
+    case RESIZE_TOP:  case RESIZE_BOTTOM: return CURSOR_RESIZE_V;
+    case RESIZE_TL:   case RESIZE_BR:     return CURSOR_RESIZE_NWSE;
+    case RESIZE_TR:   case RESIZE_BL:     return CURSOR_RESIZE_NESW;
+    default:                              return CURSOR_ARROW;
+    }
+}
 static u32 detect_resize_edge(window_t *w, i32 mx, i32 my) {
     rect_t r = w->rect;
-    /* Only detect on border, not inside titlebar */
-    if (my >= r.y + TITLEBAR_H - 4 || my < r.y) {
-        /* corners and edges */
-    }
-    bool l  = (mx >= r.x          && mx < r.x + EDGE_ZONE);
-    bool rr = (mx >= r.x + r.w - EDGE_ZONE && mx < r.x + r.w);
-    bool t  = (my >= r.y          && my < r.y + EDGE_ZONE);
-    bool b  = (my >= r.y + r.h - EDGE_ZONE && my < r.y + r.h);
+    if (mx < r.x || mx >= r.x + r.w || my < r.y || my >= r.y + r.h) return RESIZE_NONE;
 
-    if (t && l)  return RESIZE_TL;
-    if (t && rr) return RESIZE_TR;
-    if (b && l)  return RESIZE_BL;
-    if (b && rr) return RESIZE_BR;
-    if (l)       return RESIZE_LEFT;
-    if (rr)      return RESIZE_RIGHT;
-    if (t)       return RESIZE_TOP;
-    if (b)       return RESIZE_BOTTOM;
+    /* Corners get a larger square so diagonal resize is easy to hit; edges use
+     * the base zone. Corners are tested first. */
+    const i32 cz = EDGE_ZONE + 10;
+    bool cl = mx <  r.x + cz;
+    bool cr = mx >= r.x + r.w - cz;
+    bool ct = my <  r.y + cz;
+    bool cb = my >= r.y + r.h - cz;
+    if (ct && cl) return RESIZE_TL;
+    if (ct && cr) return RESIZE_TR;
+    if (cb && cl) return RESIZE_BL;
+    if (cb && cr) return RESIZE_BR;
+
+    bool l  = mx <  r.x + EDGE_ZONE;
+    bool rr = mx >= r.x + r.w - EDGE_ZONE;
+    bool t  = my <  r.y + EDGE_ZONE;
+    bool b  = my >= r.y + r.h - EDGE_ZONE;
+    if (l)  return RESIZE_LEFT;
+    if (rr) return RESIZE_RIGHT;
+    if (t)  return RESIZE_TOP;
+    if (b)  return RESIZE_BOTTOM;
     return RESIZE_NONE;
 }
 
@@ -671,6 +689,23 @@ static void draw_window(window_t *w) {
     gfx_hline(wx, wy + TITLEBAR_H - 1, wd, COL_BORDER);
     gfx_rect_rounded_outline(wx, wy, wd, ht, CDL_R_WINDOW, w->focused ? COL_BORDER : g_theme->surface2);
 
+    /* Resize affordance: light up the edge/corner under the cursor so it is
+     * obvious what a drag will grab. Corners get an L of two short bars. */
+    if (!transition && w->hover_edge != RESIZE_NONE) {
+        u32 hc = COL_ACCENT;
+        i32 t = 3, seg = 28, R = CDL_R_WINDOW;
+        switch (w->hover_edge) {
+        case RESIZE_LEFT:   gfx_rect_rounded(wx, wy + R, t, ht - 2 * R, 1, hc); break;
+        case RESIZE_RIGHT:  gfx_rect_rounded(wx + wd - t, wy + R, t, ht - 2 * R, 1, hc); break;
+        case RESIZE_TOP:    gfx_rect_rounded(wx + R, wy, wd - 2 * R, t, 1, hc); break;
+        case RESIZE_BOTTOM: gfx_rect_rounded(wx + R, wy + ht - t, wd - 2 * R, t, 1, hc); break;
+        case RESIZE_TL: gfx_rect_rounded(wx, wy, seg, t, 1, hc); gfx_rect_rounded(wx, wy, t, seg, 1, hc); break;
+        case RESIZE_TR: gfx_rect_rounded(wx + wd - seg, wy, seg, t, 1, hc); gfx_rect_rounded(wx + wd - t, wy, t, seg, 1, hc); break;
+        case RESIZE_BL: gfx_rect_rounded(wx, wy + ht - t, seg, t, 1, hc); gfx_rect_rounded(wx, wy + ht - seg, t, seg, 1, hc); break;
+        case RESIZE_BR: gfx_rect_rounded(wx + wd - seg, wy + ht - t, seg, t, 1, hc); gfx_rect_rounded(wx + wd - t, wy + ht - seg, t, seg, 1, hc); break;
+        }
+    }
+
     /* App title on left, traffic-light controls on right. */
     i32 btn_cy = TB_BTN_CY(wy);
     gfx_circle_fill(TB_BTN_MIN_X(wx, wd),   btn_cy, TB_BTN_R, rgb(0xff, 0xbd, 0x2e));
@@ -752,6 +787,34 @@ static bool hit_btn(i32 mx, i32 my, i32 bx, i32 bmy) {
 void wm_handle_mouse(mouse_t *m) {
     /* launcher input is now pre-routed in gui.c */
 
+    /* -- 0. Pointer feedback: pick the cursor shape and the hovered edge for
+     *       the highlight, up front so it is right even in the branches below
+     *       that return early. -------------------------------------------- */
+    for (int i = 0; i < MAX_WINDOWS; i++) windows[i].hover_edge = RESIZE_NONE;
+    g_cursor_shape = CURSOR_ARROW;
+    {
+        window_t *busy = NULL;
+        for (int i = 0; i < MAX_WINDOWS; i++)
+            if (windows[i].active && (windows[i].resizing || windows[i].dragging)) { busy = &windows[i]; break; }
+        if (busy && busy->resizing) {
+            g_cursor_shape = edge_to_cursor(busy->resize_edge);
+            busy->hover_edge = (u8)busy->resize_edge;
+        } else if (busy && busy->dragging) {
+            g_cursor_shape = CURSOR_MOVE;
+        } else {
+            window_t *h = NULL; u32 hz = 0;
+            for (int i = 0; i < MAX_WINDOWS; i++) {
+                window_t *w = &windows[i];
+                if (!w->active || w->minimized) continue;
+                if (rect_contains(w->rect, m->x, m->y) && w->z_order >= hz) { h = w; hz = w->z_order; }
+            }
+            if (h && !h->maximized) {
+                u32 e = detect_resize_edge(h, m->x, m->y);
+                if (e != RESIZE_NONE) { h->hover_edge = (u8)e; g_cursor_shape = edge_to_cursor(e); }
+            }
+        }
+    }
+
     /* -- 1. Ongoing window resize ----------------------------------------- */
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
@@ -821,10 +884,13 @@ void wm_handle_mouse(mouse_t *m) {
             if (w->rect.y > (i32)SCREEN_H - (i32)TASKBAR_H - TITLEBAR_H)
                 w->rect.y = (i32)SCREEN_H - (i32)TASKBAR_H - TITLEBAR_H;
 
-            /* NEW: Snap preview if mouse is at the very top */
+            /* Snap-to-maximize preview when the cursor hits the very top. Mirror
+             * the maximised bounds: below the top bar, above the dock. */
             if (m->y < 4) {
-                gfx_rect_blend(0, 0, (i32)SCREEN_W, (i32)SCREEN_H - (i32)TASKBAR_H, COL_PRIMARY, 40);
-                gfx_rect_rounded_outline(8, 8, (i32)SCREEN_W - 16, (i32)SCREEN_H - (i32)TASKBAR_H - 16, 12, COL_PRIMARY);
+                i32 pt = (i32)TOPBAR_H;
+                i32 ph = (i32)SCREEN_H - pt - (i32)TASKBAR_H;
+                gfx_rect_blend(0, pt, (i32)SCREEN_W, ph, COL_PRIMARY, 40);
+                gfx_rect_rounded_outline(8, pt + 8, (i32)SCREEN_W - 16, ph - 16, CDL_R_WINDOW, COL_PRIMARY);
             }
         } else {
             /* If released at the top: Maximize */
@@ -854,6 +920,23 @@ void wm_handle_mouse(mouse_t *m) {
         } else {
             hit->hover_start_tick = 0;
             hit->showing_snap_layouts = false;
+        }
+    }
+
+    /* -- 3b. Scroll wheel -> the window under the cursor. Handled here, BEFORE
+     *        the click gate below, so a bare wheel spin (no click) works. Most
+     *        apps read w->scroll as a line offset and clamp it in their own
+     *        draw; the browser has a pixel scroller. Wheel up decreases the
+     *        offset (moves toward the top). ------------------------------- */
+    if (m->scroll_delta != 0 && hit && !hit->minimized) {
+        rect_t scr = wm_client_rect(hit);
+        if (rect_contains(scr, m->x, m->y)) {
+            if (hit->app == APP_BROWSER) {
+                app_browser_scroll(hit, m->scroll_delta);
+            } else {
+                i32 ns = (i32)hit->scroll - m->scroll_delta * 3;   /* 3 lines / notch */
+                hit->scroll = (ns > 0) ? (u32)ns : 0;
+            }
         }
     }
 
@@ -950,23 +1033,6 @@ void wm_handle_mouse(mouse_t *m) {
         }
     }
 
-    /* -- 10. Scroll wheel: route to focused window terminal/editor/browser -- */
-    if (m->scroll_delta != 0) {
-        window_t *fw = wm_focused();
-        if (fw && !fw->minimized) {
-            rect_t scr = wm_client_rect(fw);
-            if (rect_contains(scr, m->x, m->y)) {
-                if (fw->app == APP_BROWSER) {
-                    app_browser_scroll(fw, m->scroll_delta);
-                } else {
-                    if (fw->scroll + m->scroll_delta >= 0)
-                        fw->scroll = (u32)((i32)fw->scroll + m->scroll_delta);
-                    else
-                        fw->scroll = 0;
-                }
-            }
-        }
-    }
 }
 
 /* -- Keyboard routing: ONLY to focused window ----------------------------- */

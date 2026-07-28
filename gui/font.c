@@ -8,6 +8,8 @@ extern const font_family_t font_jetbrains_mono_bold;
 extern const font_family_t font_classic;
 extern const font_family_t font_ibm_plex_mono;
 extern const font_family_t font_ibm_plex_mono_bold;
+extern const font_family_t font_ibm_plex_sans;        /* proportional */
+extern const font_family_t font_ibm_plex_sans_bold;
 
 static const font_family_t *registry[] = {
     &font_jetbrains_mono,
@@ -15,6 +17,8 @@ static const font_family_t *registry[] = {
     &font_classic,
     &font_ibm_plex_mono,
     &font_ibm_plex_mono_bold,
+    &font_ibm_plex_sans,
+    &font_ibm_plex_sans_bold,
 };
 #define REGISTRY_COUNT (sizeof(registry) / sizeof(registry[0]))
 
@@ -42,6 +46,9 @@ const font_face_t *font_bold_face_at(u32 size_index) {
     if (registry[active_index] == &font_ibm_plex_mono ||
         registry[active_index] == &font_ibm_plex_mono_bold)
         bold = &font_ibm_plex_mono_bold;
+    else if (registry[active_index] == &font_ibm_plex_sans ||
+             registry[active_index] == &font_ibm_plex_sans_bold)
+        bold = &font_ibm_plex_sans_bold;
     return &bold->faces[size_index];
 }
 

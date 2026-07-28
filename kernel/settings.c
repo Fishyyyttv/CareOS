@@ -404,6 +404,10 @@ void settings_set_wallpaper(u32 wallpaper) {
     settings_clamp();
     settings_save();
     gfx_wallpaper_cache_invalidate();
+    /* When the accent is "Auto" (the trailing dynamic slot), re-derive it from
+     * the newly selected wallpaper so the whole UI recolours to match. */
+    if (g_settings.accent == theme_accent_count() - 1u)
+        theme_set_accent(g_settings.accent);
 }
 
 void settings_set_accent(u32 accent) {

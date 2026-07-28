@@ -129,6 +129,10 @@ extern u32 g_current_desktop;
 /* -- Idle / screensaver --------------------------------------------------- */
 extern u32 g_last_activity_tick;
 
+/* Set by anything that wants to lock the session (Spotlight, a power menu);
+ * the desktop loop honours it by running the login/lock flow. */
+extern volatile bool g_lock_request;
+
 #define TASKBAR_H       72
 #define TOPBAR_H        34
 #define SIDEBAR_W       182
@@ -166,8 +170,21 @@ extern u32 g_last_activity_tick;
 #define CDL_GLASS_ALPHA   64      /* ~25% tint over the blurred backdrop */
 #define CDL_GLASS_BLUR    6
 
-/* Animation: one duration + one easing family for opens/closes/minimise. */
-#define CDL_ANIM_MS       140
+/* Animation: one duration + one easing family for opens/closes/minimise.
+ * Kept short so windows feel snappy rather than floaty. */
+#define CDL_ANIM_MS       95
+
+/* Pointer shapes. wm_handle_mouse sets g_cursor_shape from what is under the
+ * cursor (resize edge / corner / move) and mouse_draw_cursor renders it. */
+typedef enum {
+    CURSOR_ARROW = 0,
+    CURSOR_RESIZE_H,     /* ↔  left / right edge         */
+    CURSOR_RESIZE_V,     /* ↕  top / bottom edge         */
+    CURSOR_RESIZE_NWSE,  /* ⤢  TL / BR corner            */
+    CURSOR_RESIZE_NESW,  /* ⤡  TR / BL corner            */
+    CURSOR_MOVE          /* ✛  dragging a window         */
+} cursor_shape_t;
+extern cursor_shape_t g_cursor_shape;
 
 
 /* -- Application IDs ------------------------------------------------------ */
@@ -211,6 +228,7 @@ i32 gfx_line_h_ex(font_size_t size);
 void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size);
 void gfx_str_centered_ex(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg, font_size_t size);
 i32  gfx_str_width_ex(const char *s, font_size_t size);
+i32  gfx_str_width_n(const char *s, u32 n, font_size_t size);
 void gfx_rect_blend(i32 x, i32 y, i32 w, i32 h, u32 color, u8 alpha);
 void gfx_draw_icon(app_id_t app, i32 x, i32 y, i32 size, u32 color);
 
@@ -277,7 +295,7 @@ typedef struct window {
 
     /* Browser app */
     char  browser_url[256];
-    char  browser_content[16384];
+    char  browser_content[65536];
     char  browser_title[128];
     bool  browser_loading;
     bool  browser_url_active;
@@ -343,6 +361,7 @@ typedef struct window {
     u8     opacity;       /* 0-255 */
     u8     anim_kind;     /* WM_ANIM_* : open / close / minimise transition */
     rect_t anim_from;     /* geometry captured when the transition began */
+    u8     hover_edge;    /* RESIZE_* edge the cursor is over, for the highlight */
 
     /* Snap layout flyout */
     u32    hover_start_tick;
@@ -457,6 +476,18 @@ void gfx_clear(u32 color);
 void gfx_wallpaper_cache_invalidate(void);
 bool gfx_wallpaper_cache_blit(void);
 void gfx_wallpaper_cache_capture(void);
+/* Parallax variant of the cache blit: shifts the cached backdrop a few px
+ * opposite the cursor (edge-clamped) for depth, still one pass, no re-render. */
+bool gfx_wallpaper_parallax_blit(i32 cursor_x, i32 cursor_y);
+
+/* Desktop backdrop cache: the fully composited static chrome (wallpaper +
+ * frosted sidebar + widget panels). Those panels run a per-frame blur + soft
+ * shadow that dominated the frame; capturing the result once and blitting it
+ * lets interaction frames skip that work entirely. Invalidate whenever the
+ * chrome's content changes (theme, clock tick, hover). */
+void gfx_desktop_cache_invalidate(void);
+bool gfx_desktop_cache_blit(void);
+void gfx_desktop_cache_capture(void);
 
 void gfx_setpixel(i32 x, i32 y, u32 color);
 void gfx_hline(i32 x, i32 y, i32 len, u32 color);
@@ -490,12 +521,25 @@ void gfx_glass_panel_ex(i32 x, i32 y, i32 w, i32 h, i32 r, u32 tint, u8 alpha, i
 u32  cdl_ease_out(u32 elapsed_ms, u32 duration_ms);
 i32  cdl_lerp(i32 a, i32 b, u32 t256);
 
+/* Click ripples: spawn one at a point, draw+decay all, query if any animating. */
+void gfx_ripple(i32 x, i32 y, u32 color);
+void gfx_ripples_draw(void);
+bool gfx_ripples_active(void);
+
 /* ── Accent colour engine (drives primary/accent/selection theme-wide) ───── */
 void        theme_set_accent(u32 idx);
 u32         theme_get_accent(void);
 u32         theme_accent_count(void);
 const char *theme_accent_name(u32 idx);
 u32         theme_accent_swatch(u32 idx);
+/* Sample a vivid dominant colour from the active wallpaper (0xRRGGBB). Returns
+ * false if no wallpaper is loaded. Backs the "Auto" (Material-You) accent. */
+bool        wallpaper_dominant_color(u32 *out_rgb);
+
+/* ── Desktop widgets (gui/widgets.c) ─────────────────────────────────────── */
+void widgets_init(void);
+void widgets_draw(mouse_t *m);          /* desktop layer, behind windows */
+bool widgets_handle_mouse(mouse_t *m);  /* true if a widget consumed the click/drag */
 
 void gfx_char(i32 x, i32 y, char c, u32 fg, u32 bg);
 void gfx_str(i32 x, i32 y, const char *s, u32 fg, u32 bg);

@@ -106,24 +106,24 @@ static u16 ip_csum(const void *buf, u32 len){
 }
 
 static u16 pseudo_csum(u32 sip, u32 dip, u8 proto, const void *data, u16 dlen){
-    struct { u32 s, d; u8 z, p; u16 l; } ph;
-    ph.s = htonl32(sip);
-    ph.d = htonl32(dip);
-    ph.z = 0;
-    ph.p = proto;
-    ph.l = htons16(dlen);
-
+    /* Pseudo-header as an explicit 12-byte, network-order array. The previous
+     * version used an anonymous struct summed as u16 words, which produced a
+     * wrong checksum (packets silently dropped by the NAT). Byte-wise big-endian
+     * summing is unambiguous and matches how the receiver validates. */
     u32 s = 0;
-    const u16 *p = (const u16*)&ph;
-    for (u32 i = 0; i < sizeof(ph) / 2; i++) s += p[i];
+    u8 ph[12];
+    ph[0]=(u8)(sip>>24); ph[1]=(u8)(sip>>16); ph[2]=(u8)(sip>>8); ph[3]=(u8)sip;
+    ph[4]=(u8)(dip>>24); ph[5]=(u8)(dip>>16); ph[6]=(u8)(dip>>8); ph[7]=(u8)dip;
+    ph[8]=0; ph[9]=proto; ph[10]=(u8)(dlen>>8); ph[11]=(u8)dlen;
+    for (int i = 0; i < 12; i += 2) s += ((u32)ph[i] << 8) | ph[i+1];
 
-    p = (const u16*)data;
-    u32 n = dlen;
-    while (n > 1) { s += *p++; n -= 2; }
-    if (n) s += *(const u8*)p;
+    const u8 *b = (const u8*)data;
+    u32 i = 0, n = dlen;
+    while (n > 1) { s += ((u32)b[i] << 8) | b[i+1]; i += 2; n -= 2; }
+    if (n) s += (u32)b[i] << 8;
 
     while (s >> 16) s = (s & 0xffff) + (s >> 16);
-    return (u16)~s;
+    return htons16((u16)~s);   /* stored network-order into the checksum field */
 }
 
 void net_set_ip(u32 ip, u32 nm, u32 gw){
@@ -276,10 +276,26 @@ void ip_send(u32 dst, u8 proto, const u8 *data, u32 dlen){
 
     u8 *dst_mac = arp_lookup(nexthop);
     if (!dst_mac) {
+        /* Resolve ARP synchronously. The reply only lands when the NIC is
+         * polled, so pump it here (retrying the request) instead of a blind
+         * wait -- otherwise the first packet to any next-hop, e.g. the gateway
+         * for an outbound TCP SYN, is silently dropped. The guard avoids
+         * re-entering net_poll if we were called from inside RX processing. */
+        static bool in_arp_wait = false;
+        if (in_arp_wait) { arp_request(nexthop); return; }
+        in_arp_wait = true;
         arp_request(nexthop);
-        timer_wait(5);
-        dst_mac = arp_lookup(nexthop);
-        if (!dst_mac) return;
+        for (int t = 0; t < 40 && !dst_mac; t++) {
+            net_poll();
+            dst_mac = arp_lookup(nexthop);
+            if (dst_mac) break;
+            if ((t & 7) == 7) arp_request(nexthop);
+            timer_wait(5);
+        }
+        in_arp_wait = false;
+        if (!dst_mac) {
+            return;   /* ARP unresolved, drop */
+        }
     }
 
     u8 *f = tx_frame;
@@ -397,17 +413,32 @@ int sock_connect(int fd, u32 dip, u16 dp){
     s->remote_port = dp;
     s->seq = tcp_next_seq;
     tcp_next_seq += 0x1000;
+    u32 syn_seq = s->seq;          /* the SYN's sequence number */
     s->ack = 0;
     s->state = SOCK_SYN_SENT;
 
+    /* Send the SYN, and retransmit it periodically until the handshake
+     * completes. Reaching real servers through QEMU's NAT can round-trip well
+     * past the old 500 ms budget, and a single dropped SYN/SYN-ACK would
+     * otherwise fail the connect outright. tcp_flags() advances s->seq on a
+     * SYN, so restore syn_seq before each resend or the retransmit carries the
+     * wrong sequence number. Budget ~5 s. */
     tcp_flags(s, 0x02, NULL, 0);
-    u32 deadline = timer_get_ticks() + 500;
-    while (timer_get_ticks() < deadline) {
+    u32 start = timer_get_ticks();
+    u32 last  = start;
+    while (timer_get_ticks() - start < 5000) {
         net_poll();
         if (s->state == SOCK_ESTABLISHED) return 0;
+        u32 now = timer_get_ticks();
+        if (now - last >= 600 && s->state == SOCK_SYN_SENT) {
+            s->seq = syn_seq;
+            tcp_flags(s, 0x02, NULL, 0);
+            last = now;
+        }
         timer_wait(5);
     }
 
+    serial_write("[TCP] connect timeout\n");
     s->state = SOCK_CLOSED;
     return -1;
 }
@@ -435,6 +466,9 @@ int sock_recv(int fd, u8 *buf, u32 maxlen){
     if (fd < 0 || fd >= MAX_SOCKETS) return -1;
     socket_t *s = &sockets[fd];
 
+    /* Poll the NIC continuously (no hlt-sleep) so the RX descriptor ring is
+     * drained as fast as frames arrive. Sleeping between polls lets a burst of
+     * server frames overflow the ring and drop a segment, which stalls TLS. */
     u32 deadline = timer_get_ticks() + 2000;
     while (timer_get_ticks() < deadline) {
         net_poll();
@@ -450,7 +484,7 @@ int sock_recv(int fd, u8 *buf, u32 maxlen){
             }
             return (int)n;
         }
-        timer_wait(10);
+        __asm__ volatile ("pause");
     }
     return 0;
 }
@@ -513,15 +547,29 @@ void net_handle_frame(const u8 *frame, u32 len){
                 s->ack = htonl32(t->seq) + 1;
                 s->state = SOCK_ESTABLISHED;
                 tcp_flags(s, 0x10, NULL, 0);
-            } else if (s->state == SOCK_ESTABLISHED && (t->flags & 0x08)) {
-                u32 doff = (t->data_offset >> 4) * 4;
-                const u8 *td = pl + doff;
-                u32 tl = plen - doff;
-                if (tl > NET_BUF_SIZE - s->rx_len) tl = NET_BUF_SIZE - s->rx_len;
-                kmemcpy(s->rx_buf + s->rx_len, td, tl);
-                s->rx_len += tl;
-                s->ack = htonl32(t->seq) + tl;
-                tcp_flags(s, 0x10, NULL, 0);
+            } else if (s->state == SOCK_ESTABLISHED) {
+                /* Accept payload on ANY in-order segment, not just PSH ones --
+                 * servers frequently send TLS records without PSH set, and the
+                 * old PSH requirement dropped them. Only in-order data (seq ==
+                 * next expected) is taken; retransmits/out-of-order are ignored
+                 * and the sender retransmits. */
+                u32 doff    = (t->data_offset >> 4) * 4;
+                u32 seg_seq = htonl32(t->seq);
+                u32 tl      = (plen > doff) ? (plen - doff) : 0;
+                if (tl > 0) {
+                    if (seg_seq == s->ack) {
+                        if (tl > NET_BUF_SIZE - s->rx_len) tl = NET_BUF_SIZE - s->rx_len;
+                        kmemcpy(s->rx_buf + s->rx_len, pl + doff, tl);
+                        s->rx_len += tl;
+                        s->ack = seg_seq + tl;
+                    }
+                    tcp_flags(s, 0x10, NULL, 0);   /* cumulative ACK */
+                }
+                /* Server FIN: acknowledge so the close completes cleanly. */
+                if (t->flags & 0x01) {
+                    if (seg_seq == s->ack) s->ack = seg_seq + 1;
+                    tcp_flags(s, 0x10, NULL, 0);
+                }
             }
         }
     }
@@ -597,10 +645,27 @@ static int dns_query_a(const char *host, u32 *out){
     wr16(req + qoff + 0, 1);
     wr16(req + qoff + 2, 1);
 
+    /* Send the query and retransmit it if no reply arrives. UDP is lossy, and
+     * the very first packet after boot is frequently dropped while the DNS
+     * server's ARP entry is still being resolved (ip_send silently drops on an
+     * ARP miss). Without a resend the first lookup after boot always fails --
+     * which surfaced as intermittent "DNS lookup failed" in the browser even
+     * though the network was fine. TCP already survives this via its SYN
+     * retransmit; give DNS the same resilience. ~700 ms per try, up to 5 tries. */
     if (sock_send(fd, req, qoff + 4) <= 0) { sock_close(fd); return -1; }
 
     u8 resp[512];
-    int n = sock_recv(fd, resp, sizeof(resp));
+    int n = -1;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (attempt > 0 && sock_send(fd, req, qoff + 4) <= 0) break;
+        u32 deadline = timer_get_ticks() + 700;
+        while (timer_get_ticks() < deadline) {
+            net_poll();
+            if (s->rx_len > 0) { n = sock_recv(fd, resp, sizeof(resp)); break; }
+            timer_wait(5);
+        }
+        if (n >= 12) break;
+    }
     sock_close(fd);
     if (n < 12) return -1;
 
@@ -674,13 +739,16 @@ int dns_resolve(const char *host, u32 *out){
         return 0;
     }
 
-    /* Built-in fallback map */
+    /* Real DNS first -- the NIC works now, so query the resolver rather than
+     * trusting a static table. The old public entries (example.com, google.com)
+     * were removed: they had become stale addresses that overrode live DNS and
+     * pointed at dead servers. */
+    if (dns_query_a(host, out) == 0) return 0;
+
+    /* Fallback only for local / special names when DNS is unavailable. */
     struct { const char *n; u32 ip; } known[] = {
         {"localhost", 0x7f000001u},
-        {"example.com", (93u<<24)|(184u<<16)|(216u<<8)|34u},
-        {"google.com",  (142u<<24)|(250u<<16)|(72u<<8)|14u},
-        {"www.google.com",  (142u<<24)|(250u<<16)|(72u<<8)|4u},
-        {"careos.dev",  (192u<<24)|(168u<<16)|(1u<<8)|1u},
+        {"careos.dev", (192u<<24)|(168u<<16)|(1u<<8)|1u},
         {NULL, 0}
     };
     for (int i = 0; known[i].n; i++)
@@ -689,7 +757,6 @@ int dns_resolve(const char *host, u32 *out){
             return 0;
         }
 
-    if (dns_query_a(host, out) == 0) return 0;
     return -1;
 }
 

@@ -36,6 +36,31 @@ static const app_id_t pinned_apps[] = {
 
 static u32 slot_click_tick[32] = {0};
 
+/* ---- Dock folder / stack -------------------------------------------------
+ * A single dock tile that groups the "extra" built-in apps -- everything that
+ * is NOT in pinned_apps[]. Clicking the tile toggles a frosted popover grid
+ * above the dock; clicking a cell launches that app the same way the desktop
+ * does. All state, draw and input for the popover live in this file (the two
+ * dock entry points taskbar_draw / taskbar_handle_mouse) so it coexists with
+ * the pinned slots, magnification, glass and running dots unchanged. */
+static const app_id_t folder_apps[] = {
+    APP_SYSMON, APP_CALC, APP_PAINT, APP_CLOCK, APP_NETMON, APP_USERS,
+    APP_PKGMGR, APP_ABOUT, APP_HELP, APP_MAZE, APP_3D, APP_DOOM
+};
+#define FOLDER_COUNT ((i32)(sizeof(folder_apps) / sizeof(folder_apps[0])))
+
+/* Popover open/closed (file-static, mirrors launcher_open). */
+static bool folder_open = false;
+
+/* Popover grid geometry (integer only). */
+#define FLD_COLS     4
+#define FLD_CELL_W   84
+#define FLD_CELL_H   76
+#define FLD_ICON     40
+#define FLD_PAD      14
+#define FLD_GAP       6
+#define FLD_HEADER   26
+
 static const char *taskbar_app_name(app_id_t app) {
     switch (app) {
         case APP_TERMINAL: return "Terminal";
@@ -51,6 +76,11 @@ static const char *taskbar_app_name(app_id_t app) {
         case APP_NETMON:   return "NetMon";
         case APP_USERS:    return "Users";
         case APP_PKGMGR:   return "Packages";
+        case APP_ABOUT:    return "About";
+        case APP_HELP:     return "Help";
+        case APP_MAZE:     return "Maze";
+        case APP_3D:       return "3D";
+        case APP_DOOM:     return "Doom";
         default:           return "App";
     }
 }
@@ -69,6 +99,7 @@ typedef struct {
     rect_t       dock_rect;
     rect_t       launcher_rect;
     rect_t       showdesk_rect;
+    rect_t       folder_rect;   /* the "Apps" stack tile (always present) */
     dock_slot_t  slots[DOCK_SLOT_MAX];
     i32          slot_count;
 } dock_layout_t;
@@ -94,6 +125,11 @@ static u32 slot_color(app_id_t app) {
     case APP_NETMON:   return rgb(0x22, 0xd3, 0xee);
     case APP_USERS:    return rgb(0xfb, 0x92, 0x3c);
     case APP_PKGMGR:   return rgb(0x06, 0xb6, 0xd4);
+    case APP_ABOUT:    return rgb(0x60, 0xa5, 0xfa);
+    case APP_HELP:     return rgb(0x34, 0xd3, 0x99);
+    case APP_MAZE:     return rgb(0xf4, 0x72, 0xb6);
+    case APP_3D:       return rgb(0xa7, 0x8b, 0xfa);
+    case APP_DOOM:     return rgb(0xef, 0x44, 0x44);
     default:           return rgb(0x8a, 0x99, 0xba);
     }
 }
@@ -146,10 +182,14 @@ static void dock_build_layout(dock_layout_t *L) {
         s->win    = w;
     }
 
-    /* ---- Compute geometry ---- */
-    i32 n    = L->slot_count;
-    i32 sep  = (n > 0) ? DOCK_SEP_W + DOCK_ICON_GAP : 0;
-    i32 apps_w = n * (DOCK_ICON_W + DOCK_ICON_GAP) - (n > 0 ? DOCK_ICON_GAP : 0);
+    /* ---- Compute geometry ----
+     * The folder tile is always present and sits after the app slots, so the
+     * separator after the launcher is always drawn and the app area always has
+     * (slot_count + 1) tiles. */
+    i32 n     = L->slot_count;
+    i32 tiles = n + 1;                          /* +1 for the folder stack */
+    i32 sep   = DOCK_SEP_W + DOCK_ICON_GAP;     /* always present now */
+    i32 apps_w = tiles * (DOCK_ICON_W + DOCK_ICON_GAP) - DOCK_ICON_GAP;
     i32 dock_w = DOCK_PAD_X + DOCK_LAUNCHER_W + sep + apps_w + DOCK_PAD_X;
 
     i32 dock_h  = TASKBAR_H;
@@ -163,16 +203,50 @@ static void dock_build_layout(dock_layout_t *L) {
     i32 ly = dock_y + (dock_h - DOCK_ICON_H) / 2;
     L->launcher_rect = rect_make(lx, ly, DOCK_LAUNCHER_W, DOCK_ICON_H);
 
-    /* App slots */
-    i32 slot_x = lx + DOCK_LAUNCHER_W + (n > 0 ? DOCK_SEP_W + DOCK_ICON_GAP : 0);
+    /* App slots (separator always present because the folder tile follows) */
+    i32 slot_x = lx + DOCK_LAUNCHER_W + DOCK_SEP_W + DOCK_ICON_GAP;
     i32 slot_y = dock_y + (dock_h - DOCK_ICON_H) / 2;
     for (int i = 0; i < n; i++) {
         L->slots[i].rect = rect_make(slot_x, slot_y, DOCK_ICON_W, DOCK_ICON_H);
         slot_x += DOCK_ICON_W + DOCK_ICON_GAP;
     }
 
+    /* Folder / stack tile sits at the end of the app area. slot_x now points at
+     * the next tile position, so this is its base (unmagnified) click rect. */
+    L->folder_rect = rect_make(slot_x, slot_y, DOCK_ICON_W, DOCK_ICON_H);
+
     /* Show-desktop nub */
     L->showdesk_rect = rect_make(sw - DOCK_SHOW_DESK_W - 4, dock_y, DOCK_SHOW_DESK_W, dock_h);
+}
+
+/* ---- Folder popover geometry --------------------------------------------
+ * Both taskbar_draw() and taskbar_handle_mouse() derive the popover panel and
+ * each app cell from these two pure helpers, so the drawn cells and the hit
+ * rects are identical -- clicks never drift from the visuals. Rects are based
+ * on the real folder_rect from dock_build_layout(), not any magnified size. */
+static rect_t folder_panel_rect(rect_t folder_rect, rect_t dock_rect) {
+    i32 rows = (FOLDER_COUNT + FLD_COLS - 1) / FLD_COLS;
+    i32 pw = FLD_PAD * 2 + FLD_COLS * FLD_CELL_W + (FLD_COLS - 1) * FLD_GAP;
+    i32 ph = FLD_PAD * 2 + FLD_HEADER + rows * FLD_CELL_H + (rows - 1) * FLD_GAP;
+
+    /* Centre horizontally over the folder tile, clamp inside the screen. */
+    i32 fcx = folder_rect.x + folder_rect.w / 2;
+    i32 px  = fcx - pw / 2;
+    if (px < 8) px = 8;
+    if (px + pw > (i32)SCREEN_W - 8) px = (i32)SCREEN_W - 8 - pw;
+
+    /* Float above the dock. */
+    i32 py = dock_rect.y - ph - 12;
+    if (py < 8) py = 8;
+    return rect_make(px, py, pw, ph);
+}
+
+static rect_t folder_cell_rect(rect_t panel, i32 i) {
+    i32 col = i % FLD_COLS;
+    i32 row = i / FLD_COLS;
+    i32 cx = panel.x + FLD_PAD + col * (FLD_CELL_W + FLD_GAP);
+    i32 cy = panel.y + FLD_PAD + FLD_HEADER + row * (FLD_CELL_H + FLD_GAP);
+    return rect_make(cx, cy, FLD_CELL_W, FLD_CELL_H);
 }
 
 /* ---- Draw ---------------------------------------------------------------- */
@@ -205,8 +279,8 @@ void taskbar_draw(void) {
         }
     }
 
-    /* ---- Separator ---- */
-    if (L.slot_count > 0) {
+    /* ---- Separator (always present: launcher | apps + folder) ---- */
+    {
         i32 sep_x = lr.x + lr.w + DOCK_ICON_GAP / 2;
         gfx_rect(sep_x, dr.y + DOCK_PAD_H, DOCK_SEP_W,
                  dr.h - DOCK_PAD_H * 2, COL_BORDER);
@@ -280,6 +354,47 @@ void taskbar_draw(void) {
         }
     }
 
+    /* ---- Folder / stack tile ----
+     * Participates in magnification exactly like the app slots (same baseline
+     * anchor + linear falloff), but is drawn as a distinct rounded button with
+     * a 2x2 mini-grid of the first contained icons so it reads as a stack. Its
+     * click rect stays L.folder_rect (the base layout), never the magnified
+     * size, so hit-testing in taskbar_handle_mouse() stays exact. */
+    {
+        rect_t fr = L.folder_rect;
+        i32 cx          = fr.x + fr.w / 2;
+        i32 base_bottom = fr.y + (fr.h - DOCK_ICON_BASE) / 2 + DOCK_ICON_BASE;
+
+        i32 size = DOCK_ICON_BASE;
+        if (mag_active) {
+            i32 dist = g_dock_mouse_x - cx;
+            if (dist < 0) dist = -dist;
+            if (dist < DOCK_MAG_RANGE)
+                size += (DOCK_MAG_EXTRA * (DOCK_MAG_RANGE - dist)) / DOCK_MAG_RANGE;
+        }
+
+        i32 tx = cx - size / 2;
+        i32 ty = base_bottom - size;
+
+        /* Distinct rounded tile background (highlighted while open). */
+        u32 fbg = folder_open ? COL_PRIMARY : COL_SURFACE2;
+        gfx_rect_rounded(tx, ty, size, size, CDL_R_BUTTON, fbg);
+        if (folder_open)
+            gfx_rect_blend(tx, ty, size, size, COL_WHITE, 30);
+        gfx_rect_rounded_outline(tx, ty, size, size, CDL_R_BUTTON, COL_BORDER);
+
+        /* 2x2 mini-grid of the first contained icons -> reads as a "stack". */
+        i32 pad  = size / 6;
+        i32 mini = (size - pad * 3) / 2;
+        if (mini < 4) mini = 4;
+        for (int g = 0; g < 4 && g < FOLDER_COUNT; g++) {
+            i32 gc = g % 2, gr = g / 2;
+            i32 mx = tx + pad + gc * (mini + pad);
+            i32 my = ty + pad + gr * (mini + pad);
+            icon_draw_app(folder_apps[g], mx, my, mini, slot_color(folder_apps[g]));
+        }
+    }
+
     /* Draw tooltips after everything so they're on top */
     for (int i = 0; i < L.slot_count; i++) {
         dock_slot_t *s = &L.slots[i];
@@ -296,10 +411,52 @@ void taskbar_draw(void) {
         }
     }
 
+    /* Folder tile tooltip (only when the popover is closed). */
+    if (!folder_open && rect_contains(L.folder_rect, g_dock_mouse_x, g_dock_mouse_y)) {
+        const char *name = "Apps";
+        i32 tw = gfx_str_width_ex(name, FONT_BODY) + 16;
+        i32 th = gfx_line_h_ex(FONT_BODY) + 8;
+        i32 tx = L.folder_rect.x + L.folder_rect.w / 2 - tw / 2;
+        i32 ty = L.folder_rect.y - th - 12;
+        gfx_shadow_soft(tx, ty, tw, th, 6);
+        gfx_glass_panel(tx, ty, tw, th, 6);
+        gfx_str_centered(tx, ty, tw, name, COL_TEXT, COL_TRANSPARENT);
+    }
+
     /* ---- Show-desktop nub (right edge, subtle line) ---- */
     i32 nd_x = (i32)SCREEN_W - DOCK_SHOW_DESK_W - 2;
     gfx_vline(nd_x, L.dock_rect.y + DOCK_PAD_H,
               L.dock_rect.h - DOCK_PAD_H * 2, COL_BORDER);
+
+    /* ---- Folder popover (drawn last so it floats above the dock) ----
+     * Frosted card (soft shadow + glass) with a titled grid of the contained
+     * apps. Each cell = colour icon + caption; the hovered cell gets a filled
+     * hover chip and an accent outline. Cell rects come from folder_cell_rect()
+     * -- the exact rects hit-tested in taskbar_handle_mouse(). */
+    if (folder_open) {
+        rect_t panel = folder_panel_rect(L.folder_rect, L.dock_rect);
+        gfx_shadow_soft(panel.x, panel.y, panel.w, panel.h, CDL_R_CARD);
+        gfx_glass_panel(panel.x, panel.y, panel.w, panel.h, CDL_R_CARD);
+
+        /* Header label. */
+        gfx_str_ex(panel.x + FLD_PAD, panel.y + 6, "Apps",
+                   COL_TEXT, COL_TRANSPARENT, FONT_H3);
+
+        for (int i = 0; i < FOLDER_COUNT; i++) {
+            rect_t c = folder_cell_rect(panel, i);
+            bool hov = rect_contains(c, g_dock_mouse_x, g_dock_mouse_y);
+            if (hov) {
+                gfx_rect_rounded(c.x, c.y, c.w, c.h, CDL_R_BUTTON, COL_HOVER);
+                gfx_rect_rounded_outline(c.x, c.y, c.w, c.h, CDL_R_BUTTON, COL_ACCENT);
+            }
+            i32 ix = c.x + (c.w - FLD_ICON) / 2;
+            i32 iy = c.y + 10;
+            icon_draw_app(folder_apps[i], ix, iy, FLD_ICON, slot_color(folder_apps[i]));
+            gfx_str_centered_ex(c.x, iy + FLD_ICON + 4, c.w,
+                                taskbar_app_name(folder_apps[i]),
+                                COL_TEXT, COL_TRANSPARENT, FONT_CAPTION);
+        }
+    }
 }
 
 /* ---- Mouse handling ------------------------------------------------------ */
@@ -313,10 +470,40 @@ void taskbar_handle_mouse(mouse_t *m) {
 
     /* Show-desktop nub */
     i32 nd_x = (i32)SCREEN_W - DOCK_SHOW_DESK_W - 2;
-    if (m->x >= nd_x) { wm_minimize_all(); return; }
+    if (m->x >= nd_x) { folder_open = false; wm_minimize_all(); return; }
 
     dock_layout_t L;
     dock_build_layout(&L);
+
+    /* ---- Folder popover: while open it owns the click (it floats above the
+     * dock, so it is hit-tested before the dock's vertical bounds check). Cell
+     * rects are the exact rects drawn by taskbar_draw(). ---- */
+    if (folder_open) {
+        rect_t panel = folder_panel_rect(L.folder_rect, L.dock_rect);
+
+        /* Click an app cell -> launch it (desktop_handle_mouse style) + close. */
+        for (int i = 0; i < FOLDER_COUNT; i++) {
+            if (!rect_contains(folder_cell_rect(panel, i), m->x, m->y)) continue;
+            app_id_t app = folder_apps[i];
+            i32 sw = (i32)SCREEN_W, sh = (i32)SCREEN_H;
+            i32 ww, wh;
+            app_default_size(app, sw, sh, &ww, &wh);
+            i32 avail_x = SIDEBAR_W + 8;
+            i32 cx = avail_x + (sw - avail_x - ww) / 2;
+            if (cx < avail_x) cx = avail_x;
+            wm_open(app, taskbar_app_name(app), cx, (sh - wh) / 2 - 10, ww, wh);
+            slot_click_tick[app] = timer_get_ticks();
+            folder_open = false;
+            return;
+        }
+
+        /* Click elsewhere inside the panel: keep it open, swallow the click. */
+        if (rect_contains(panel, m->x, m->y)) return;
+
+        /* Click outside the panel (including the folder tile again): close it. */
+        folder_open = false;
+        return;
+    }
 
     /* Must be inside dock vertically */
     if (m->y < L.dock_rect.y || m->y >= L.dock_rect.y + L.dock_rect.h) return;
@@ -324,6 +511,14 @@ void taskbar_handle_mouse(mouse_t *m) {
     /* Launcher */
     if (rect_contains(L.launcher_rect, m->x, m->y)) {
         launcher_open = !launcher_open;
+        folder_open   = false;
+        return;
+    }
+
+    /* Folder / stack tile: open the popover. */
+    if (rect_contains(L.folder_rect, m->x, m->y)) {
+        folder_open   = true;
+        launcher_open = false;
         return;
     }
 

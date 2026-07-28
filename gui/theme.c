@@ -89,24 +89,68 @@ static const accent_t ACCENTS[] = {
     { "Red",    rgb(0xff,0x5f,0x57), rgb(0xff,0x90,0x89), rgb(0xc0,0x39,0x2b),
                 rgb(0xdc,0x4c,0x4c), rgb(0xff,0x5f,0x57), rgb(0xc0,0x39,0x2b) },
 };
-#define ACCENT_COUNT ((u32)(sizeof(ACCENTS) / sizeof(ACCENTS[0])))
+/* Fixed accents, plus one trailing "Auto" slot that pulls its colour from the
+ * wallpaper (Material-You style). ACCENT_DYNAMIC is that last index. */
+#define ACCENT_STATIC  ((u32)(sizeof(ACCENTS) / sizeof(ACCENTS[0])))
+#define ACCENT_DYNAMIC ACCENT_STATIC
 
-static u32 g_accent_idx = 0;
+static u32  g_accent_idx = 0;
+static u32  g_dyn_color  = rgb(0x55, 0x9a, 0xff);   /* last extracted / fallback */
+static bool g_dyn_valid  = false;
+
+/* Blend c toward t (white/black) by amt (0..255), and lift a dim colour so an
+ * accent pulled from a dark wallpaper still reads on dark surfaces. */
+static u32 mix(u32 c, u32 t, u32 amt) {
+    u32 inv = 255 - amt;
+    u32 r = (((c >> 16) & 0xFF) * inv + ((t >> 16) & 0xFF) * amt) / 255;
+    u32 g = (((c >>  8) & 0xFF) * inv + ((t >>  8) & 0xFF) * amt) / 255;
+    u32 b = (( c        & 0xFF) * inv + ( t        & 0xFF) * amt) / 255;
+    return (r << 16) | (g << 8) | b;
+}
+static u32 ensure_bright(u32 c) {
+    u32 r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+    u32 mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    if (mx >= 140 || mx == 0) return c;
+    u32 sc = 140u * 255u / mx;
+    r = r * sc / 255; if (r > 255) r = 255;
+    g = g * sc / 255; if (g > 255) g = 255;
+    b = b * sc / 255; if (b > 255) b = 255;
+    return (r << 16) | (g << 8) | b;
+}
+
+static void apply_dynamic(void) {
+    u32 c;
+    if (wallpaper_dominant_color(&c)) { g_dyn_color = c; g_dyn_valid = true; }
+    u32 base = ensure_bright(g_dyn_valid ? g_dyn_color : ACCENTS[0].d_primary);
+    theme_dark.primary    = base;
+    theme_dark.accent     = mix(base, 0xFFFFFF, 90);
+    theme_dark.selection  = mix(base, 0x000000, 110);
+    theme_light.primary   = mix(base, 0x000000, 60);
+    theme_light.accent    = base;
+    theme_light.selection = mix(base, 0x000000, 40);
+}
 
 void theme_set_accent(u32 idx) {
-    if (idx >= ACCENT_COUNT) idx = 0;
+    if (idx > ACCENT_DYNAMIC) idx = 0;
     g_accent_idx = idx;
-    const accent_t *a = &ACCENTS[idx];
-    theme_dark.primary   = a->d_primary;
-    theme_dark.accent    = a->d_accent;
-    theme_dark.selection = a->d_selection;
-    theme_light.primary   = a->l_primary;
-    theme_light.accent    = a->l_accent;
-    theme_light.selection = a->l_selection;
+    if (idx == ACCENT_DYNAMIC) {
+        apply_dynamic();
+    } else {
+        const accent_t *a = &ACCENTS[idx];
+        theme_dark.primary   = a->d_primary;
+        theme_dark.accent    = a->d_accent;
+        theme_dark.selection = a->d_selection;
+        theme_light.primary   = a->l_primary;
+        theme_light.accent    = a->l_accent;
+        theme_light.selection = a->l_selection;
+    }
     gfx_wallpaper_cache_invalidate();
 }
 
 u32         theme_get_accent(void)        { return g_accent_idx; }
-u32         theme_accent_count(void)       { return ACCENT_COUNT; }
-const char *theme_accent_name(u32 idx)     { return ACCENTS[idx < ACCENT_COUNT ? idx : 0].name; }
-u32         theme_accent_swatch(u32 idx)   { return ACCENTS[idx < ACCENT_COUNT ? idx : 0].d_primary; }
+u32         theme_accent_count(void)       { return ACCENT_STATIC + 1u; }   /* + Auto */
+const char *theme_accent_name(u32 idx)     { return idx >= ACCENT_STATIC ? "Auto" : ACCENTS[idx].name; }
+u32         theme_accent_swatch(u32 idx)   {
+    if (idx >= ACCENT_STATIC) return g_dyn_valid ? g_dyn_color : rgb(0x8a, 0x99, 0xba);
+    return ACCENTS[idx].d_primary;
+}

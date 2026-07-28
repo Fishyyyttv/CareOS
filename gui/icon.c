@@ -304,6 +304,52 @@ bool wallpaper_draw(i32 x, i32 y, i32 w, i32 h) {
     return true;
 }
 
+/* Pull a vivid, representative colour out of the active wallpaper for the "Auto"
+ * accent. A plain average of a photo trends muddy brown-grey, so this weights
+ * each sampled pixel by saturation*value (colourful, bright pixels dominate),
+ * skips near-greys and near-blacks/whites, then mixes the weighted mean toward
+ * the single most-vivid sample so the result stays punchy. Integer only. */
+bool wallpaper_dominant_color(u32 *out_rgb) {
+    if (!out_rgb) return false;
+    const careos_settings_t *cfg = settings_get();
+    i32 slot = cfg ? (i32)cfg->wallpaper : 0;
+    if (slot < 0 || slot >= WALLPAPER_SLOTS) slot = 0;
+
+    image_t *img = (wallpaper_slot == slot && wallpaper_img)
+                 ? wallpaper_img : wallpaper_load((u32)slot);
+    if (!img || !img->pixels || !img->width || !img->height) return false;
+
+    u32 n = img->width * img->height;
+    u32 step = n / 8000u; if (step < 1u) step = 1u;   /* ~8k samples, plenty */
+
+    u64 wr = 0, wg = 0, wb = 0, wtot = 0;
+    u32 best_w = 0, best_c = 0;
+    for (u32 i = 0; i < n; i += step) {
+        u32 px = img->pixels[i];
+        u32 r = (px >> 16) & 0xFF, g = (px >> 8) & 0xFF, b = px & 0xFF;
+        u32 mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        u32 mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        u32 sat = mx - mn, val = mx;
+        if (sat < 24 || val < 48 || (val > 244 && sat < 40)) continue;
+        u32 wt = sat * val;                 /* colourful AND bright wins */
+        wr += (u64)r * wt; wg += (u64)g * wt; wb += (u64)b * wt; wtot += wt;
+        if (wt > best_w) { best_w = wt; best_c = px & 0xFFFFFF; }
+    }
+    if (wtot == 0) {
+        if (best_w == 0) return false;      /* wallpaper is essentially grey */
+        *out_rgb = best_c;
+        return true;
+    }
+    u32 ar = (u32)(wr / wtot), ag = (u32)(wg / wtot), ab = (u32)(wb / wtot);
+    /* Mix 45% toward the most-vivid sample to keep the hue lively. */
+    u32 br = (best_c >> 16) & 0xFF, bg = (best_c >> 8) & 0xFF, bb = best_c & 0xFF;
+    ar = (ar * 55 + br * 45) / 100;
+    ag = (ag * 55 + bg * 45) / 100;
+    ab = (ab * 55 + bb * 45) / 100;
+    *out_rgb = (ar << 16) | (ag << 8) | ab;
+    return true;
+}
+
 image_t *wallpaper_thumb(u32 slot) {
     if (slot >= WALLPAPER_SLOTS) return NULL;
     char buf[FS_PATH_MAX];

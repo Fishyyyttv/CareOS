@@ -92,6 +92,17 @@ void app_settings_draw(window_t *w){
     gfx_str(cx, cy + h1_h + 2, "Changes apply immediately and are saved to disk", COL_DIM, COL_TRANSPARENT);
     cy = settings_content_top(cr);
 
+    /* Scroll the tab content (not the sidebar, heading, or status bar). Only the
+     * tall tabs (Display, Personalize) can overflow; the short ones stay pinned.
+     * Content is clipped to the viewport so scrolled rows never overlap the
+     * heading or status line. */
+    if (w->settings_tab == 0 || w->settings_tab >= 3) w->scroll = 0;
+    else if (w->scroll > 640) w->scroll = 640;
+    i32 content_top = cy;
+    cy -= (i32)w->scroll;
+    gfx_set_clip(cr.x + sb + 1, content_top, cr.w - sb - 2,
+                 (cr.y + cr.h - 44) - content_top);
+
     switch (w->settings_tab) {
     case 0: {
         textinput_t old_box, new_box;
@@ -352,6 +363,7 @@ void app_settings_draw(window_t *w){
     }
     }
 
+    gfx_clear_clip();
     gfx_rect_rounded(cx, cr.y + cr.h - 38, cw, 24, 8, COL_SURFACE2);
     gfx_str_clipped(cx + 10, cr.y + cr.h - 31, cw - 20, w->settings_status,
         w->settings_status_color ? w->settings_status_color : COL_DIM, COL_TRANSPARENT);
@@ -414,9 +426,13 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
     if (x < cr.x + sb) {
         i32 tab_h = 24 + 10 * sc;
         int idx = (y - (cr.y + (30 + 50 * sc))) / (tab_h + 12);
-        if (idx >= 0 && idx < 5) w->settings_tab = (u32)idx;
+        if (idx >= 0 && idx < 5) { w->settings_tab = (u32)idx; w->scroll = 0; }
         return;
     }
+
+    /* Shift content hit-testing by the same scroll offset the draw applied. */
+    if (w->settings_tab == 0 || w->settings_tab >= 3) w->scroll = 0;
+    cy -= (i32)w->scroll;
 
     switch (w->settings_tab) {
     case 0: {

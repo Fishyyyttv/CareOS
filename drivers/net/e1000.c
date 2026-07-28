@@ -71,14 +71,20 @@
 #define E1000_RXD_STAT_EOP 0x02  /* end of packet */
 
 /* ── Descriptor structures ──────────────────────────────────────────────────── */
-#define TX_DESC_COUNT 8
-#define RX_DESC_COUNT 8
+#define TX_DESC_COUNT 16
+#define RX_DESC_COUNT 64   /* deep enough to absorb a full TLS flight burst
+                            * between poll cycles (faster hypervisors such as
+                            * VirtualBox deliver the server handshake as one
+                            * tight burst that would overflow a small ring) */
 #define RX_BUF_SIZE   2048
 
 typedef struct {
     u64 addr;        /* buffer physical address */
     u16 length;
-    u16 cso;
+    u8  cso;         /* MUST be 1 byte: the legacy TX descriptor is exactly 16
+                      * bytes. A u16 here made it 17, misaligning the ring so the
+                      * NIC read cmd/status from the wrong offset and transmitted
+                      * nothing. */
     u8  cmd;
     u8  status;
     u8  css;
@@ -98,8 +104,8 @@ typedef struct {
 static volatile u8 *e1000_mmio = NULL;
 static bool         e1000_up   = false;
 
-static tx_desc_t tx_descs[TX_DESC_COUNT] __attribute__((aligned(16)));
-static rx_desc_t rx_descs[RX_DESC_COUNT] __attribute__((aligned(16)));
+static tx_desc_t tx_descs[TX_DESC_COUNT] __attribute__((aligned(128)));
+static rx_desc_t rx_descs[RX_DESC_COUNT] __attribute__((aligned(128)));
 static u8        tx_bufs[TX_DESC_COUNT][2048] __attribute__((aligned(16)));
 static u8        rx_bufs[RX_DESC_COUNT][RX_BUF_SIZE] __attribute__((aligned(16)));
 static u32       tx_tail = 0;
@@ -192,14 +198,16 @@ extern void net_handle_frame(const u8 *frame, u32 len);
 void e1000_poll(void) {
     if (!e1000_up) return;
 
-    for (u32 i = 0; i < RX_DESC_COUNT; i++) {
-        u32 idx = (rx_tail + 1 + i) % RX_DESC_COUNT;
+    /* Walk the ring one descriptor at a time from rx_tail+1. The old loop
+     * recomputed the index from a rx_tail it was mutating AND added the loop
+     * counter, so it skipped descriptors -- early frames got through, later
+     * ones (e.g. TCP SYN-ACKs) landed on skipped slots and were never seen. */
+    for (u32 processed = 0; processed < RX_DESC_COUNT; processed++) {
+        u32 idx = (rx_tail + 1) % RX_DESC_COUNT;
         rx_desc_t *d = &rx_descs[idx];
         if (!(d->status & E1000_RXD_STAT_DD)) break;
-        if (d->status & E1000_RXD_STAT_EOP) {
+        if (d->status & E1000_RXD_STAT_EOP)
             net_handle_frame(rx_bufs[idx], d->length);
-        }
-        /* Give the descriptor back */
         d->status = 0;
         rx_tail   = idx;
         e1000_wr(E1000_RDT, rx_tail);
@@ -212,16 +220,31 @@ bool      e1000_is_up(void)   { return e1000_up; }
 
 /* ── Initialise ─────────────────────────────────────────────────────────────── */
 void e1000_init(void) {
-    /* Find PCI device */
-    pci_device_t *dev = pci_find_device(0x8086, 0x100E);
+    /* Find the NIC. QEMU, VirtualBox and VMware all emulate an Intel 8254x
+     * (e1000) family controller, but the exact device id depends on which
+     * adapter model the VM is configured for -- VirtualBox alone offers
+     * 82540EM (0x100E), 82543GC (0x1004) and 82545EM (0x100F). Picking a
+     * non-default adapter used to leave the guest with no NIC (and DNS failing
+     * on every lookup) because only 0x100E/0x100F were recognised. Try the
+     * common ids, then fall back to ANY Intel Ethernet-class controller so all
+     * of these adapter choices work. */
+    static const u16 e1000_ids[] = {
+        0x100E, 0x100F, 0x1004, 0x10D3, 0x1015, 0x1016,
+        0x1017, 0x1010, 0x1026, 0x1027, 0x1028, 0x1019
+    };
+    pci_device_t *dev = NULL;
+    for (u32 i = 0; i < sizeof(e1000_ids)/sizeof(e1000_ids[0]) && !dev; i++)
+        dev = pci_find_device(0x8086, e1000_ids[i]);
     if (!dev) {
-        /* Try 82540EM (another common QEMU e1000 DID) */
-        dev = pci_find_device(0x8086, 0x100F);
+        pci_device_t *eth = pci_find_class(0x02, 0x00);   /* network / ethernet */
+        if (eth && eth->vendor_id == 0x8086) dev = eth;
     }
     if (!dev) {
-        serial_write("[e1000] not found on PCI bus\n");
+        serial_write("[e1000] no Intel NIC found on PCI bus\n");
         return;
     }
+    { char b[8]; serial_write("[e1000] using did=0x");
+      kutoa(dev->device_id, b, 16); serial_write(b); serial_write("\n"); }
 
     /* BAR0 = MMIO base (bit 0 clear = memory-mapped) */
     u32 bar0 = dev->bar[0] & ~0xF;

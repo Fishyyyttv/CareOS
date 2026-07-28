@@ -1,59 +1,97 @@
 /* CareOS v9 -- apps/app_terminal.c -- Terminal application */
 #include "apps_common.h"
 
-/* -- Terminal Themes & Customization -------------------------------------- */
+/* -- Terminal Themes & Customization --------------------------------------
+ * Each theme carries its own foreground so text stays legible on its own
+ * background (important for the Light theme). Colours are integer rgb()
+ * literals from well-known palettes -- no floating point, no heap. */
 typedef struct {
     const char *name;
-    u32 bg;
-    u32 text;
-    u32 prompt;
-    u32 input_bg;
-    u32 cursor;
-    u32 border;
+    u32 bg;       /* terminal background            */
+    u32 text;     /* primary output text            */
+    u32 dim;      /* dimmed / secondary text         */
+    u32 prompt;   /* prompt + accent colour          */
+    u32 input_bg; /* input-bar background            */
+    u32 cursor;   /* blinking cursor / selection     */
+    u32 border;   /* divider between output & input  */
 } term_theme_t;
 
 static const term_theme_t g_term_themes[] = {
     {
-        "Monokai",
-        rgb(0x27, 0x28, 0x22), /* Dark Charcoal/Olive */
-        rgb(0xf8, 0xf8, 0xf2), /* Text */
-        rgb(0xa6, 0xe2, 0x2e), /* Monokai Green Prompt */
-        rgb(0x1e, 0x1f, 0x1c), /* Input BG */
-        rgb(0xf9, 0x26, 0x72), /* Monokai Pink Cursor */
-        rgb(0x3e, 0x3d, 0x32)  /* Border */
+        "CareOS Dark",         /* default -- CareOS house palette */
+        rgb(0x14, 0x16, 0x1e), /* Deep slate background   */
+        rgb(0xe4, 0xe7, 0xef), /* Off-white text          */
+        rgb(0x7c, 0x83, 0x96), /* Muted slate dim         */
+        rgb(0x5c, 0xc8, 0xf0), /* CareOS cyan accent      */
+        rgb(0x1c, 0x1f, 0x2b), /* Input BG                */
+        rgb(0x8b, 0xe0, 0xa4), /* Mint cursor             */
+        rgb(0x2a, 0x2e, 0x3c)  /* Border                  */
     },
     {
-        "Dracula",
-        rgb(0x28, 0x2a, 0x36), /* Dark Blue-Gray */
-        rgb(0xf8, 0xf8, 0xf2), /* Bright Text */
-        rgb(0x50, 0xfa, 0x7b), /* Dracula Green Prompt */
-        rgb(0x21, 0x22, 0x2c), /* Input BG */
-        rgb(0xff, 0x79, 0xc6), /* Dracula Pink Cursor */
-        rgb(0x44, 0x47, 0x5a)  /* Border */
+        "Solarized Dark",      /* Ethan Schoonover Solarized */
+        rgb(0x00, 0x2b, 0x36), /* Base03 background       */
+        rgb(0x83, 0x94, 0x96), /* Base0 text              */
+        rgb(0x58, 0x6e, 0x75), /* Base01 dim              */
+        rgb(0x85, 0x99, 0x00), /* Green prompt            */
+        rgb(0x07, 0x36, 0x42), /* Base02 input BG         */
+        rgb(0x2a, 0xa1, 0x98), /* Cyan cursor             */
+        rgb(0x58, 0x6e, 0x75)  /* Base01 border           */
     },
     {
-        "Nord",
-        rgb(0x2e, 0x34, 0x40), /* Nord Dark Blue */
-        rgb(0xd8, 0xde, 0xe9), /* Nord Ice Text */
-        rgb(0xa3, 0xbe, 0x8c), /* Nord Green Prompt */
-        rgb(0x24, 0x29, 0x33), /* Input BG */
-        rgb(0x88, 0xc0, 0xd0), /* Nord Frost Cyan Cursor */
-        rgb(0x4c, 0x56, 0x6a)  /* Border */
+        "Nord",                /* Arctic, north-bluish     */
+        rgb(0x2e, 0x34, 0x40), /* Polar Night bg           */
+        rgb(0xd8, 0xde, 0xe9), /* Snow Storm text          */
+        rgb(0x61, 0x6e, 0x88), /* Comment dim              */
+        rgb(0xa3, 0xbe, 0x8c), /* Aurora green prompt      */
+        rgb(0x24, 0x29, 0x33), /* Input BG                 */
+        rgb(0x88, 0xc0, 0xd0), /* Frost cyan cursor        */
+        rgb(0x4c, 0x56, 0x6a)  /* Border                   */
     },
     {
-        "Solarized",
-        rgb(0x00, 0x2b, 0x36), /* Solarized Dark Base03 */
-        rgb(0x83, 0x94, 0x96), /* Base0 Text */
-        rgb(0x85, 0x99, 0x00), /* Solarized Green Prompt */
-        rgb(0x07, 0x36, 0x42), /* Base02 Input BG */
-        rgb(0x2a, 0xa1, 0x98), /* Solarized Cyan Cursor */
-        rgb(0x58, 0x6e, 0x75)  /* Base01 Border */
+        "Gruvbox Dark",        /* retro-groove             */
+        rgb(0x28, 0x28, 0x28), /* dark0 background         */
+        rgb(0xeb, 0xdb, 0xb2), /* light1 text              */
+        rgb(0x92, 0x83, 0x74), /* gray dim                 */
+        rgb(0xb8, 0xbb, 0x26), /* bright green prompt      */
+        rgb(0x1d, 0x20, 0x21), /* dark0_hard input BG      */
+        rgb(0xfe, 0x80, 0x19), /* bright orange cursor     */
+        rgb(0x3c, 0x38, 0x36)  /* dark1 border             */
+    },
+    {
+        "Light",               /* legible bright theme     */
+        rgb(0xfa, 0xfa, 0xf7), /* near-white background    */
+        rgb(0x21, 0x25, 0x2b), /* near-black text          */
+        rgb(0x6b, 0x72, 0x80), /* slate dim                */
+        rgb(0x1a, 0x73, 0xe8), /* blue accent prompt       */
+        rgb(0xed, 0xee, 0xea), /* light-gray input BG      */
+        rgb(0x1a, 0x73, 0xe8), /* blue cursor              */
+        rgb(0xd4, 0xd7, 0xd2)  /* soft border              */
+    },
+    {
+        "Monokai",             /* classic bright-on-dark   */
+        rgb(0x27, 0x28, 0x22), /* Dark charcoal/olive bg   */
+        rgb(0xf8, 0xf8, 0xf2), /* Text                     */
+        rgb(0x75, 0x71, 0x5e), /* Comment dim              */
+        rgb(0xa6, 0xe2, 0x2e), /* Green prompt             */
+        rgb(0x1e, 0x1f, 0x1c), /* Input BG                 */
+        rgb(0xf9, 0x26, 0x72), /* Pink cursor              */
+        rgb(0x3e, 0x3d, 0x32)  /* Border                   */
+    },
+    {
+        "Dracula",             /* the dark castle palette  */
+        rgb(0x28, 0x2a, 0x36), /* Dark blue-gray bg        */
+        rgb(0xf8, 0xf8, 0xf2), /* Bright text              */
+        rgb(0x62, 0x72, 0xa4), /* Comment dim              */
+        rgb(0x50, 0xfa, 0x7b), /* Green prompt             */
+        rgb(0x21, 0x22, 0x2c), /* Input BG                 */
+        rgb(0xff, 0x79, 0xc6), /* Pink cursor              */
+        rgb(0x44, 0x47, 0x5a)  /* Border                   */
     }
 };
 
 #define TERM_THEME_COUNT (sizeof(g_term_themes) / sizeof(g_term_themes[0]))
 
-static u32 g_term_theme_idx = 0; /* Default: Monokai */
+static u32 g_term_theme_idx = 0; /* Default: CareOS Dark */
 static u8  g_term_opacity   = 217; /* Default ~85% opacity (217/255) */
 
 static struct fs_node *term_cwd=NULL;
@@ -121,6 +159,7 @@ static void term_exec(window_t *w,char *line){
     if(!kstrcmp(cmd,"clear")){win_clear(w);}
     else if(!kstrcmp(cmd,"theme") || !kstrcmp(cmd,"termtheme")){
         if(argc<2 || !kstrcmp(argv[1],"list")){
+            char cntbuf[4]; kutoa(TERM_THEME_COUNT, cntbuf, 10);
             win_append(w,"Terminal Theme Presets:\n");
             for(u32 i=0; i<TERM_THEME_COUNT; i++){
                 char num[4]; kutoa(i+1, num, 10);
@@ -129,32 +168,31 @@ static void term_exec(window_t *w,char *line){
                 if(i == g_term_theme_idx) win_append(w, "  [active]");
                 win_append(w, "\n");
             }
-            win_append(w,"usage: theme <monokai|dracula|nord|solarized|1-4>\n");
+            win_append(w,"usage: theme <name|1-"); win_append(w,cntbuf);
+            win_append(w,">   (name = first word, e.g. careos, gruvbox, light)\n");
+            win_append(w,"tip: Ctrl+T cycles themes\n");
             return;
         }
         const char *arg = argv[1];
         int chosen = -1;
-        if(arg[0]>='1' && arg[0]<='4' && arg[1]=='\0'){
-            chosen = arg[0] - '1';
+        if(arg[0]>='0' && arg[0]<='9'){
+            /* Numeric selection 1..TERM_THEME_COUNT */
+            int num = katoi(arg);
+            if(num>=1 && num<=(int)TERM_THEME_COUNT) chosen = num-1;
         } else {
+            /* Case-insensitive match against the first word of each name,
+             * so "solarized" selects "Solarized Dark", etc. */
             for(u32 i=0; i<TERM_THEME_COUNT; i++){
-                char tname[32];
-                u32 len = kstrlen(g_term_themes[i].name);
-                for(u32 k=0; k<len && k<31; k++){
-                    char ch = g_term_themes[i].name[k];
-                    tname[k] = (ch>='A' && ch<='Z') ? (ch+32) : ch;
+                const char *nm = g_term_themes[i].name;
+                u32 k = 0; bool match = true;
+                while(arg[k] && nm[k] && nm[k]!=' '){
+                    char a = arg[k]; char b = nm[k];
+                    if(a>='A' && a<='Z') a += 32;
+                    if(b>='A' && b<='Z') b += 32;
+                    if(a != b){ match = false; break; }
+                    k++;
                 }
-                tname[len] = '\0';
-                
-                char iname[32];
-                u32 ilen = kstrlen(arg);
-                for(u32 k=0; k<ilen && k<31; k++){
-                    char ch = arg[k];
-                    iname[k] = (ch>='A' && ch<='Z') ? (ch+32) : ch;
-                }
-                iname[ilen] = '\0';
-
-                if(!kstrcmp(tname, iname)){
+                if(match && arg[k]=='\0' && (nm[k]=='\0' || nm[k]==' ')){
                     chosen = (int)i;
                     break;
                 }
@@ -401,7 +439,7 @@ static void term_exec(window_t *w,char *line){
         win_append(w,"Available commands:\n");
         win_append(w,"- ls, cd, pwd, cat, mkdir, rm, touch\n");
         win_append(w,"- echo, ps, whoami, clear, help\n");
-        win_append(w,"- theme [monokai|dracula|nord|solarized]\n");
+        win_append(w,"- theme [list|<name>|<n>]  color theme (Ctrl+T cycles)\n");
         win_append(w,"- opacity <0-100>  set window transparency\n");
         win_append(w,"- ifconfig, ping, curl, wifi\n");
         win_append(w,"- uname, date, free, uptime\n");
@@ -434,6 +472,7 @@ static void term_exec(window_t *w,char *line){
 void app_terminal_init(window_t *w){
     win_clear(w); term_cwd=term_default_home();
     win_append(w,"CareOS v9 Terminal\nType 'help' for commands.\n");
+    win_append(w,"Tip: 'theme list' or Ctrl+T to change color theme.\n");
     term_prompt(w);
 }
 void app_terminal_draw(window_t *w){
@@ -506,7 +545,25 @@ void app_terminal_draw(window_t *w){
     i32 ty = iy + (input_h - FONT_H * sc) / 2;
     gfx_str(cr.x + 12, ty, "$", cur_theme->prompt, COL_TRANSPARENT);
     i32 input_x = cr.x + 12 + (FONT_W + 2) * sc;
-    gfx_str_clipped(input_x, ty, cr.w - 28, w->input_buf, cur_theme->text, COL_TRANSPARENT);
+
+    /* Theme indicator: active theme name + accent swatch on the right of the
+     * input bar. The terminal has no click hook (wm dispatches only draw/key),
+     * so this is a visible affordance rather than a button; Ctrl+T and the
+     * 'theme' command change the selection. */
+    i32 sw   = FONT_H * sc;
+    i32 sw_x = cr.x + cr.w - 12 - sw;
+    i32 sw_y = iy + (input_h - sw) / 2;
+    i32 name_w = (i32)kstrlen(cur_theme->name) * FONT_W * sc;
+    i32 name_x = sw_x - 8 - name_w;
+    i32 input_max_w = cr.w - 28;
+    if(name_x > input_x + 40){ /* only when the bar is wide enough */
+        gfx_str(name_x, ty, cur_theme->name, cur_theme->dim, COL_TRANSPARENT);
+        gfx_rect_rounded(sw_x, sw_y, sw, sw, 3, cur_theme->prompt);
+        gfx_rect_rounded_outline(sw_x, sw_y, sw, sw, 3, cur_theme->border);
+        input_max_w = (name_x - 8) - input_x;
+        if(input_max_w < 20) input_max_w = 20;
+    }
+    gfx_str_clipped(input_x, ty, input_max_w, w->input_buf, cur_theme->text, COL_TRANSPARENT);
 
     /* Animated blinking cursor */
     u32 tick = timer_get_ticks();
@@ -545,6 +602,10 @@ void app_terminal_key(window_t *w,char c){
     } else if(c==0x0C){ /* Ctrl+L: Clear */
         win_clear(w);
         term_prompt(w);
+    } else if(c==0x14){ /* Ctrl+T: cycle terminal color theme */
+        g_term_theme_idx = (g_term_theme_idx + 1) % TERM_THEME_COUNT;
+        notify_push("Terminal Theme", g_term_themes[g_term_theme_idx].name,
+                    g_term_themes[g_term_theme_idx].prompt);
     } else if(c==0x03){ /* Ctrl+C: Copy */
         if (w->input_len > 0) {
             kstrncpy(g_clipboard, w->input_buf, CLIPBOARD_SIZE-1);

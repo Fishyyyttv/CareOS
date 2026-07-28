@@ -131,7 +131,10 @@ void gfx_flip(void) {
 static u32 *WALLPAPER_CACHE     = (u32*)0;
 static bool wallpaper_cache_ok  = false;
 
-void gfx_wallpaper_cache_invalidate(void) { wallpaper_cache_ok = false; }
+void gfx_wallpaper_cache_invalidate(void) {
+    wallpaper_cache_ok = false;
+    gfx_desktop_cache_invalidate();  /* chrome sits on the wallpaper */
+}
 
 bool gfx_wallpaper_cache_blit(void) {
     if (!wallpaper_cache_ok || !WALLPAPER_CACHE || !BACKBUFFER) return false;
@@ -144,6 +147,56 @@ void gfx_wallpaper_cache_capture(void) {
     if (!WALLPAPER_CACHE || !BACKBUFFER) return;
     kmemcpy(WALLPAPER_CACHE, BACKBUFFER, (size_t)SCREEN_W * SCREEN_H * 4);
     wallpaper_cache_ok = true;
+}
+
+/* Blit the cached backdrop shifted a few pixels opposite the cursor so the
+ * desktop has subtle depth as the pointer moves. Still one pass over the
+ * screen (no re-composite); the small exposed edge is filled by clamping the
+ * source, which is imperceptible at this offset. */
+bool gfx_wallpaper_parallax_blit(i32 cursor_x, i32 cursor_y) {
+    if (!wallpaper_cache_ok || !WALLPAPER_CACHE || !BACKBUFFER) return false;
+    i32 sw = (i32)SCREEN_W, sh = (i32)SCREEN_H;
+    const i32 M = 12;                          /* max drift, px */
+    /* cursor at left edge -> +M (wallpaper slides right), right edge -> -M. */
+    i32 ox = M - (cursor_x * 2 * M) / (sw > 1 ? sw : 1);
+    i32 oy = M - (cursor_y * 2 * M) / (sh > 1 ? sh : 1);
+    if (ox < -M) ox = -M; else if (ox > M) ox = M;
+    if (oy < -M) oy = -M; else if (oy > M) oy = M;
+
+    for (i32 y = 0; y < sh; y++) {
+        i32 sy = y - oy; if (sy < 0) sy = 0; else if (sy >= sh) sy = sh - 1;
+        u32 *src = &WALLPAPER_CACHE[sy * sw];
+        u32 *dst = &BACKBUFFER[y * sw];
+        /* Left clamp strip, straight middle copy, right clamp strip. */
+        i32 x = 0;
+        i32 mid0 = ox > 0 ? ox : 0;            /* dest x where src x >= 0 */
+        i32 mid1 = ox < 0 ? sw + ox : sw;       /* dest x where src x < sw */
+        for (; x < mid0; x++) dst[x] = src[0];
+        for (; x < mid1; x++) dst[x] = src[x - ox];
+        for (; x < sw;  x++)  dst[x] = src[sw - 1];
+    }
+    dirty_full = true;
+    return true;
+}
+
+/* Desktop backdrop cache -- see header. Holds wallpaper + composited chrome so
+ * frames that don't change the chrome skip the blur/shadow recompute. */
+static u32 *DESKTOP_CACHE    = (u32*)0;
+static bool desktop_cache_ok = false;
+
+void gfx_desktop_cache_invalidate(void) { desktop_cache_ok = false; }
+
+bool gfx_desktop_cache_blit(void) {
+    if (!desktop_cache_ok || !DESKTOP_CACHE || !BACKBUFFER) return false;
+    kmemcpy(BACKBUFFER, DESKTOP_CACHE, (size_t)SCREEN_W * SCREEN_H * 4);
+    dirty_full = true;
+    return true;
+}
+
+void gfx_desktop_cache_capture(void) {
+    if (!DESKTOP_CACHE || !BACKBUFFER) return;
+    kmemcpy(DESKTOP_CACHE, BACKBUFFER, (size_t)SCREEN_W * SCREEN_H * 4);
+    desktop_cache_ok = true;
 }
 
 static u32 *SCREEN_FB;
@@ -186,6 +239,8 @@ void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch) {
      * just disables the fast path (see gfx_wallpaper_cache_blit). */
     WALLPAPER_CACHE    = (u32*)kmalloc(sz);
     wallpaper_cache_ok = false;
+    DESKTOP_CACHE      = (u32*)kmalloc(sz);
+    desktop_cache_ok   = false;
 
     dirty_reset();
     dirty_full = true;
@@ -362,8 +417,10 @@ void gfx_rect_rounded_blend(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color, u8 alp
     gfx_dirty(x, y, w, h);
 }
 
-/* Separable box blur (horizontal then vertical) of the target in place. Cheap
- * enough for panel-sized regions; not meant for full-screen every frame. */
+/* Separable box blur (horizontal then vertical) of the target in place, using a
+ * sliding window so each pass is O(w*h) rather than O(w*h*radius) -- roughly a
+ * (2*rad+1)x speedup, which is what keeps panel-sized glass affordable per
+ * frame. The result is identical to the naive box blur. */
 void gfx_blur_region(i32 x, i32 y, i32 w, i32 h, i32 rad) {
     if (rad < 1 || !g_target || !g_target->pixels) return;
     i32 W = (i32)g_target->w, H = (i32)g_target->h, st = (i32)(g_target->pitch / 4);
@@ -378,26 +435,29 @@ void gfx_blur_region(i32 x, i32 y, i32 w, i32 h, i32 rad) {
     for (i32 j = 0; j < h; j++) {
         u32 *rowp = &g_target->pixels[(y + j) * st + x];
         for (i32 i = 0; i < w; i++) line[i] = rowp[i];
+        u32 sr = 0, sg = 0, sb = 0; i32 cnt = 0;
+        for (i32 k = 0; k <= rad && k < w; k++) {
+            u32 c = line[k]; sr += (c>>16)&0xFF; sg += (c>>8)&0xFF; sb += c&0xFF; cnt++;
+        }
         for (i32 i = 0; i < w; i++) {
-            i32 a = i - rad; if (a < 0) a = 0;
-            i32 b = i + rad; if (b >= w) b = w - 1;
-            u32 sr = 0, sg = 0, sb = 0, n = 0;
-            for (i32 k = a; k <= b; k++) {
-                u32 c = line[k]; sr += (c >> 16) & 0xFF; sg += (c >> 8) & 0xFF; sb += c & 0xFF; n++;
-            }
-            rowp[i] = ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+            rowp[i] = ((sr / (u32)cnt) << 16) | ((sg / (u32)cnt) << 8) | (sb / (u32)cnt);
+            i32 rem = i - rad, add = i + rad + 1;
+            if (rem >= 0) { u32 c = line[rem]; sr -= (c>>16)&0xFF; sg -= (c>>8)&0xFF; sb -= c&0xFF; cnt--; }
+            if (add < w)  { u32 c = line[add]; sr += (c>>16)&0xFF; sg += (c>>8)&0xFF; sb += c&0xFF; cnt++; }
         }
     }
     for (i32 i = 0; i < w; i++) {
         for (i32 j = 0; j < h; j++) line[j] = g_target->pixels[(y + j) * st + x + i];
+        u32 sr = 0, sg = 0, sb = 0; i32 cnt = 0;
+        for (i32 k = 0; k <= rad && k < h; k++) {
+            u32 c = line[k]; sr += (c>>16)&0xFF; sg += (c>>8)&0xFF; sb += c&0xFF; cnt++;
+        }
         for (i32 j = 0; j < h; j++) {
-            i32 a = j - rad; if (a < 0) a = 0;
-            i32 b = j + rad; if (b >= h) b = h - 1;
-            u32 sr = 0, sg = 0, sb = 0, n = 0;
-            for (i32 k = a; k <= b; k++) {
-                u32 c = line[k]; sr += (c >> 16) & 0xFF; sg += (c >> 8) & 0xFF; sb += c & 0xFF; n++;
-            }
-            g_target->pixels[(y + j) * st + x + i] = ((sr / n) << 16) | ((sg / n) << 8) | (sb / n);
+            g_target->pixels[(y + j) * st + x + i] =
+                ((sr / (u32)cnt) << 16) | ((sg / (u32)cnt) << 8) | (sb / (u32)cnt);
+            i32 rem = j - rad, add = j + rad + 1;
+            if (rem >= 0) { u32 c = line[rem]; sr -= (c>>16)&0xFF; sg -= (c>>8)&0xFF; sb -= c&0xFF; cnt--; }
+            if (add < h)  { u32 c = line[add]; sr += (c>>16)&0xFF; sg += (c>>8)&0xFF; sb += c&0xFF; cnt++; }
         }
     }
     gfx_dirty(x, y, w, h);
@@ -405,7 +465,7 @@ void gfx_blur_region(i32 x, i32 y, i32 w, i32 h, i32 rad) {
 
 void gfx_shadow_soft_ex(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy) {
     if (w <= 0 || h <= 0 || blur <= 0) return;
-    const i32 L = 10;                   /* stacked rings → smooth falloff */
+    const i32 L = 6;                    /* stacked rings → smooth falloff (fewer = faster) */
     u32 denom = (u32)(L * (L + 1) / 2);  /* Σ weights, so total ink ≈ alpha */
     for (i32 i = L; i >= 1; i--) {
         i32 s = blur * i / L;            /* outer rings reach further, fainter */
@@ -444,6 +504,57 @@ u32 cdl_ease_out(u32 elapsed_ms, u32 duration_ms) {
 
 i32 cdl_lerp(i32 a, i32 b, u32 t256) {
     return a + (i32)(((i64)(b - a) * (i32)t256) / 256);
+}
+
+/* ── Click ripples ─────────────────────────────────────────────────────────
+ * A Material-style splash: a translucent disc that blooms out from the click
+ * point and fades. Spawned centrally on every left-click (gui.c) so the whole
+ * UI reacts without each widget having to opt in. */
+#define MAX_RIPPLES 6
+typedef struct { i32 x, y; u32 born; u32 color; bool active; } ripple_t;
+static ripple_t ripples[MAX_RIPPLES];
+
+void gfx_ripple(i32 x, i32 y, u32 color) {
+    u32 now = timer_get_ticks();
+    int slot = 0; u32 oldest = 0xFFFFFFFFu;
+    for (int i = 0; i < MAX_RIPPLES; i++) {
+        if (!ripples[i].active) { slot = i; break; }
+        if (ripples[i].born < oldest) { oldest = ripples[i].born; slot = i; }
+    }
+    ripples[slot].x = x; ripples[slot].y = y; ripples[slot].born = now;
+    ripples[slot].color = color ? color : COL_ACCENT; ripples[slot].active = true;
+}
+
+static void circle_blend(i32 cx, i32 cy, i32 r, u32 color, u32 a) {
+    if (r <= 0 || a == 0) return;
+    for (i32 dy = -r; dy <= r; dy++) {
+        i32 dx = (i32)gfx_isqrt((u32)(r * r - dy * dy));
+        blend_span(cx - dx, cy + dy, 2 * dx + 1, color, a);
+    }
+}
+
+void gfx_ripples_draw(void) {
+    u32 now = timer_get_ticks();
+    const u32 life = 300, R = 48;
+    for (int i = 0; i < MAX_RIPPLES; i++) {
+        if (!ripples[i].active) continue;
+        u32 age = now - ripples[i].born;
+        if (age >= life) { ripples[i].active = false; continue; }
+        u32 t = age * 256u / life;              /* 0..256 eased-out radius */
+        u32 er = 256u - (256u - t) * (256u - t) / 256u;
+        i32 r = (i32)(R * er / 256u);
+        u32 a = 80u - 80u * t / 256u;           /* fade with expansion */
+        if (a < 2) continue;
+        circle_blend(ripples[i].x, ripples[i].y, r, ripples[i].color, a);
+        gfx_dirty(ripples[i].x - r, ripples[i].y - r, 2 * r + 1, 2 * r + 1);
+    }
+}
+
+/* True while any ripple is still animating, so the main loop knows to keep
+ * redrawing until they settle (like the smoothed cursor). */
+bool gfx_ripples_active(void) {
+    for (int i = 0; i < MAX_RIPPLES; i++) if (ripples[i].active) return true;
+    return false;
 }
 
 void gfx_rect_rounded(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color) {
@@ -519,42 +630,49 @@ static void text_bg_fill(i32 x, i32 y, i32 w, i32 h, u32 col) {
     gfx_rect(x, y, w, h, col);
 }
 
+/* Horizontal advance of one character in unscaled px. Monospace faces have no
+ * `advances` table and fall back to the single cell width, so their layout is
+ * identical to before; proportional faces carry a real per-glyph advance. */
+static inline i32 glyph_adv(const font_face_t *f, u8 ch) {
+    if (ch < FONT_FIRST_CH || ch > FONT_LAST_CH) return (i32)f->advance;
+    return f->advances ? (i32)f->advances[ch - FONT_FIRST_CH] : (i32)f->advance;
+}
+
 static void draw_text(i32 x, i32 y, const char *s, u32 fg, u32 bg,
                       font_size_t size, bool bold) {
     const font_face_t *f = bold ? font_bold_face_at((u32)size)
                                 : font_face_at((u32)size);
     i32 sc = (i32)GFX_FONT_SCALE;
-    i32 adv = (i32)f->advance * sc;
     i32 lh  = (i32)f->line_h  * sc;
     i32 cy = y, start_x = x, start_y = y, max_x = x;
 
     while (*s) {
         const char *p;
-        i32 n = 0, right = 0;
+        i32 pen = 0, right = 0;   /* pen = running x within the line (scaled) */
 
-        /* Measure the line: how many cells, and how far ink actually reaches.
-         * Some faces have bearing_x + w > advance, so ink can outrun the cells. */
+        /* Measure the line: the pen advance, and how far ink actually reaches.
+         * Some faces have bearing_x + w > advance, so ink can outrun the pen. */
         for (p = s; *p && *p != '\n'; p++) {
             if (*p >= FONT_FIRST_CH && *p <= FONT_LAST_CH) {
                 const glyph_t *g = &f->glyphs[(u8)*p - FONT_FIRST_CH];
-                i32 r = n * adv + ((i32)g->bearing_x + (i32)g->w) * sc;
+                i32 r = pen + ((i32)g->bearing_x + (i32)g->w) * sc;
                 if (r > right) right = r;
             }
-            n++;
+            pen += glyph_adv(f, (u8)*p) * sc;
         }
-        if (n * adv > right) right = n * adv;
+        if (pen > right) right = pen;
 
         /* One background band for the whole line. Filling per character would
          * let cell N's background erase cell N-1's rightmost antialiased
          * column, and would emit two gfx_dirty calls per character -- enough
          * to overrun MAX_DIRTY after ~16 characters. */
-        if (bg != COL_TRANSPARENT) text_bg_fill(x, cy, n * adv, lh, bg);
+        if (bg != COL_TRANSPARENT) text_bg_fill(x, cy, pen, lh, bg);
 
         i32 cx = x;
         for (p = s; *p && *p != '\n'; p++) {
             if (*p >= FONT_FIRST_CH && *p <= FONT_LAST_CH)
                 glyph_blit(f, &f->glyphs[(u8)*p - FONT_FIRST_CH], cx, cy, fg, sc);
-            cx += adv;
+            cx += glyph_adv(f, (u8)*p) * sc;
         }
 
         if (x + right > max_x) max_x = x + right;
@@ -579,7 +697,21 @@ void gfx_str_bold(i32 x, i32 y, const char *s, u32 fg, u32 bg) {
 }
 
 i32 gfx_str_width_ex(const char *s, font_size_t size) {
-    return (i32)(kstrlen(s) * font_face_at((u32)size)->advance * GFX_FONT_SCALE);
+    const font_face_t *f = font_face_at((u32)size);
+    if (!f->advances)   /* monospace fast path -- identical to the old formula */
+        return (i32)(kstrlen(s) * f->advance * GFX_FONT_SCALE);
+    i32 w = 0;
+    for (const char *p = s; *p; p++) w += glyph_adv(f, (u8)*p);
+    return w * (i32)GFX_FONT_SCALE;
+}
+
+/* Width of the first `n` characters -- lets callers place a caret correctly in
+ * a proportional face. Monospace stays exact via the same per-glyph path. */
+i32 gfx_str_width_n(const char *s, u32 n, font_size_t size) {
+    const font_face_t *f = font_face_at((u32)size);
+    i32 w = 0;
+    for (u32 i = 0; i < n && s[i]; i++) w += glyph_adv(f, (u8)s[i]);
+    return w * (i32)GFX_FONT_SCALE;
 }
 
 i32 gfx_line_h_ex(font_size_t size) {
@@ -784,8 +916,15 @@ void button_draw(const button_t *b){
     else if (b->hover) { bg_col = COL_HOVER; border = COL_ACCENT; }
     else if (b->active) { bg_col = g_theme->surface3; border = COL_PRIMARY; }
     else { bg_col = base; border = COL_BORDER; }
+    /* Hover glow: a faint accent halo bleeding out behind the button so it
+     * lifts toward the cursor. Drawn first, under the body. */
+    if (b->hover && !b->pressed)
+        gfx_rect_rounded_blend(x - 2, y - 2, w + 4, h + 4, CDL_R_BUTTON + 2, COL_ACCENT, 34);
     gfx_rect_rounded(x, y, w, h, CDL_R_BUTTON, bg_col);
-    gfx_rect_blend(x + 1, y + 1, w - 2, h / 3, COL_WHITE, b->hover ? 10 : 5);
+    gfx_rect_blend(x + 1, y + 1, w - 2, h / 3, COL_WHITE, b->hover ? 12 : 5);
+    /* Press feedback: a quick inset darken so a click reads as a push. */
+    if (b->pressed)
+        gfx_rect_rounded_blend(x, y, w, h, CDL_R_BUTTON, COL_BLACK, 42);
     gfx_rect_rounded_outline(x, y, w, h, CDL_R_BUTTON, border);
     if (b->active && !b->bg) gfx_rect_rounded(x + 8, y + h - 3, w - 16, 2, 1, COL_PRIMARY);
     i32 ty = y + (h - (i32)(FONT_H * GFX_FONT_SCALE)) / 2;
@@ -802,6 +941,9 @@ void textinput_draw(const textinput_t *t){
     u32 bg = t->focused ? COL_INPUT_BG : g_theme->surface2;
     u32 border_col = t->focused ? COL_PRIMARY : (t->hover ? COL_ACCENT : COL_BORDER);
     i32 x = t->rect.x, y = t->rect.y, w = t->rect.w, h = t->rect.h;
+    /* Focused fields get the same accent halo as a hovered button. */
+    if (t->focused)
+        gfx_rect_rounded_blend(x - 2, y - 2, w + 4, h + 4, CDL_R_INPUT + 2, COL_PRIMARY, 30);
     gfx_rect_rounded(x, y, w, h, CDL_R_INPUT, bg);
     if (t->focused) gfx_rect_blend(x + 1, y + 1, w - 2, h / 3, COL_WHITE, 8);
     gfx_rect_rounded_outline(x, y, w, h, CDL_R_INPUT, border_col);
@@ -809,7 +951,7 @@ void textinput_draw(const textinput_t *t){
     i32 ty  = y + (h - (i32)(FONT_H * GFX_FONT_SCALE)) / 2;
     if (t->len > 0) { gfx_str_clipped(x + pad, ty, w - pad * 2, t->buf, COL_TEXT, COL_TRANSPARENT); }
     else { gfx_str_clipped(x + pad, ty, w - pad * 2, t->placeholder, COL_MUTED, COL_TRANSPARENT); }
-    if (t->focused) { i32 cx = x + pad + (i32)(t->cursor * (i32)(FONT_W * GFX_FONT_SCALE)); gfx_vline(cx, y + 4, h - 8, COL_ACCENT); }
+    if (t->focused) { i32 cx = x + pad + gfx_str_width_n(t->buf, t->cursor, FONT_BODY); gfx_vline(cx, y + 4, h - 8, COL_ACCENT); }
 }
 
 void textinput_key(textinput_t *t,char c){

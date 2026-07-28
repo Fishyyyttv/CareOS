@@ -44,8 +44,16 @@ void app_notes_draw(window_t *w){
 
     /* Text lines with numbers */
     i32 lh = FONT_H * sc + 5;
-    u32 linenum = 0;
+    /* Vertical scroll: clamp to the content, then skip the scrolled-past lines
+     * so the wheel can page through a long note (typing snaps back to bottom). */
+    {
+        i32 vis = (cr.y + cr.h - 10 - (cr.y + t_h + 6)) / lh; if (vis < 1) vis = 1;
+        u32 maxs = ((lc + 1) > (u32)vis) ? (lc + 1) - (u32)vis : 0;
+        if (w->scroll > maxs) w->scroll = maxs;
+    }
+    u32 linenum = w->scroll;
     const char *p = w->text_buf;
+    { u32 skip = w->scroll; while (skip > 0 && *p) { if (*p == '\n') skip--; p++; } }
     i32 y = cr.y + t_h + 6;
     gfx_set_clip(cr.x, cr.y + t_h, cr.w, cr.h - t_h);
     while (*p && y < cr.y + cr.h - 4) {
@@ -68,7 +76,11 @@ void app_notes_draw(window_t *w){
 }
 
 void app_notes_key(window_t *w,char c){
-    if(c=='\b'){ 
+    /* Any keystroke follows the cursor: snap the view to the bottom (draw
+     * clamps this to the real last page). The wheel can scroll up until the
+     * next keypress. */
+    w->scroll = 0xFFFFu;
+    if(c=='\b'){
         if(w->text_len>0){
             w->text_len--;
             w->text_buf[w->text_len]='\0';

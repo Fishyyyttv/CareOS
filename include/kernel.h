@@ -190,6 +190,12 @@ void keyboard_flush(void);
 bool keyboard_ctrl_held(void);
 bool keyboard_alt_held(void);
 bool keyboard_shift_held(void);
+bool keyboard_super_held(void);
+bool keyboard_super_tapped(void);
+
+/* Machine power control (kernel/power.c). Neither returns. */
+void power_shutdown(void);
+void power_reboot(void);
 
 /* -- Memory --------------------------------------------------------------- */
 void  pmm_init(void);
@@ -557,7 +563,9 @@ void net_send_frame(const u8 *frame, u32 len);
 
 /* -- Networking types (used by net.c and kernel.h consumers) --------------- */
 #define MAX_SOCKETS   16
-#define NET_BUF_SIZE  4096
+#define NET_BUF_SIZE  65536   /* per-socket RX; must hold a full TLS handshake
+                               * flight (cert chain can be 4-8KB) + big records,
+                               * or data is dropped and TLS/HTTP reads fail */
 
 typedef enum { SOCK_UNUSED=0, SOCK_TCP, SOCK_UDP } sock_type_t;
 typedef enum { SOCK_CLOSED=0, SOCK_SYN_SENT, SOCK_ESTABLISHED,

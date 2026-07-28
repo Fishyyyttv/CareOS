@@ -135,12 +135,18 @@ static void transcript_hash(tls_ctx_t *c, u8 *out) {
 
 /* ── TLS record send ─────────────────────────────────────────────── */
 static int record_send_raw(tls_ctx_t *c, u8 type, const u8 *data, u32 len) {
-    u8 hdr[5];
-    hdr[0]=type; hdr[1]=0x03; hdr[2]=0x03;
-    hdr[3]=(u8)(len>>8); hdr[4]=(u8)len;
-    if (tls_tcp_send(c->fd, hdr, 5) < 0) return -1;
-    if (tls_tcp_send(c->fd, data, len) < 0) return -1;
-    return 0;
+    /* Send the header + body as ONE TCP segment. Splitting the 5-byte record
+     * header into its own tiny segment makes the ClientHello arrive fragmented,
+     * which some servers / CDN edges silently drop (they ACK it but never send
+     * a ServerHello). Coalescing matches what real clients do. */
+    u8 *rec = (u8*)kmalloc(5 + len);
+    if (!rec) return -1;
+    rec[0]=type; rec[1]=0x03; rec[2]=0x03;
+    rec[3]=(u8)(len>>8); rec[4]=(u8)len;
+    kmemcpy(rec + 5, data, len);
+    int r = tls_tcp_send(c->fd, rec, 5 + len);
+    kfree(rec);
+    return r < 0 ? -1 : 0;
 }
 
 /* Send encrypted record (after handshake keys are available) */
@@ -175,12 +181,15 @@ static int record_send_enc(tls_ctx_t *c, u8 inner_type,
     aes128_gcm_encrypt(actx, iv, aad, 5, plain, plen,
                        cipher, cipher + plen);
 
-    /* send record header + ciphertext */
-    u8 hdr[5];
-    hdr[0]=TLS_APPDATA; hdr[1]=0x03; hdr[2]=0x03;
-    hdr[3]=(u8)(clen>>8); hdr[4]=(u8)clen;
-    tls_tcp_send(c->fd, hdr, 5);
-    tls_tcp_send(c->fd, cipher, clen);
+    /* send record header + ciphertext as one segment (see record_send_raw) */
+    u8 *rec = (u8*)kmalloc(5 + clen);
+    if (rec) {
+        rec[0]=TLS_APPDATA; rec[1]=0x03; rec[2]=0x03;
+        rec[3]=(u8)(clen>>8); rec[4]=(u8)clen;
+        kmemcpy(rec + 5, cipher, clen);
+        tls_tcp_send(c->fd, rec, 5 + clen);
+        kfree(rec);
+    }
 
     (*seq)++;
     kfree(plain); kfree(cipher);
@@ -211,24 +220,22 @@ static int record_recv_dec(tls_ctx_t *c, u8 *inner_type_out,
     if (n < 5) return -1;
     type = hdr[0];
     u32 rlen = r2(hdr+3);
-    if (rlen < 17 || rlen > TLS_BUF_SZ) return -1;  /* min 1 byte + 16 tag */
+    if (rlen == 0 || rlen > TLS_BUF_SZ) return -1;
 
     cipher = (u8*)kmalloc(rlen);
     if (!cipher) return -1;
     n = tls_tcp_read_exact(c->fd, cipher, rlen);
     if ((u32)n < rlen) { kfree(cipher); return -1; }
 
-    /* skip ChangeCipherSpec if received (TLS 1.3 compatibility) */
+    /* Skip ChangeCipherSpec FIRST -- it is a plaintext 1-byte record (rlen=1),
+     * so the encrypted-record length check below would otherwise reject it and
+     * kill the handshake. It does not advance the record sequence number. */
     if (type == TLS_CHANGE_CIPHER) {
         kfree(cipher);
         return record_recv_dec(c, inner_type_out, plain, maxlen, key, base_iv, seq);
     }
-
-    if (type != TLS_APPDATA) {
-        /* might be an alert */
-        kfree(cipher);
-        return -1;
-    }
+    if (type != TLS_APPDATA) { kfree(cipher); return -1; }  /* alert etc. */
+    if (rlen < 17) { kfree(cipher); return -1; }            /* need 1 byte + 16-byte tag */
 
     u8 iv[12]; kmemcpy(iv, base_iv, 12);
     for (int i=0;i<8;i++) iv[11-i]^=(u8)((*seq)>>(i*8));
@@ -246,7 +253,10 @@ static int record_recv_dec(tls_ctx_t *c, u8 *inner_type_out,
     if (ok != 0) return -2;  /* auth failure */
 
     (*seq)++;
-    /* inner_type is last byte of plaintext */
+    /* Strip TLS 1.3 zero padding; the inner content type is the last non-zero
+     * byte, and the content is everything before it. */
+    while (plen > 0 && plain[plen-1] == 0) plen--;
+    if (plen == 0) { *inner_type_out = 0; return 0; }
     *inner_type_out = plain[plen-1];
     return (int)(plen - 1);
 }
@@ -504,6 +514,10 @@ static int send_client_finished(tls_ctx_t *c) {
                            c->client_hs_key, c->client_hs_iv, &c->send_seq);
 }
 
+/* Human-readable reason for the most recent https_get failure. The browser
+ * displays this so network problems can be diagnosed without a serial console. */
+char g_net_diag[96] = "";
+
 /* ── Full TLS handshake ──────────────────────────────────────────── */
 static tls_ctx_t *tls_connect(int fd, const char *hostname) {
     tls_ctx_t *c = (tls_ctx_t*)kmalloc(sizeof(tls_ctx_t));
@@ -515,23 +529,23 @@ static tls_ctx_t *tls_connect(int fd, const char *hostname) {
     if(!c->hs_transcript){ kfree(c); return NULL; }
 
     /* 1. Send ClientHello */
-    if(send_client_hello(c,hostname)<0) goto fail;
+    if(send_client_hello(c,hostname)<0){ kstrcpy(g_net_diag,"TLS: ClientHello send failed"); serial_write("[TLS] ClientHello send failed\n"); goto fail; }
 
     /* 2. Receive ServerHello */
     {
         u8 type; u8 *buf=(u8*)kmalloc(TLS_BUF_SZ);
         if(!buf) goto fail;
         int n=record_recv(c,&type,buf,TLS_BUF_SZ);
-        if(n<0||type!=TLS_HANDSHAKE){ kfree(buf); goto fail; }
-        if(process_server_hello(c,buf,(u32)n)<0){ kfree(buf); goto fail; }
+        if(n<0||type!=TLS_HANDSHAKE){ kstrcpy(g_net_diag,"TLS: no ServerHello (no reply from server)"); serial_write("[TLS] ServerHello recv failed\n"); kfree(buf); goto fail; }
+        if(process_server_hello(c,buf,(u32)n)<0){ kstrcpy(g_net_diag,"TLS: ServerHello parse failed"); serial_write("[TLS] ServerHello parse failed\n"); kfree(buf); goto fail; }
         kfree(buf);
     }
 
     /* 3. Process EncryptedExtensions + Certificate + Finished */
-    if(process_server_hs_messages(c)<0) goto fail;
+    if(process_server_hs_messages(c)<0){ kstrcpy(g_net_diag,"TLS: server handshake decrypt/parse failed"); serial_write("[TLS] server handshake decrypt/parse failed\n"); goto fail; }
 
     /* 4. Send client Finished */
-    if(send_client_finished(c)<0) goto fail;
+    if(send_client_finished(c)<0){ kstrcpy(g_net_diag,"TLS: client Finished failed"); serial_write("[TLS] client Finished failed\n"); goto fail; }
 
     c->send_seq=0;
     c->handshake_done=true;
@@ -550,9 +564,11 @@ int https_get(const char *hostname, const char *path,
               char *resp_buf, u32 maxlen) {
     /* resolve DNS */
     u32 ip=0;
+    kstrcpy(g_net_diag,"DNS resolve failed");
     if(dns_resolve(hostname,&ip)<0) return -1;
 
     /* TCP connect to port 443 */
+    kstrcpy(g_net_diag,"TCP connect to :443 failed");
     int fd=sock_create(SOCK_TCP);
     if(fd<0) return -1;
     if(sock_connect(fd,ip,443)<0){ sock_close(fd); return -1; }
@@ -560,6 +576,7 @@ int https_get(const char *hostname, const char *path,
     /* TLS handshake */
     tls_ctx_t *tls=tls_connect(fd,hostname);
     if(!tls){ sock_close(fd); return -1; }
+    kstrcpy(g_net_diag,"OK");
 
     /* Send HTTP/1.0 GET */
     char req[512];

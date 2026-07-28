@@ -86,6 +86,7 @@ C_SRC     := kernel/kernel.c       \
              kernel/syscall.c      \
              kernel/users.c        \
              kernel/settings.c     \
+             kernel/power.c        \
              kernel/appdb.c        \
              kernel/carepkg.c      \
              kernel/elf.c          \
@@ -121,12 +122,15 @@ C_SRC     := kernel/kernel.c       \
              gui/fonts/font_classic.c \
              gui/fonts/font_ibm_plex_mono.c \
              gui/fonts/font_ibm_plex_mono_bold.c \
+             gui/fonts/font_ibm_plex_sans.c \
+             gui/fonts/font_ibm_plex_sans_bold.c \
              gui/theme.c           \
              gui/launcher.c        \
              gui/mouse.c           \
              gui/wm.c              \
              gui/taskbar.c         \
              gui/widget.c          \
+             gui/widgets.c         \
              gui/gui.c             \
              apps/apps.c           \
              apps/app_terminal.c   \
