@@ -188,6 +188,19 @@ numbers. "Almost always 30 fps" = this worst-case scenario measured at ≥30 fps
 - The native text-flow renderer is retained only as the offline fallback; it is not
   extended in this project.
 
+## Language choice (C vs C++)
+C++ is available to reach for **per-hotspot**, not adopted wholesale up front.
+Rationale: with remote rendering the performance-critical layout/paint runs in
+Chromium (already C++) on the host; the CareOS-side code is thin-client glue (QOI
+decode, one image blit, input forwarding) where C is already optimal. The ≥30 fps
+compositor work is memory-bandwidth-bound blit/blend loops that compile
+identically in C and C++ — the win is doing less work (caching, dirty rects), not
+the language. Reach for C++ only if a specific measured CareOS-side hotspot or a
+genuinely complex chrome subsystem (tab/history/session management) justifies it;
+the cost is a one-time freestanding-C++ toolchain change (`-fno-exceptions
+-fno-rtti -nostdlib`, global-constructor wiring, no STL by default). Default: keep
+new client code in C; revisit at the first hotspot that warrants it.
+
 ## Risks
 - **Host reachability** (guest→host at 10.0.2.2, WSL vs Windows-host proxy) — the
   proxy address is configurable and documented; if the default fails the user
