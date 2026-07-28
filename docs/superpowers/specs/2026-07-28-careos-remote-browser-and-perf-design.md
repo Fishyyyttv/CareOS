@@ -128,9 +128,30 @@ encoded viewport (~1–2 MB typical; cap ~4 MB, reject larger).
   `page.keyboard.*`, then re-screenshot → QOI.
 - Idle-session GC (close pages after N minutes). Binds `0.0.0.0:8787`.
 - QOI encoder: ~40-line function in JS (encode from RGBA).
-- README with `npm install` + `node server.js`, and the host-reachability note
-  (guest reaches host at `10.0.2.2`; run the proxy on the Windows host, or set up
-  a WSL→host port proxy).
+- README with `npm install` + `npx playwright install --with-deps chromium` +
+  `node server.js`.
+
+**Target environment: proxy in WSL2, CareOS in VirtualBox.** The guest sees the
+Windows host at `10.0.2.2` (VirtualBox NAT), but the proxy runs in WSL2 which is a
+separate network. Reachability chain and one-time setup:
+
+1. In WSL2: `node server.js` binds `0.0.0.0:8787`. WSL2's localhost forwarding
+   makes it reachable at Windows `127.0.0.1:8787` automatically.
+2. On Windows (admin PowerShell), bridge the external port to it once:
+   ```
+   netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=8787 ^
+       connectaddress=127.0.0.1 connectport=8787
+   New-NetFirewallRule -DisplayName "CareOS proxy 8787" -Direction Inbound ^
+       -LocalPort 8787 -Protocol TCP -Action Allow
+   ```
+3. VirtualBox guest reaches the host's `0.0.0.0:8787` at `10.0.2.2:8787` (the
+   CareOS default). No VBox port-forward rule needed (that direction is for
+   host→guest).
+
+Alternative (no portproxy): run the proxy on the Windows host directly (Node for
+Windows + Playwright) so it binds `0.0.0.0:8787` and the guest reaches
+`10.0.2.2:8787` with no bridge. The CareOS proxy address is configurable, so
+either layout works.
 
 ### Phased build
 
