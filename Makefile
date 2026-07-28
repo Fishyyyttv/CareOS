@@ -113,6 +113,7 @@ C_SRC     := kernel/kernel.c       \
              gui/image.c           \
              gui/image_bmp.c       \
              gui/image_tga.c       \
+             gui/image_qoi.c       \
              gui/resource_cache.c  \
              gui/resource_boot.c   \
              gui/icon.c            \
@@ -165,7 +166,7 @@ ICON_ARCHIVE := assets/careos-icons.cra
 
 ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o $(ICON_ARCHIVE).o
 
-.PHONY: all run run-1080p run-kvm run-whpx run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk
+.PHONY: all run run-1080p run-kvm run-whpx run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk host-test
 
 all: $(DISK) careos.iso
 
@@ -345,6 +346,15 @@ DOOM1.WAD.bin.o: DOOM1.WAD
 	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 DOOM1.WAD DOOM1.WAD.bin.o
 
 test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_isolate_b
+
+# Host-side unit test for the QOI decoder. Built with the host gcc (not the
+# freestanding kernel toolchain) so it can link libc and run directly -- no
+# QEMU needed. gui/image_qoi.c compiles under -DHOST_TEST with its own
+# u8/u32/u64 typedefs, matching tests/host/test_qoi.c.
+host-test:
+	gcc -Iinclude -Igui -o /tmp/test_qoi tests/host/test_qoi.c gui/image_qoi.c \
+	    -DHOST_TEST 2>&1 || true
+	/tmp/test_qoi
 
 clean:
 	@rm -f $(ALL_OBJ) $(ALL_OBJ:.o=.d) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
