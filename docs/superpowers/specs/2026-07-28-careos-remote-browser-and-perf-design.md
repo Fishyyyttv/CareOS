@@ -135,6 +135,13 @@ encoded viewport (~1–2 MB typical; cap ~4 MB, reject larger).
 Windows host at `10.0.2.2` (VirtualBox NAT), but the proxy runs in WSL2 which is a
 separate network. Reachability chain and one-time setup:
 
+0. **Disk caveat (this machine):** `C:` is essentially full and heavy WSL writes
+   can break the toolchain. Playwright's Chromium is ~150–300 MB — installing it
+   into the default WSL cache (`~/.cache/ms-playwright`, on the `C:`-hosted WSL
+   VHD) risks filling `C:`. Redirect the browser download to `D:` first:
+   `export PLAYWRIGHT_BROWSERS_PATH=/mnt/d/careos-playwright` before
+   `npx playwright install chromium`, and set the same var when running
+   `server.js`. (Or run the proxy on Windows, pointing Playwright's cache at `D:`.)
 1. In WSL2: `node server.js` binds `0.0.0.0:8787`. WSL2's localhost forwarding
    makes it reachable at Windows `127.0.0.1:8787` automatically.
 2. On Windows (admin PowerShell), bridge the external port to it once:
