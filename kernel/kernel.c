@@ -302,6 +302,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
     }
 
     users_init();        slog_ok("Users");
+    users_selftest();
 
     /* Must precede carepkg_init(): package installs register into the app
      * registry, and carepkg_init() replays its persisted package list. */

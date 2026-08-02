@@ -233,8 +233,9 @@ static void wm_refocus_after(window_t *skip) {
 }
 
 /* Real teardown -- deferred until the close animation finishes. Mirrors the
- * original wm_close side effects (slot freed, cascade count decremented). */
+ * original wm_close side effects (slot freed, cascade count decremented, buffer freed). */
 static void wm_finish_close(window_t *w) {
+    if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
     w->active    = false;
     w->focused   = false;
     w->animating = false;
@@ -373,8 +374,8 @@ void wm_close(window_t *w) {
 
     /* Start the close transition: shrink to ~95% about centre + fade out. The
      * window stays active/drawn until the animation finishes; the real teardown
-     * (slot free + cascade decrement) then runs in wm_finish_close() from
-     * wm_animate_all(). Hand focus off now so input stops routing to it. */
+     * (slot free + cascade decrement + buffer free) then runs in wm_finish_close()
+     * from wm_animate_all(). Hand focus off now so input stops routing to it. */
     w->anim_from       = w->rect;
     w->target_rect     = rect_scale_center(w->rect, 95);
     w->anim_kind       = WM_ANIM_CLOSE;
@@ -383,6 +384,15 @@ void wm_close(window_t *w) {
     w->animating       = true;
     w->focused         = false;
     wm_refocus_after(w);
+}
+
+void wm_close_all(void) {
+    /* Close every open window (e.g. on Log Out / Switch User) so the next
+       session starts with a clean desktop. Mirrors wm_close() per-window. */
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (windows[i].active) wm_close(&windows[i]);
+    }
+    open_count = 0;
 }
 
 void wm_focus(window_t *w) {

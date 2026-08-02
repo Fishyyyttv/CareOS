@@ -563,6 +563,7 @@ void      wm_cycle_focus(int dir);
 void      wm_snap_focused(int mode);
 void      wm_minimize_all(void);
 void      wm_minimize(window_t *w);
+void      wm_close_all(void);
 window_t *wm_get_window(int i);
 
 void desktop_draw(void);
@@ -684,6 +685,10 @@ extern bool launcher_open;
 void launcher_draw(mouse_t *m);
 void launcher_handle_key(char c);
 void launcher_handle_mouse(mouse_t *m);
+
+/* -- Session actions (Lock / Log Out / Switch User) ------------------------ */
+typedef enum { SESSION_ACT_NONE, SESSION_ACT_LOCK, SESSION_ACT_LOGOUT } session_action_t;
+extern volatile session_action_t g_session_action;
 
 /* -- App help aliases ----------------------------------------------------- */
 void app_help_init(window_t *w);
