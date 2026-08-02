@@ -4,6 +4,10 @@
 #include "kernel.h"
 #include "gui.h"
 
+/* Set by the launcher's footer session buttons (Lock / Log Out / Switch);
+   consumed once per frame at the top of gui_run()'s main loop. */
+volatile session_action_t g_session_action = SESSION_ACT_NONE;
+
 static i32 ui_clampi(i32 v, i32 lo, i32 hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -65,7 +69,7 @@ static void draw_boot_splash(int done, u32 tick) {
     gfx_str_centered_ex(0, sh / 2 - 83, sw, "OS", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
 
     gfx_str_centered_ex(0, sh / 2 + 12, sw, "CareOS", COL_WHITE, COL_TRANSPARENT, FONT_H1);
-    gfx_str_centered(0, sh / 2 + 48, sw,
+    gfx_str_centered(0, sh / 2 + 12 + gfx_line_h_ex(FONT_H1) + 2, sw,
         "Performance focused desktop operating environment",
         COL_DIM, COL_TRANSPARENT);
 
@@ -85,15 +89,17 @@ static void draw_boot_splash(int done, u32 tick) {
         gfx_circle_fill(dx, by + bar_h / 2, 4, dc);
     }
 
-    gfx_str_centered(0, by + 20, sw,
-        (done >= BOOT_STAGE_COUNT) ? "Boot sequence complete" : BOOT_STAGES[done],
-        COL_TEXT, COL_TRANSPARENT);
-
     {
+        i32 lh      = FONT_H * (i32)GFX_FONT_SCALE;
+        i32 stage_y = by + bar_h + 11;
+        gfx_str_centered(0, stage_y, sw,
+            (done >= BOOT_STAGE_COUNT) ? "Boot sequence complete" : BOOT_STAGES[done],
+            COL_TEXT, COL_TRANSPARENT);
+
         const char spin[] = "|/-\\";
         char spin_buf[24] = "Loader: [ ]";
         spin_buf[9] = spin[tick % 4];
-        gfx_str_centered(0, by + 34, sw, spin_buf, COL_MUTED, COL_TRANSPARENT);
+        gfx_str_centered(0, stage_y + lh + 2, sw, spin_buf, COL_MUTED, COL_TRANSPARENT);
     }
 
     gfx_str_centered(0, sh - 22, sw,
@@ -211,6 +217,11 @@ static void draw_top_bar(void) {
 }
 
 typedef enum {
+    /* Distro-style greeter: pick an account before the password step. This is
+     * the first mode shown whenever at least one account exists; its numeric
+     * value is kept out of the 0..2 run so nothing that switches on the old
+     * values by arithmetic (there is none today, but better safe) shifts. */
+    LOGIN_MODE_PICK = 3,
     LOGIN_MODE_SIGNIN = 0,
     LOGIN_MODE_SIGNUP = 1,
     /* Credentials were correct, but the account still holds a shipped
@@ -229,6 +240,12 @@ typedef struct {
     u32  failed_attempts;
     u32  lock_until_tick;
     login_mode_t mode;
+    u32  picked_uid; /* uid of the account row clicked on the greeter, if any.
+                       * Not a sentinel -- 0 is root's real uid, so this field
+                       * is informational only and nothing branches on it. */
+    bool locked; /* Lock-screen mode: re-authenticate the current user only.
+                  * Username is pinned, the greeter/signup/back-to-picker
+                  * paths are all disabled -- password is the only input. */
 
     /* MUST_CHANGE mode only. username still holds the authenticated account. */
     char newpass[64];
@@ -246,6 +263,14 @@ typedef struct {
     rect_t status_bar;
     button_t primary_btn;
     button_t secondary_btn;
+    /* Text baselines derived from the live line height, so draw_login_screen
+     * and the hit-testing layout can never drift apart. */
+    i32 wordmark_y;
+    i32 title_y;
+    i32 subtitle_y;
+    i32 label_dy;     /* how far a field's label sits above the field top */
+    i32 status_ty;
+    i32 footer_y;
 } login_layout_t;
 
 static void login_set_status(login_state_t *s, const char *msg, u32 color) {
@@ -285,12 +310,31 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         py = 38;
     }
 
+    /* Every text row in the card is stacked from the live line heights. With
+     * the old 13px body face the numbers came out at the hand-tuned values
+     * this layout used to hardcode (188/252 fields, 136/156 headings); with a
+     * 17px face they spread instead of the subtitle descenders landing in the
+     * "Username" label and the footer sitting on the card's bottom edge. */
+    i32 lh       = FONT_H * (i32)GFX_FONT_SCALE;
+    i32 status_h = lh + 9;
+
     l.panel = rect_make(px, py, pw, ph);
     l.avatar = rect_make(px + pw / 2 - 30, py + 28, 60, 60);
-    l.user_field = rect_make(px + 42, py + 188, pw - 84, 38);
-    l.pass_field = rect_make(px + 42, py + 252, pw - 84, 38);
+
+    l.wordmark_y = py + 98;
+    l.title_y    = l.wordmark_y + gfx_line_h_ex(FONT_H2) + 12;
+    l.subtitle_y = l.title_y + lh + 3;
+    l.label_dy   = lh + 5;
+
+    l.user_field = rect_make(px + 42, l.subtitle_y + lh + 4 + l.label_dy, pw - 84, 38);
+    l.pass_field = rect_make(px + 42, l.user_field.y + 64, pw - 84, 38);
+
+    l.footer_y   = py + ph - lh - 8;
+    l.status_bar = rect_make(px + 42, l.footer_y - status_h - 8, pw - 84, status_h);
+    l.status_ty  = l.status_bar.y + (status_h - lh) / 2;
+
     l.primary_btn = (button_t){
-        .rect = rect_make(px + 42, py + ph - 98, btn_w, 36),
+        .rect = rect_make(px + 42, l.status_bar.y - 48, btn_w, 36),
         .hover = false,
         .pressed = false,
         .active = true,
@@ -298,7 +342,7 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         .fg = COL_WHITE,
     };
     l.secondary_btn = (button_t){
-        .rect = rect_make(px + 42 + btn_w + btn_gap, py + ph - 98, btn_w, 36),
+        .rect = rect_make(px + 42 + btn_w + btn_gap, l.status_bar.y - 48, btn_w, 36),
         .hover = false,
         .pressed = false,
         .active = false,
@@ -312,7 +356,6 @@ static login_layout_t login_make_layout(const login_state_t *s) {
         kstrcpy(l.primary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Sign In" : "Create Account");
         kstrcpy(l.secondary_btn.label, s->mode == LOGIN_MODE_SIGNIN ? "Create Account" : "Back To Sign In");
     }
-    l.status_bar = rect_make(px + 42, py + ph - 50, pw - 84, 26);
     return l;
 }
 
@@ -342,11 +385,14 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     gfx_circle_fill(l.avatar.x + l.avatar.w / 2 + 4, l.avatar.y + l.avatar.h / 2,
                     l.avatar.w / 2 - 12, COL_SURFACE);
     gfx_str_centered_ex(l.avatar.x, l.avatar.y + 15, l.avatar.w, "C", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
-    gfx_str_centered_ex(l.panel.x, l.panel.y + 98, l.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+    gfx_str_centered_ex(l.panel.x, l.wordmark_y, l.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
 
     if (s->mode == LOGIN_MODE_MUST_CHANGE) {
         kstrcpy(title, "Change Your Password");
         kstrcpy(subtitle, "This account uses a default password");
+    } else if (s->locked) {
+        kstrcpy(title, "Locked");
+        kstrcpy(subtitle, "Enter your password to continue");
     } else {
         kstrcpy(title, s->mode == LOGIN_MODE_SIGNIN ? "Welcome Back" : "Create Account");
         kstrcpy(subtitle, s->mode == LOGIN_MODE_SIGNIN
@@ -354,16 +400,16 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
             : "Set up a new secure local profile");
     }
 
-    gfx_str_centered(l.panel.x, l.panel.y + 136, l.panel.w, title, COL_TEXT, COL_TRANSPARENT);
-    gfx_str_centered(l.panel.x, l.panel.y + 156, l.panel.w, subtitle, COL_DIM, COL_TRANSPARENT);
+    gfx_str_centered(l.panel.x, l.title_y, l.panel.w, title, COL_TEXT, COL_TRANSPARENT);
+    gfx_str_centered(l.panel.x, l.subtitle_y, l.panel.w, subtitle, COL_DIM, COL_TRANSPARENT);
 
     /* Inputs */
     if (s->mode == LOGIN_MODE_MUST_CHANGE) {
-        gfx_str(l.user_field.x, l.user_field.y - 20, "New Password", COL_MUTED, COL_TRANSPARENT);
-        gfx_str(l.pass_field.x, l.pass_field.y - 20, "Confirm Password", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.user_field.x, l.user_field.y - l.label_dy, "New Password", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.pass_field.x, l.pass_field.y - l.label_dy, "Confirm Password", COL_MUTED, COL_TRANSPARENT);
     } else {
-        gfx_str(l.user_field.x, l.user_field.y - 20, "Username", COL_MUTED, COL_TRANSPARENT);
-        gfx_str(l.pass_field.x, l.pass_field.y - 20, "Password", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.user_field.x, l.user_field.y - l.label_dy, "Username", COL_MUTED, COL_TRANSPARENT);
+        gfx_str(l.pass_field.x, l.pass_field.y - l.label_dy, "Password", COL_MUTED, COL_TRANSPARENT);
     }
 
     {
@@ -405,15 +451,165 @@ static void draw_login_screen(const login_state_t *s, mouse_t *mouse) {
     }
 
     button_update(&l.primary_btn, mouse);
-    button_update(&l.secondary_btn, mouse);
     button_draw(&l.primary_btn);
-    button_draw(&l.secondary_btn);
+    if (!s->locked) {
+        /* Locked mode has no "Create Account" escape hatch -- the current
+         * user's password is the only way past this screen. */
+        button_update(&l.secondary_btn, mouse);
+        button_draw(&l.secondary_btn);
+    }
 
     /* Footer / Status */
     gfx_rect_rounded(l.status_bar.x, l.status_bar.y, l.status_bar.w, l.status_bar.h, 12, COL_SURFACE2);
-    gfx_str_centered(l.status_bar.x, l.status_bar.y + 7, l.status_bar.w, s->status, s->status_color, COL_TRANSPARENT);
+    gfx_str_centered(l.status_bar.x, l.status_ty, l.status_bar.w, s->status, s->status_color, COL_TRANSPARENT);
 
-    gfx_str_centered(l.panel.x, l.panel.y + l.panel.h - 20, l.panel.w,
+    gfx_str_centered(l.panel.x, l.footer_y, l.panel.w,
+                     "CareOS v9 secure desktop", COL_MUTED, COL_TRANSPARENT);
+}
+
+/* -- Greeter (distro-style account picker) --------------------------------
+ * Purely an added front step: it renders inside the same glass panel as
+ * draw_login_screen, lists one clickable row per active account, and on a
+ * hit hands off to the unmodified LOGIN_MODE_SIGNIN flow with the username
+ * pre-filled. */
+#define GREETER_MAX_ROWS 6
+#define GREETER_ROW_H    60
+#define GREETER_ROW_GAP  10
+
+typedef struct {
+    u32    uid;
+    char   name[32];
+    bool   is_root;
+    rect_t rect;
+} greeter_row_t;
+
+typedef struct {
+    rect_t panel;
+    rect_t avatar;
+    i32    wordmark_y;
+    i32    title_y;
+    i32    subtitle_y;
+    i32    footer_y;
+    greeter_row_t rows[GREETER_MAX_ROWS];
+    u32    row_count;
+    /* Escape hatch: the row cap (GREETER_MAX_ROWS) is only a display limit --
+     * MAX_USERS (16) can exceed it, so this manual-entry row is always
+     * present and reachable, keeping every account clickable-or-typeable. */
+    rect_t other_row;
+} greeter_layout_t;
+
+/* Recomputed fresh every frame from the same panel geometry draw_login_screen
+ * uses (via login_make_layout), so drawing and hit-testing can never drift
+ * apart -- mirrors how login_make_layout itself is recomputed each frame. */
+static greeter_layout_t greeter_make_layout(const login_state_t *s) {
+    greeter_layout_t g;
+    kmemset(&g, 0, sizeof(g));
+
+    login_layout_t l = login_make_layout(s);
+    g.panel      = l.panel;
+    g.avatar     = l.avatar;
+    g.wordmark_y = l.wordmark_y;
+    g.title_y    = l.title_y;
+    g.subtitle_y = l.subtitle_y;
+    g.footer_y   = l.footer_y;
+
+    i32 lh      = FONT_H * (i32)GFX_FONT_SCALE;
+    i32 row_x   = g.panel.x + 42;
+    i32 row_w   = g.panel.w - 84;
+    i32 row_top = g.subtitle_y + lh + 24;
+
+    u32 n = user_enum_count();
+    if (n > GREETER_MAX_ROWS) n = GREETER_MAX_ROWS;
+
+    for (u32 i = 0; i < n; i++) {
+        u32  uid;
+        char name[32];
+        bool is_root;
+        if (!user_enum_at(i, &uid, name, sizeof(name), &is_root)) break;
+
+        greeter_row_t *row = &g.rows[g.row_count++];
+        row->uid = uid;
+        kstrncpy(row->name, name, sizeof(row->name) - 1);
+        row->name[sizeof(row->name) - 1] = '\0';
+        row->is_root = is_root;
+        row->rect = rect_make(row_x,
+                               row_top + (i32)i * (GREETER_ROW_H + GREETER_ROW_GAP),
+                               row_w, GREETER_ROW_H);
+    }
+
+    {
+        i32 other_y = row_top + (i32)g.row_count * (GREETER_ROW_H + GREETER_ROW_GAP);
+        g.other_row = rect_make(row_x, other_y, row_w, 34);
+    }
+    return g;
+}
+
+static void draw_greeter(const login_state_t *s, mouse_t *mouse) {
+    i32 sw = (i32)SCREEN_W;
+    i32 sh = (i32)SCREEN_H;
+    greeter_layout_t g = greeter_make_layout(s);
+
+    draw_elite_wallpaper();
+    gfx_rect_blend(0, 0, sw, sh, COL_BLACK, 96);
+
+    draw_glass_panel(g.panel, 18);
+
+    /* Branding header, identical to draw_login_screen's. */
+    gfx_circle_fill(g.avatar.x + g.avatar.w / 2, g.avatar.y + g.avatar.h / 2, g.avatar.w / 2, COL_PRIMARY);
+    gfx_circle_fill(g.avatar.x + g.avatar.w / 2 + 4, g.avatar.y + g.avatar.h / 2,
+                    g.avatar.w / 2 - 12, COL_SURFACE);
+    gfx_str_centered_ex(g.avatar.x, g.avatar.y + 15, g.avatar.w, "C", COL_ACCENT, COL_TRANSPARENT, FONT_H2);
+    gfx_str_centered_ex(g.panel.x, g.wordmark_y, g.panel.w, "CareOS", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+
+    gfx_str_centered(g.panel.x, g.title_y, g.panel.w, "Who's signing in?", COL_TEXT, COL_TRANSPARENT);
+    gfx_str_centered(g.panel.x, g.subtitle_y, g.panel.w,
+                     "Choose an account to continue", COL_DIM, COL_TRANSPARENT);
+
+    i32 lh = FONT_H * (i32)GFX_FONT_SCALE;
+
+    for (u32 i = 0; i < g.row_count; i++) {
+        const greeter_row_t *row = &g.rows[i];
+        bool hover = rect_contains(row->rect, mouse->x, mouse->y);
+
+        gfx_rect_rounded(row->rect.x, row->rect.y, row->rect.w, row->rect.h, 12,
+                         hover ? COL_SURFACE2 : COL_SURFACE);
+        if (hover)
+            gfx_rect_rounded_outline(row->rect.x, row->rect.y, row->rect.w, row->rect.h, 12, COL_BORDER);
+
+        /* Distinct per-account color, derived deterministically from the uid. */
+        u32 col = (0x4a6fffu ^ (row->uid * 0x9E3779B1u)) & 0xFFFFFFu;
+        i32 cy = row->rect.y + row->rect.h / 2;
+        i32 cx = row->rect.x + 30;
+        gfx_circle_fill(cx, cy, 22, col);
+
+        char initial[2];
+        initial[0] = row->name[0];
+        if (initial[0] >= 'a' && initial[0] <= 'z') initial[0] = (char)(initial[0] - 32);
+        initial[1] = '\0';
+        gfx_str_centered_ex(cx - 22, cy - 8, 44, initial, COL_WHITE, COL_TRANSPARENT, FONT_H2);
+
+        i32 name_x = cx + 40;
+        i32 name_y = cy - lh / 2;
+        gfx_str(name_x, name_y, row->name, COL_TEXT, COL_TRANSPARENT);
+        if (row->is_root)
+            gfx_str(name_x, name_y + lh, "Administrator", COL_MUTED, COL_TRANSPARENT);
+    }
+
+    if (g.row_count == 0)
+        gfx_str_centered(g.panel.x, g.subtitle_y + lh + 24, g.panel.w,
+                         "No accounts found", COL_MUTED, COL_TRANSPARENT);
+
+    /* Manual-entry escape hatch: always present so any account -- not just
+     * the first GREETER_MAX_ROWS -- is reachable. */
+    {
+        bool hover = rect_contains(g.other_row, mouse->x, mouse->y);
+        i32 ty = g.other_row.y + (g.other_row.h - lh) / 2;
+        gfx_str_centered(g.other_row.x, ty, g.other_row.w,
+                         "Other user... (type a username)",
+                         hover ? COL_TEXT : COL_DIM, COL_TRANSPARENT);
+    }
+
+    gfx_str_centered(g.panel.x, g.footer_y, g.panel.w,
                      "CareOS v9 secure desktop", COL_MUTED, COL_TRANSPARENT);
 }
 
@@ -566,10 +762,15 @@ static void desktop_fade_in(mouse_t *mouse) {
 static void run_matrix_screensaver(mouse_t *mouse) {
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
+    /* The rain falls one text line per frame and the green trail sits exactly
+     * one line above the white head, so the vertical step is the live line
+     * height. The 14px column pitch stays put -- that is horizontal spacing
+     * and the body advance has not changed. */
+    i32 cell = FONT_H * (i32)GFX_FONT_SCALE;
     u32 cols = sw / 14;
     if (cols > 256) cols = 256;
     static i32 drops[256];
-    for (u32 i = 0; i < cols; i++) drops[i] = -((i32)((timer_get_ticks() + i * 17) % sh) / 14);
+    for (u32 i = 0; i < cols; i++) drops[i] = -((i32)((timer_get_ticks() + i * 17) % sh) / cell);
 
     mouse_update(mouse);
     keyboard_flush();
@@ -590,10 +791,10 @@ static void run_matrix_screensaver(mouse_t *mouse) {
             str[0] = 33 + (timer_get_ticks() / 10 + i * 17) % 94; 
             str[1] = 0;
             
-            i32 dy = drops[i] * 14;
+            i32 dy = drops[i] * cell;
             if (dy > 0) {
-                gfx_str_bg_none(i * 14, dy, str, COL_WHITE); /* Leading char is white */
-                gfx_str_bg_none(i * 14, dy - 14, str, COL_GREEN); /* Trail is green */
+                gfx_str_bg_none((i32)i * 14, dy, str, COL_WHITE); /* Leading char is white */
+                gfx_str_bg_none((i32)i * 14, dy - cell, str, COL_GREEN); /* Trail is green */
             }
             drops[i]++;
             if (dy > sh && ((timer_get_ticks() + i) % 100 > 95)) drops[i] = 0;
@@ -604,12 +805,31 @@ static void run_matrix_screensaver(mouse_t *mouse) {
     }
 }
 
-static bool run_login_flow(mouse_t *mouse) {
+static bool run_login_flow(mouse_t *mouse, bool lock_mode) {
     login_state_t login;
     kmemset(&login, 0, sizeof(login));
-    login.field = 0;
-    login.mode = LOGIN_MODE_SIGNIN;
-    login_set_status(&login, "Sign in to continue", COL_DIM);
+    login.locked = lock_mode;
+
+    if (lock_mode) {
+        /* Re-authenticate the current user only: pin the username, skip the
+         * greeter entirely, and land straight on the password field. */
+        login.mode = LOGIN_MODE_SIGNIN;
+        const char *cur = user_current_name();
+        if (cur) {
+            kstrncpy(login.username, cur, sizeof(login.username) - 1);
+            login.username[sizeof(login.username) - 1] = '\0';
+            login.user_len = (u32)kstrlen(login.username);
+        }
+        login.field = 1;
+        login_set_status(&login, "Enter your password to unlock", COL_DIM);
+    } else {
+        login.field = 0;
+        login.mode = (user_enum_count() > 0) ? LOGIN_MODE_PICK : LOGIN_MODE_SIGNUP;
+        if (login.mode == LOGIN_MODE_PICK)
+            login_set_status(&login, "Choose an account to continue", COL_DIM);
+        else
+            login_set_status(&login, "Create a strong local account", COL_DIM);
+    }
 
     keyboard_flush();
     mouse->x = (i32)SCREEN_W / 2;
@@ -618,12 +838,42 @@ static bool run_login_flow(mouse_t *mouse) {
 
     while (1) {
         login_layout_t layout = login_make_layout(&login);
+        /* Only computed in PICK mode -- greeter_make_layout() calls
+         * user_enum_at() up to GREETER_MAX_ROWS times, no need to pay that
+         * every frame once past the picker. */
+        greeter_layout_t glayout;
+        kmemset(&glayout, 0, sizeof(glayout));
+        if (login.mode == LOGIN_MODE_PICK)
+            glayout = greeter_make_layout(&login);
 
         while (keyboard_haschar()) {
             char c = keyboard_getchar();
 
+            if (login.mode == LOGIN_MODE_PICK) {
+                /* Rows only cover the first GREETER_MAX_ROWS accounts, so
+                 * typing is the escape hatch that makes every account (up to
+                 * MAX_USERS) reachable: any printable key drops straight to
+                 * the password screen with an empty, editable username and
+                 * feeds that keystroke in as its first character. Enter,
+                 * Tab, and Backspace are no-ops here -- there is no field to
+                 * act on yet. */
+                if (c == '\n' || c == '\t' || c == '\b') continue;
+                if (c < 32 || c > 126) continue;
+
+                login.username[0] = c;
+                login.username[1] = '\0';
+                login.user_len = 1;
+                login.pass_len = 0;
+                login.password[0] = '\0';
+                login.mode = LOGIN_MODE_SIGNIN;
+                login.field = 0;
+                login_set_status(&login, "Enter your username and password", COL_DIM);
+                continue;
+            }
+
             if (c == '\t') {
-                login.field = 1 - login.field;
+                /* Locked mode has no username field to tab into. */
+                if (!login.locked) login.field = 1 - login.field;
                 continue;
             }
             if (c == '\n') {
@@ -651,7 +901,7 @@ static bool run_login_flow(mouse_t *mouse) {
                         login.confirm_len--;
                         login.confirm[login.confirm_len] = '\0';
                     }
-                } else if (login.field == 0 && login.user_len > 0) {
+                } else if (!login.locked && login.field == 0 && login.user_len > 0) {
                     login.user_len--;
                     login.username[login.user_len] = '\0';
                 } else if (login.field == 1 && login.pass_len > 0) {
@@ -674,7 +924,7 @@ static bool run_login_flow(mouse_t *mouse) {
                         login.confirm[login.confirm_len] = '\0';
                     }
                 }
-            } else if (login.field == 0) {
+            } else if (!login.locked && login.field == 0) {
                 if (login.user_len < sizeof(login.username) - 1) {
                     login.username[login.user_len++] = c;
                     login.username[login.user_len] = '\0';
@@ -690,11 +940,51 @@ static bool run_login_flow(mouse_t *mouse) {
         mouse_update(mouse);
 
         if (mouse->left_clicked) {
-            if (rect_contains(layout.user_field, mouse->x, mouse->y))
+            if (login.mode == LOGIN_MODE_PICK) {
+                bool hit = false;
+                for (u32 i = 0; i < glayout.row_count; i++) {
+                    if (!rect_contains(glayout.rows[i].rect, mouse->x, mouse->y)) continue;
+
+                    login.picked_uid = glayout.rows[i].uid;
+                    kstrncpy(login.username, glayout.rows[i].name, sizeof(login.username) - 1);
+                    login.username[sizeof(login.username) - 1] = '\0';
+                    login.user_len = (u32)kstrlen(login.username);
+                    login.pass_len = 0;
+                    login.password[0] = '\0';
+                    login.mode = LOGIN_MODE_SIGNIN;
+                    login.field = 1;
+
+                    char msg[96] = "Enter password for ";
+                    kstrcat(msg, login.username);
+                    login_set_status(&login, msg, COL_DIM);
+                    hit = true;
+                    break;
+                }
+                /* Escape hatch: same destination as typing directly -- an
+                 * empty, editable username -- so every account beyond the
+                 * GREETER_MAX_ROWS display cap stays reachable by mouse too. */
+                if (!hit && rect_contains(glayout.other_row, mouse->x, mouse->y)) {
+                    login.username[0] = '\0';
+                    login.user_len = 0;
+                    login.pass_len = 0;
+                    login.password[0] = '\0';
+                    login.mode = LOGIN_MODE_SIGNIN;
+                    login.field = 0;
+                    login_set_status(&login, "Enter your username and password", COL_DIM);
+                }
+            } else if (!login.locked && rect_contains(layout.user_field, mouse->x, mouse->y))
                 login.field = 0;
             else if (rect_contains(layout.pass_field, mouse->x, mouse->y))
                 login.field = 1;
-            else if (button_take_click(&layout.primary_btn, mouse)) {
+            else if (!login.locked && login.mode == LOGIN_MODE_SIGNIN && user_enum_count() > 0 &&
+                     rect_contains(layout.avatar, mouse->x, mouse->y)) {
+                /* Back affordance: the avatar returns to the greeter. Not
+                 * offered in lock mode -- there is no picker to return to. */
+                login.mode = LOGIN_MODE_PICK;
+                login.pass_len = 0;
+                login.password[0] = '\0';
+                login_set_status(&login, "Choose an account to continue", COL_DIM);
+            } else if (button_take_click(&layout.primary_btn, mouse)) {
                 if (login.mode == LOGIN_MODE_MUST_CHANGE) {
                     if (login_apply_password_change(&login)) {
                         login_fade_out(&login, mouse);
@@ -708,7 +998,7 @@ static bool run_login_flow(mouse_t *mouse) {
                 } else {
                     login_create_account(&login);
                 }
-            } else if (button_take_click(&layout.secondary_btn, mouse)) {
+            } else if (!login.locked && button_take_click(&layout.secondary_btn, mouse)) {
                 if (login.mode == LOGIN_MODE_MUST_CHANGE) {
                     /* Cancel drops the session and returns to sign-in. The
                      * must_change flag stays set, so there is no way past it. */
@@ -737,18 +1027,38 @@ static bool run_login_flow(mouse_t *mouse) {
             }
         }
 
-        draw_login_screen(&login, mouse);
+        if (login.mode == LOGIN_MODE_PICK)
+            draw_greeter(&login, mouse);
+        else
+            draw_login_screen(&login, mouse);
         mouse_draw_cursor(mouse->x, mouse->y);
         gfx_flip();
         __asm__ volatile("sti; hlt");
     }
 }
 
+/* Post-login desktop setup, shared between the initial boot-to-desktop path
+   and re-entry after Lock / Log Out / Switch User. Only opens a fresh
+   Terminal if one isn't already open (Lock returns to an existing session). */
+static void enter_desktop(mouse_t *mouse) {
+    rc_care_run_startup();
+
+    i32 sw = (i32)SCREEN_W;
+    i32 sh = (i32)SCREEN_H;
+    i32 tw = sw * 62 / 100;
+    i32 th = sh * 66 / 100;
+
+    if (!wm_find_app(APP_TERMINAL))
+        wm_open(APP_TERMINAL, "Terminal", (sw - tw) / 2, (sh - th) / 2 - 24, tw, th);
+    notify_push("CareOS", "Desktop ready.", COL_PRIMARY);
+    speaker_startup(); /* Audible startup melody */
+    desktop_fade_in(mouse);
+}
+
 void gui_run(void) {
     const careos_settings_t *cfg = settings_get();
     bool fast_boot = cfg && cfg->boot_fast;
     mouse_t mouse;
-    i32 sw, sh, tw, th;
 
     serial_write("  [gui_run] splash start\n");
     if (fast_boot) {
@@ -764,26 +1074,18 @@ void gui_run(void) {
 
     serial_write("  [gui_run] login gate\n");
     kmemset(&mouse, 0, sizeof(mouse));
-    if (!run_login_flow(&mouse)) {
+    if (!run_login_flow(&mouse, false)) {
         serial_write("  [gui_run] login flow returned failure\n");
     }
+    session_begin(user_current_uid());
+    theme_switch(settings_get()->theme == 0);
 
-    rc_care_run_startup();
-
-    sw = (i32)SCREEN_W;
-    sh = (i32)SCREEN_H;
-    tw = sw * 62 / 100;
-    th = sh * 66 / 100;
-
-    wm_open(APP_TERMINAL, "Terminal", (sw - tw) / 2, (sh - th) / 2 - 24, tw, th);
-    notify_push("CareOS", "Desktop ready.", COL_PRIMARY);
-    speaker_startup(); /* Audible startup melody */
-    desktop_fade_in(&mouse);
+    enter_desktop(&mouse);
 
     serial_write("  [gui_run] entering main loop\n");
 
-    mouse.x = sw / 2;
-    mouse.y = sh / 2;
+    mouse.x = (i32)SCREEN_W / 2;
+    mouse.y = (i32)SCREEN_H / 2;
 
     u32 last_sysmon = 0, last_netmon = 0, last_notify = 0;
     bool needs_redraw = true;
@@ -791,6 +1093,34 @@ void gui_run(void) {
     bool lb = false;
 
     while (1) {
+            if (g_session_action != SESSION_ACT_NONE) {
+                session_action_t act = g_session_action;
+                g_session_action = SESSION_ACT_NONE;
+                launcher_open = false;
+                if (act == SESSION_ACT_LOCK) {
+                    /* Real lock screen: re-authenticate the current user only.
+                       No picker, no signup, windows/session stay exactly as
+                       they are, and there is no desktop re-entry (no startup
+                       chime replay). */
+                    run_login_flow(&mouse, true);
+                    session_begin(user_current_uid());
+                    theme_switch(settings_get()->theme == 0);
+                    needs_redraw = true;
+                } else {
+                    /* LOGOUT / Switch User: drop the session entirely and show
+                       the full greeter so a different account can sign in. */
+                    wm_close_all();      /* clean desktop for the next user */
+                    session_end();
+                    run_login_flow(&mouse, false);
+                    session_begin(user_current_uid());
+                    theme_switch(settings_get()->theme == 0);
+                    enter_desktop(&mouse);
+                }
+                g_last_activity_tick = timer_get_ticks();
+                needs_redraw = true;
+                continue;
+            }
+
             bool activity = false;
 
             while (keyboard_haschar()) {
@@ -838,9 +1168,13 @@ void gui_run(void) {
             /* Idle / Screensaver Check (10 minutes = 600,000 ms, screensaver at 30,000 ms) */
             u32 now = timer_get_ticks();
             if (now - g_last_activity_tick > 600000) {
-                /* Auto-lock the screen if idle for 10 mins */
+                /* Auto-lock the screen if idle for 10 mins. Same lock screen
+                   as an explicit Lock: current user's password only, windows
+                   stay open, no picker and no startup chime replay. */
                 serial_write("  [gui] auto-locking due to idle\n");
-                run_login_flow(&mouse);
+                run_login_flow(&mouse, true);
+                session_begin(user_current_uid());
+                theme_switch(settings_get()->theme == 0);
                 g_last_activity_tick = timer_get_ticks();
                 needs_redraw = true;
             } else if (now - g_last_activity_tick > 30000) {

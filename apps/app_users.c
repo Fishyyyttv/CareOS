@@ -39,20 +39,32 @@ void app_users_init(window_t *w){
         : "Sign in as root to manage other accounts", COL_DIM);
 }
 
-/* Shared layout — must match between draw and click */
-#define UM_LIST_HDR   52
+/* Shared layout — must match between draw and click.
+ *
+ * Every panel here stacks an H2 heading over a BODY subtitle, so the offsets
+ * are expressions over the live line heights rather than the old literals
+ * (52 header, 40 rows, +20 subtitle). Those were tuned for a 13px body face
+ * and a 2x-scaled heading; with JetBrains Mono's 17px body and 26px H2 the
+ * headings landed on top of their own subtitles. */
+#define UM_BODY_H     (FONT_H * (i32)GFX_FONT_SCALE)
+#define UM_H2_H       gfx_line_h_ex(FONT_H2)
+#define UM_HDR_TOP    10
+#define UM_HDR_SUB_Y  (UM_HDR_TOP + UM_H2_H + 2)
+#define UM_LIST_HDR   (UM_HDR_SUB_Y + UM_BODY_H + 6)
 #define UM_LIST_START (UM_LIST_HDR + 8)
-#define UM_ROW_H      40
+#define UM_ROW_PAD     7
+#define UM_ROW_H      (2 * UM_BODY_H + 2 + 2 * UM_ROW_PAD)
 #define UM_ROW_GAP     4
 #define UM_INFO_Y      12
 #define UM_INFO_H     116
 #define UM_INFO_ROW    26
 #define UM_FORM_Y     (UM_INFO_Y + UM_INFO_H + 20)
-#define UM_INPUT_Y    (UM_FORM_Y + 38)
-#define UM_BTN_Y      (UM_INPUT_Y + 46)
+#define UM_FORM_SUB_Y (UM_FORM_Y + UM_H2_H + 2)
+#define UM_INPUT_Y    (UM_FORM_SUB_Y + UM_BODY_H + 8)
+#define UM_BTN_Y      (UM_INPUT_Y + UM_INPUT_H + 10)
 #define UM_BTN_H       34
 #define UM_INPUT_H     36
-#define UM_SB_H        26
+#define UM_SB_H       (UM_BODY_H + 9)
 
 void app_users_draw(window_t *w){
     rect_t cr = wm_client_rect(w);
@@ -77,8 +89,8 @@ void app_users_draw(window_t *w){
     /* Left header */
     gfx_gradient_rect(cr.x, cr.y, list_w, UM_LIST_HDR, g_theme->surface3, COL_SURFACE2);
     gfx_hline(cr.x, cr.y + UM_LIST_HDR, list_w, COL_BORDER);
-    gfx_str_ex(cr.x + 14, cr.y + 10, "User Accounts", COL_TEXT, COL_TRANSPARENT, FONT_H2);
-    gfx_str(cr.x + 14, cr.y + 32, "Local account database", g_theme->muted, COL_TRANSPARENT);
+    gfx_str_ex(cr.x + 14, cr.y + UM_HDR_TOP, "User Accounts", COL_TEXT, COL_TRANSPARENT, FONT_H2);
+    gfx_str(cr.x + 14, cr.y + UM_HDR_SUB_Y, "Local account database", g_theme->muted, COL_TRANSPARENT);
 
     /* User rows */
     for (u32 i = 0; i < count; i++) {
@@ -98,8 +110,8 @@ void app_users_draw(window_t *w){
         char init[2] = { u->name[0], '\0' };
         gfx_str(cr.x + 20, ry + UM_ROW_H/2 - 5, init, COL_WHITE, COL_TRANSPARENT);
 
-        gfx_str(cr.x + 40, ry + 9, u->name, COL_TEXT, COL_TRANSPARENT);
-        gfx_str(cr.x + 40, ry + 23, u->is_root ? "Administrator" : "Standard",
+        gfx_str(cr.x + 40, ry + UM_ROW_PAD, u->name, COL_TEXT, COL_TRANSPARENT);
+        gfx_str(cr.x + 40, ry + UM_ROW_PAD + UM_BODY_H + 2, u->is_root ? "Administrator" : "Standard",
                 u->is_root ? COL_ACCENT : g_theme->muted, COL_TRANSPARENT);
     }
 
@@ -109,10 +121,10 @@ void app_users_draw(window_t *w){
 
     gfx_gradient_rect(det_x, cr.y, det_w, UM_LIST_HDR, g_theme->surface3, COL_SURFACE);
     gfx_hline(det_x, cr.y + UM_LIST_HDR, det_w, COL_BORDER);
-    gfx_str_ex(dpx, cr.y + 10, selected ? selected->name : "No user selected",
+    gfx_str_ex(dpx, cr.y + UM_HDR_TOP, selected ? selected->name : "No user selected",
                COL_TEXT, COL_TRANSPARENT, FONT_H2);
     if (selected)
-        gfx_str(dpx, cr.y + 32, selected->is_root ? "Administrator" : "Standard user",
+        gfx_str(dpx, cr.y + UM_HDR_SUB_Y, selected->is_root ? "Administrator" : "Standard user",
                 selected->is_root ? COL_ACCENT : g_theme->muted, COL_TRANSPARENT);
 
     if (selected) {
@@ -163,7 +175,7 @@ void app_users_draw(window_t *w){
         /* Create user form */
         i32 form_base = cr.y + UM_LIST_HDR;
         gfx_str_ex(dpx, form_base + UM_FORM_Y, "Create User", COL_TEXT, COL_TRANSPARENT, FONT_H2);
-        gfx_str(dpx, form_base + UM_FORM_Y + 20, "Password must be strong",
+        gfx_str(dpx, form_base + UM_FORM_SUB_Y, "Password must be strong",
                 g_theme->muted, COL_TRANSPARENT);
 
         /* Inputs */
@@ -210,7 +222,7 @@ void app_users_draw(window_t *w){
     i32 sb_y = cr.y + cr.h - UM_SB_H;
     gfx_rect(det_x, sb_y, det_w, UM_SB_H, g_theme->surface3);
     gfx_hline(det_x, sb_y, det_w, COL_BORDER);
-    gfx_str_clipped(dpx, sb_y + (UM_SB_H - FONT_H) / 2,
+    gfx_str_clipped(dpx, sb_y + (UM_SB_H - UM_BODY_H) / 2,
                     det_w - 20, w->users_status,
                     w->users_status_color ? w->users_status_color : g_theme->dim,
                     COL_TRANSPARENT);

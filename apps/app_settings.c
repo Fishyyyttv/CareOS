@@ -16,6 +16,22 @@ static void settings_mask(const char *src, char *out, u32 max) {
     out[len] = '\0';
 }
 
+/* Vertical metrics shared by draw and click. Both used to recompute the same
+ * literals (28*sc for the H1 heading, 40+36*sc for the account card) and the
+ * literals were shorter than the live line heights, so text overlapped and the
+ * password fields no longer sat where the click handler expected them. */
+static i32 settings_body_h(void)  { return FONT_H * (i32)GFX_FONT_SCALE; }
+
+static i32 settings_content_top(rect_t cr) {
+    /* card top = panel pad + H1 tab heading + gap + subtitle + gap */
+    return cr.y + 22 + gfx_line_h_ex(FONT_H1) + 2 + settings_body_h() + 18;
+}
+
+static i32 settings_info_h(void) {
+    /* BODY caption, H2 value, BODY footnote, with 18px padding top and bottom */
+    return 18 + settings_body_h() + 2 + gfx_line_h_ex(FONT_H2) + 2 + settings_body_h() + 18;
+}
+
 static button_t settings_button(rect_t rect, const char *label, bool active, u32 bg, u32 fg) {
     button_t b;
     kmemset(&b, 0, sizeof(b));
@@ -66,12 +82,12 @@ void app_settings_draw(window_t *w){
             w->settings_tab == (u32)i ? COL_WHITE : COL_TEXT);
         button_draw(&tab);
     }
-    i32 h1_h = 28 * sc;
-    gfx_set_clip(cx, cy, cw, h1_h + 10);
+    i32 h1_h = gfx_line_h_ex(FONT_H1);
+    gfx_set_clip(cx, cy, cw, h1_h + 2);
     gfx_str_ex(cx, cy, tabs[w->settings_tab], COL_TEXT, COL_TRANSPARENT, FONT_H1);
     gfx_clear_clip();
-    gfx_str(cx, cy + h1_h + 8, "Changes apply immediately and are saved to disk", COL_DIM, COL_TRANSPARENT);
-    cy += h1_h + 40;
+    gfx_str(cx, cy + h1_h + 2, "Changes apply immediately and are saved to disk", COL_DIM, COL_TRANSPARENT);
+    cy = settings_content_top(cr);
 
     switch (w->settings_tab) {
     case 0: {
@@ -105,21 +121,28 @@ void app_settings_draw(window_t *w){
             kstrcpy(last_login, "No previous login recorded");
         }
 
-        i32 info_h = 40 + 36 * sc;
+        /* Three stacked rows: a BODY caption, an H2 value, a BODY footnote.
+         * The strides were 14 and a guessed 20px "H2 height"; both are shorter
+         * than the real line heights, so the rows sat on top of each other. */
+        i32 body_h = settings_body_h();
+        i32 row1_y = cy + 18;
+        i32 row2_y = row1_y + body_h + 2;
+        i32 row3_y = row2_y + gfx_line_h_ex(FONT_H2) + 2;
+        i32 info_h = settings_info_h();
+
         gfx_rect_rounded(cx, cy, cw, info_h, 16, COL_SURFACE2);
         gfx_rect_blend(cx, cy, cw, info_h, COL_GLASS_TINT, 10);
-        
+
         gfx_set_clip(cx + 20, cy, cw / 2 - 40, info_h);
-        gfx_str(cx + 20, cy + 18, "Signed in as", COL_DIM, COL_TRANSPARENT);
-        i32 h2_h = 20 * sc;
-        gfx_str_ex(cx + 20, cy + 18 + 14 * sc, user_current_name(), COL_TEXT, COL_TRANSPARENT, FONT_H2);
-        gfx_str(cx + 20, cy + 18 + 14 * sc + h2_h + 4, cu && cu->is_root ? "Administrator" : "Standard user", COL_ACCENT, COL_TRANSPARENT);
+        gfx_str(cx + 20, row1_y, "Signed in as", COL_DIM, COL_TRANSPARENT);
+        gfx_str_ex(cx + 20, row2_y, user_current_name(), COL_TEXT, COL_TRANSPARENT, FONT_H2);
+        gfx_str(cx + 20, row3_y, cu && cu->is_root ? "Administrator" : "Standard user", COL_ACCENT, COL_TRANSPARENT);
         gfx_clear_clip();
 
         gfx_set_clip(cx + cw / 2, cy, cw / 2 - 20, info_h);
-        gfx_str(cx + cw / 2, cy + 18, "Home", COL_DIM, COL_TRANSPARENT);
-        gfx_str(cx + cw / 2, cy + 18 + 14 * sc, cu ? cu->home : "/home", COL_TEXT, COL_TRANSPARENT);
-        gfx_str(cx + cw / 2, cy + 18 + 14 * sc + h2_h + 4, last_login, COL_MUTED, COL_TRANSPARENT);
+        gfx_str(cx + cw / 2, row1_y, "Home", COL_DIM, COL_TRANSPARENT);
+        gfx_str(cx + cw / 2, row2_y, cu ? cu->home : "/home", COL_TEXT, COL_TRANSPARENT);
+        gfx_str(cx + cw / 2, row3_y, last_login, COL_MUTED, COL_TRANSPARENT);
         gfx_clear_clip();
 
         cy += info_h + 24;
@@ -331,8 +354,7 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
     i32 sb = 120 + 64 * sc;
     i32 cx = cr.x + sb + 26;
     i32 cw = cr.w - sb - 52;
-    /* cy_start = cr.y+22, after H1 title (28*sc) + gap (40) */
-    i32 cy = cr.y + 22 + 28 * sc + 40;
+    i32 cy = settings_content_top(cr);
     (void)m;
 
     if (x < cr.x + sb) {
@@ -345,8 +367,7 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
     switch (w->settings_tab) {
     case 0: {
         /* Match draw: info panel then password section */
-        i32 info_h = 40 + 36 * sc;
-        i32 pwd_cy  = cy + info_h + 24 + 24;   /* matches draw cy after panel+labels */
+        i32 pwd_cy  = cy + settings_info_h() + 24 + 24;  /* draw cy after panel+labels */
         if (rect_contains(rect_make(cx, pwd_cy, cw/2 - 12, 38), x, y)) w->settings_field = 0;
         if (rect_contains(rect_make(cx + cw/2 + 12, pwd_cy, cw/2 - 12, 38), x, y)) w->settings_field = 1;
         if (rect_contains(rect_make(cx, pwd_cy + 52, 156, 34), x, y)) app_settings_key(w, '\n');

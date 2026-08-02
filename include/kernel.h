@@ -415,6 +415,11 @@ typedef struct {
     u8   failed_attempts;
     u32  lock_until_tick;
     u32  theme_pref;
+    u32  font_pref;
+    u32  wallpaper_pref;
+    u32  mouse_pref;
+    u32  clock24_pref;
+    u32  taskbar_pref;
     u16  last_login_year;
     u8   last_login_month;
     u8   last_login_day;
@@ -424,13 +429,29 @@ typedef struct {
     bool must_change_password;
 } user_t;
 
+#define USER_PREF_UNSET 0xFFFFFFFFu
+typedef struct {
+    u32 theme;
+    u32 font;
+    u32 wallpaper;
+    u32 mouse_sensitivity;
+    u32 clock_24h;
+    u32 taskbar_centered;
+} user_prefs_t;
+void user_prefs_get(u32 uid, user_prefs_t *out);
+void user_prefs_set_current(const user_prefs_t *p);
+void users_selftest(void);
+
 void *user_get_by_uid(u32 uid);
 void        users_init(void);
 int         user_login(const char *name, const char *pass);
 void        user_logout(void);
 const char *user_current_name(void);
 u32         user_current_uid(void);
+bool        user_session_active(void);
 bool        user_is_root(void);
+void        session_begin(u32 uid);
+void        session_end(void);
 bool        user_can_read(fs_node_t *node);
 bool        user_can_write(fs_node_t *node);
 int         user_create(const char *name, const char *pass);
@@ -441,9 +462,17 @@ int         user_change_password(const char *name, const char *old_pass,
                                  const char *new_pass);
 void        user_list(void);
 void        user_set_current_theme_preference(u32 theme);
+#define USER_FONT_SYSTEM_DEFAULT 0xFFFFFFFFu
+void        user_set_current_font_preference(u32 index);
 /* True when the logged-in account still holds a shipped bootstrap password and
  * must set a new one before reaching the desktop. */
 bool        user_must_change_password(void);
+
+/* Account enumerator for the greeter (account-picker) UI. Iterates active
+ * accounts only -- guest (uid 65534) is not a stored account and is never
+ * enumerated. */
+u32         user_enum_count(void);
+bool        user_enum_at(u32 idx, u32 *uid_out, char *name_out, u32 name_cap, bool *is_root_out);
 
 /* VFS path helper (implemented in users.c) */
 void vfs_get_path(fs_node_t *node, char *buf, u32 max);
@@ -619,6 +648,7 @@ typedef struct {
     char wifi_pass[64];
     u32  vesa_w;
     u32  vesa_h;
+    u32  font_family;
 } careos_settings_t;
 
 void settings_init(void);
@@ -631,6 +661,9 @@ void settings_set_wallpaper(u32 wallpaper);
 void settings_set_taskbar_centered(bool centered);
 void settings_set_wifi_profile(const char *ssid, const char *pass, bool connected);
 void settings_set_vesa_mode(u32 w, u32 h);
+void settings_set_font_family(u32 index);
+void settings_apply_prefs(const user_prefs_t *p);
+void settings_capture_to_current_user(void);
 
 /* -- Pipes ---------------------------------------------------------------- */
 #define PIPE_BUF_SIZE 4096

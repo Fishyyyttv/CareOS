@@ -14,6 +14,8 @@ extern u32 SCREEN_H;
 extern u32 SCREEN_PITCH;    /* bytes per row */
 extern u32 *FRAMEBUFFER;    /* linear framebuffer pointer */
 extern u32 GFX_FONT_SCALE;   /* Bitmap text scale; kept 1 at 1080p for crisp UI text */
+extern u32 GFX_FONT_W;   /* active family's BODY advance  */
+extern u32 GFX_FONT_H;   /* active family's BODY line height */
 
 /* -- Geometry ------------------------------------------------------------- */
 typedef struct { i32 x, y; }         point_t;
@@ -159,12 +161,29 @@ typedef enum {
     FONT_H1       /* 28px */
 } font_size_t;
 
-#define FONT_W       8
-#define FONT_H      13
-#define FONT_SPACING 3
+/* Active font metrics. Variables, not constants -- font_set_family() updates
+ * them. No call site uses these in a constant expression, so every existing
+ * user keeps compiling unchanged.
+ *
+ * The (i32) cast is load-bearing, not decoration. These were the plain-int
+ * literals 8 and 13; GFX_FONT_W/H are u32. Without the cast, any surrounding
+ * `int - FONT_H` promotes to unsigned, so a negative intermediate wraps to
+ * ~4.29e9 and a following /2 yields ~2.1e9 -- e.g. centring a text row inside
+ * a bar shorter than the line height. Casting back to i32 preserves the exact
+ * signed arithmetic every call site was written against. */
+#define FONT_W  ((i32)GFX_FONT_W)
+#define FONT_H  ((i32)GFX_FONT_H)
+
+/* Line height of any text size, in device pixels, GFX_FONT_SCALE applied.
+ * FONT_H only covers FONT_BODY; headings have their own line heights and they
+ * are not a fixed multiple of the body one (JetBrains Mono H3 is 21 where BODY
+ * is 17; Classic is 13 for both). Layouts that stack a heading above body text
+ * must ask for the heading's own height or the two rows collide. */
+i32 gfx_line_h_ex(font_size_t size);
 
 void gfx_str_ex(i32 x, i32 y, const char *s, u32 fg, u32 bg, font_size_t size);
 void gfx_str_centered_ex(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg, font_size_t size);
+i32  gfx_str_width_ex(const char *s, font_size_t size);
 void gfx_rect_blend(i32 x, i32 y, i32 w, i32 h, u32 color, u8 alpha);
 void gfx_draw_icon(app_id_t app, i32 x, i32 y, i32 size, u32 color);
 
@@ -432,6 +451,7 @@ void      wm_cycle_focus(int dir);
 void      wm_snap_focused(int mode);
 void      wm_minimize_all(void);
 void      wm_minimize(window_t *w);
+void      wm_close_all(void);
 window_t *wm_get_window(int i);
 
 void desktop_draw(void);
@@ -551,6 +571,10 @@ extern bool launcher_open;
 void launcher_draw(mouse_t *m);
 void launcher_handle_key(char c);
 void launcher_handle_mouse(mouse_t *m);
+
+/* -- Session actions (Lock / Log Out / Switch User) ------------------------ */
+typedef enum { SESSION_ACT_NONE, SESSION_ACT_LOCK, SESSION_ACT_LOGOUT } session_action_t;
+extern volatile session_action_t g_session_action;
 
 /* -- App help aliases ----------------------------------------------------- */
 void app_help_init(window_t *w);

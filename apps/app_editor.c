@@ -6,6 +6,12 @@
  *                in tab=3: 0=Open mode, 1=Save mode */
 #include "apps_common.h"
 
+/* Sidebar row pitches. These were flat 16*sc and 14*sc, both shorter than a
+ * 17px body line, so Explorer rows and the Care Language cheat-sheet ran into
+ * each other. Shared by the draw path and app_editor_click's hit test. */
+#define EDIT_EXPLORER_ROW_H (FONT_H * (i32)GFX_FONT_SCALE + 4)
+#define EDIT_DOC_LINE_H     (FONT_H * (i32)GFX_FONT_SCALE + 1)
+
 /* split "/a/b/c" → dir="/a/b" name="c"  (handles root and no-slash cases) */
 static void editor_split_path(const char *path, char *dir, u32 dmax, char *name, u32 nmax) {
     const char *slash = kstrrchr(path, '/');
@@ -148,20 +154,21 @@ void app_editor_draw(window_t *w){
         gfx_str(cr.x + 90 * sc, cr.y + 6 * sc, "Docs", w->editor_sidebar_tab == 1 ? COL_PRIMARY : COL_DIM, COL_TRANSPARENT);
         
         i32 sy = cr.y + 24 * sc + 4;
+        i32 ex_row = EDIT_EXPLORER_ROW_H;   /* one selectable file row */
         if (w->editor_sidebar_tab == 0) {
             if (w->fm_dir) {
                 /* Parent dir link */
                 if (w->fm_dir->parent) {
-                    if (w->fm_sel == 0xFFFFFFFF) gfx_rect(cr.x + 2, sy, sidebar_w - 4, 16 * sc, COL_SELECTION);
+                    if (w->fm_sel == 0xFFFFFFFF) gfx_rect(cr.x + 2, sy, sidebar_w - 4, ex_row, COL_SELECTION);
                     gfx_str_clipped(cr.x + 8, sy + 2, sidebar_w - 12, "..", COL_PRIMARY, COL_TRANSPARENT);
-                    sy += 16 * sc;
+                    sy += ex_row;
                 }
                 for (u32 i = 0; i < w->fm_dir->child_count && sy < cr.y + cr.h - 20; i++) {
                     fs_node_t *ch = w->fm_dir->children[i];
                     u32 c_col = ch->type == FS_DIR ? COL_PRIMARY : COL_TEXT;
-                    if (i == w->fm_sel) gfx_rect(cr.x + 2, sy, sidebar_w - 4, 16 * sc, COL_SELECTION);
+                    if (i == w->fm_sel) gfx_rect(cr.x + 2, sy, sidebar_w - 4, ex_row, COL_SELECTION);
                     gfx_str_clipped(cr.x + 8, sy + 2, sidebar_w - 12, ch->name, c_col, COL_TRANSPARENT);
-                    sy += 16 * sc;
+                    sy += ex_row;
                 }
             }
         } else {
@@ -194,7 +201,7 @@ void app_editor_draw(window_t *w){
                 else if (kstrncmp(CL_DOCS[i], "Care", 4) == 0) tc = COL_ACCENT;
                 else if (kstrncmp(CL_DOCS[i], "func", 4) == 0 || kstrncmp(CL_DOCS[i], "var", 3) == 0) tc = COL_TEXT;
                 gfx_str_clipped(cr.x + 8, sy, sidebar_w - 12, CL_DOCS[i], tc, COL_TRANSPARENT);
-                sy += 14 * sc;
+                sy += EDIT_DOC_LINE_H;
             }
         }
         cr.x += sidebar_w + 1;
@@ -538,15 +545,15 @@ void app_editor_click(window_t *w, i32 x, i32 y, mouse_t *m) {
             i32 idx_off = 0;
             
             if (w->fm_dir->parent) {
-                if (y >= sy && y < sy + 16 * sc) {
+                if (y >= sy && y < sy + EDIT_EXPLORER_ROW_H) {
                     w->fm_dir = w->fm_dir->parent;
                     w->fm_sel = 0;
                     return;
                 }
-                sy += 16 * sc;
+                sy += EDIT_EXPLORER_ROW_H;
             }
-            
-            i32 idx = (y - sy) / (16 * sc);
+
+            i32 idx = (y - sy) / EDIT_EXPLORER_ROW_H;
             if (idx >= 0 && idx < (i32)w->fm_dir->child_count) {
                 if (w->fm_sel == (u32)idx) {
                     /* Double click approx */
