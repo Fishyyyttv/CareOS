@@ -134,6 +134,8 @@ C_SRC     := kernel/kernel.c       \
              net/tls.c             \
              shell/shell.c         \
              gui/gfx.c             \
+             gui/perf_stats.c      \
+             gui/perf.c            \
              gui/image.c           \
              gui/image_bmp.c       \
              gui/image_tga.c       \
@@ -386,7 +388,8 @@ HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -DHOST_TEST \
                  -fsanitize=address,undefined -fno-sanitize-recover=undefined \
                  -fno-omit-frame-pointer
 HT_SRC_qoi    := gui/image_qoi.c
-HOST_TESTS    := qoi
+HT_SRC_perf_stats := gui/perf_stats.c
+HOST_TESTS    := qoi perf_stats
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h

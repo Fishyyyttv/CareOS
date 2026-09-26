@@ -6,6 +6,7 @@
 #include "image.h"
 #include "resource_cache.h"
 #include "icon.h"
+#include "perf.h"
 
 static void draw_glass_panel(rect_t r, i32 radius);
 
@@ -1611,6 +1612,7 @@ void gui_run(void) {
     serial_write("  [gui_run] entering main loop\n");
 
     widgets_init();
+    perf_init();
 
     mouse.x = (i32)SCREEN_W / 2;
     mouse.y = (i32)SCREEN_H / 2;
@@ -1675,6 +1677,12 @@ void gui_run(void) {
                 if (keyboard_ctrl_held() && c >= '1' && c <= '4') {
                     g_current_desktop = (u32)(c - '1');
                     notify_push("Workspace", (c == '1' ? "Desktop 1" : (c == '2' ? "Desktop 2" : (c == '3' ? "Desktop 3" : "Desktop 4"))), COL_ACCENT);
+                    continue;
+                }
+
+                if (keyboard_alt_held() && keyboard_ctrl_held() && (kl == 'p' || c == 0x10)) {
+                    perf_hud_set(!perf_hud_enabled());
+                    activity = true;
                     continue;
                 }
 
@@ -1769,9 +1777,22 @@ void gui_run(void) {
                 if (ck && !ck->minimized && now - last_clock >= 40) { last_clock = now; activity = true; }
             }
 
+            #ifdef CAREOS_PERF_BENCH_AT_BOOT
+            {
+                static bool started = false;
+                static u32 desktop_ms = 0;
+                if (!desktop_ms) desktop_ms = timer_ms();
+                if (!started && (u32)(timer_ms() - desktop_ms) > 3000u) {
+                    started = true;
+                    perf_bench_start(NULL);
+                }
+            }
+            #endif
+            if (perf_bench_active()) { perf_bench_step(); activity = true; }
             if (activity) needs_redraw = true;
 
             if (needs_redraw) {
+                perf_frame_begin();
                 /* The desktop backdrop (wallpaper + frosted sidebar + widget
                  * panels) is expensive to composite -- a per-frame blur and soft
                  * shadow. It only changes when the chrome does: the clock/meters
@@ -1810,8 +1831,10 @@ void gui_run(void) {
                 }
 
                 gfx_ripples_draw();
+                perf_hud_draw();
                 mouse_draw_cursor(mouse.x, mouse.y);
                 gfx_flip();
+                perf_frame_end();
                 needs_redraw = false;
             }
 
@@ -1837,6 +1860,9 @@ void gui_run(void) {
                     wm_handle_mouse(&mouse);
                 }
             }
+            perf_idle_begin();
             __asm__ volatile("sti; hlt");
+            perf_idle_end();
+            perf_tick();
     }
 }

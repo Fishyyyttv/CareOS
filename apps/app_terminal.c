@@ -1,5 +1,6 @@
 /* CareOS v9 -- apps/app_terminal.c -- Terminal application */
 #include "apps_common.h"
+#include "perf.h"
 
 /* -- Terminal Themes & Customization --------------------------------------
  * Each theme carries its own foreground so text stays legible on its own
@@ -503,6 +504,20 @@ static void term_exec(window_t *w,char *line){
         win_append(w,"Fetching...\n");
         char resp[1024]; int n=http_get("example.com",80,"/",resp,sizeof(resp));
         if(n>0){win_append(w,resp);}else win_append(w,"Failed.\n");
+    }
+    else if(!kstrcmp(cmd,"perf")){
+        if(argc >= 2 && !kstrcmp(argv[1], "on")) {
+            perf_hud_set(true);
+            win_append(w, "perf HUD on (Ctrl+Alt+P toggles)\n");
+        } else if(argc >= 2 && !kstrcmp(argv[1], "off")) {
+            perf_hud_set(false);
+            win_append(w, "perf HUD off\n");
+        } else if(argc >= 2 && !kstrcmp(argv[1], "bench")) {
+            win_append(w, "running 10 s benchmark... result in notification and on serial\n");
+            perf_bench_start(argc >= 3 ? argv[2] : NULL);
+        } else {
+            win_append(w, "usage: perf on|off|bench [url]\n");
+        }
     }
     else {
         win_append(w,cmd); win_append(w,": command not found\n");
