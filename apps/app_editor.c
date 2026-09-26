@@ -327,7 +327,7 @@ void app_editor_draw(window_t *w){
 
         gfx_str(cr.x + lnw + 6, y, tmp, fc, COL_TRANSPARENT);
 
-        if (w->focused && *(end) == '\0' && (timer_get_ticks()/40)%2 == 0) {
+        if (w->focused && *(end) == '\0' && (timer_ms()/400)%2 == 0) {
             i32 cx = cr.x + lnw + 6 + (i32)kstrlen(tmp) * FONT_W * sc;
             gfx_vline(cx, y, (i32)lh - 2, COL_ACCENT);
         }

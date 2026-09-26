@@ -110,7 +110,7 @@ int strncasecmp(const char *s1, const char *s2, size_t n) {
 }
 
 time_t time(time_t *t) {
-    time_t res = (time_t)(timer_get_ticks() / 1000);
+    time_t res = (time_t)(timer_ms() / 1000);
     if (t) *t = res;
     return res;
 }

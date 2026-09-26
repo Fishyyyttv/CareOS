@@ -337,7 +337,7 @@ static int launcher_render(mouse_t *m, bool draw) {
         } else {
             gfx_str(text_x, text_y, search_query, COL_TEXT, COL_TRANSPARENT);
             /* Caret */
-            if ((timer_get_ticks() / 40) % 2 == 0) {
+            if ((timer_ms() / 400) % 2 == 0) {
                 gfx_rect(text_x + (i32)search_len * FONT_W * sc, text_y - 1, 2, 18, COL_PRIMARY);
             }
         }

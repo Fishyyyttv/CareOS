@@ -356,7 +356,7 @@ static void exec_cmd(char *line){
      }
      if(!kstrcmp(cmd,"hostname")){ terminal_write("careos\n"); return; }
      if(!kstrcmp(cmd,"uptime")){
-         char b[12]; u32 s=timer_get_ticks()/1000, m=s/60, h=m/60;
+         char b[12]; u32 s=timer_ms()/1000, m=s/60, h=m/60;
          terminal_write("up "); kutoa(h,b,10); terminal_write(b); terminal_write("h ");
          kutoa(m%60,b,10); terminal_write(b); terminal_write("m ");
          kutoa(s%60,b,10); terminal_write(b); terminal_write("s, tasks=");

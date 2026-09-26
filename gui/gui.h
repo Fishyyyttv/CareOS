@@ -172,7 +172,10 @@ extern volatile bool g_lock_request;
 
 /* Animation: one duration + one easing family for opens/closes/minimise.
  * Kept short so windows feel snappy rather than floaty. */
-#define CDL_ANIM_MS       95
+#define CDL_ANIM_MS       160
+#define NOTIFY_LIFE_MS      5000u               /* toast on screen */
+#define GUI_SCREENSAVER_MS  (5u * 60u * 1000u)  /* matches the old observed 5 min */
+#define GUI_AUTOLOCK_MS     (10u * 60u * 1000u) /* was really 100 min before */
 
 /* Pointer shapes. wm_handle_mouse sets g_cursor_shape from what is under the
  * cursor (resize edge / corner / move) and mouse_draw_cursor renders it. */

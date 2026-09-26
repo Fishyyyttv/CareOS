@@ -336,7 +336,7 @@ void taskbar_draw(void) {
         icon_draw_app(s->app, icon_x, icon_y, size, icon_col);
 
         /* Ripple effect */
-        u32 now = timer_get_ticks();
+        u32 now = timer_ms();
         u32 ct = slot_click_tick[s->app];
         if (ct > 0 && now - ct < 300) {
             u32 prog = now - ct;
@@ -492,7 +492,7 @@ void taskbar_handle_mouse(mouse_t *m) {
             i32 cx = avail_x + (sw - avail_x - ww) / 2;
             if (cx < avail_x) cx = avail_x;
             wm_open(app, taskbar_app_name(app), cx, (sh - wh) / 2 - 10, ww, wh);
-            slot_click_tick[app] = timer_get_ticks();
+            slot_click_tick[app] = timer_ms();
             folder_open = false;
             return;
         }
@@ -556,7 +556,7 @@ void taskbar_handle_mouse(mouse_t *m) {
             i32 cx = avail_x + (sw - avail_x - ww) / 2;
             wm_open(app, name, cx, (sh - wh) / 2 - 10, ww, wh);
         }
-        slot_click_tick[app] = timer_get_ticks();
+        slot_click_tick[app] = timer_ms();
         return;
     }
 }

@@ -81,7 +81,7 @@ static void tls_rand(u8 *buf, u32 n) {
     /* use timer + counter as entropy source */
     static u32 ctr = 0x12345678;
     for(u32 i=0;i<n;i++){
-        ctr = ctr*1664525u + 1013904223u + timer_get_ticks();
+        ctr = ctr*1664525u + 1013904223u + timer_ms();
         buf[i] = (u8)(ctr ^ (ctr>>8) ^ (ctr>>16));
         ctr++;
     }

@@ -1134,7 +1134,7 @@ static void draw_greeter(const login_state_t *s, mouse_t *mouse) {
 }
 
 static bool login_try(login_state_t *s) {
-    u32 now = timer_get_ticks();
+    u32 now = timer_ms();
     if (s->lock_until_tick > now) {
         char wait_s[12];
         char msg[96] = "Too many attempts. Wait ";
@@ -1290,7 +1290,7 @@ static void run_matrix_screensaver(mouse_t *mouse) {
     u32 cols = sw / 14;
     if (cols > 256) cols = 256;
     static i32 drops[256];
-    for (u32 i = 0; i < cols; i++) drops[i] = -((i32)((timer_get_ticks() + i * 17) % sh) / cell);
+    for (u32 i = 0; i < cols; i++) drops[i] = -((i32)((timer_ms() + i * 17) % sh) / cell);
 
     mouse_update(mouse);
     keyboard_flush();
@@ -1308,7 +1308,7 @@ static void run_matrix_screensaver(mouse_t *mouse) {
 
         for (u32 i = 0; i < cols; i++) {
             char str[2]; 
-            str[0] = 33 + (timer_get_ticks() / 10 + i * 17) % 94; 
+            str[0] = 33 + (timer_ms() / 100 + i * 17) % 94; 
             str[1] = 0;
             
             i32 dy = drops[i] * cell;
@@ -1317,7 +1317,7 @@ static void run_matrix_screensaver(mouse_t *mouse) {
                 gfx_str_bg_none((i32)i * 14, dy - cell, str, COL_GREEN); /* Trail is green */
             }
             drops[i]++;
-            if (dy > sh && ((timer_get_ticks() + i) % 100 > 95)) drops[i] = 0;
+            if (dy > sh && ((timer_ms() + i) % 100 > 95)) drops[i] = 0;
         }
         
         gfx_flip();
@@ -1588,11 +1588,11 @@ void gui_run(void) {
 
     serial_write("  [gui_run] splash start\n");
     if (fast_boot) {
-        draw_boot_splash(BOOT_STAGE_COUNT, timer_get_ticks());
+        draw_boot_splash(BOOT_STAGE_COUNT, timer_ms());
         timer_wait(20);
     } else {
         for (int i = 0; i <= BOOT_STAGE_COUNT; i++) {
-            draw_boot_splash(i, timer_get_ticks());
+            draw_boot_splash(i, timer_ms());
             timer_wait(90);
         }
     }
@@ -1646,7 +1646,7 @@ void gui_run(void) {
                     theme_switch(settings_get()->theme == 0);
                     enter_desktop(&mouse);
                 }
-                g_last_activity_tick = timer_get_ticks();
+                g_last_activity_tick = timer_ms();
                 needs_redraw = true;
                 continue;
             }
@@ -1659,7 +1659,7 @@ void gui_run(void) {
                 char kl = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
                 
                 /* Global Activity Trigger */
-                g_last_activity_tick = timer_get_ticks();
+                g_last_activity_tick = timer_ms();
 
                 /* Global Hotkeys */
                 if (keyboard_alt_held() && c == '\t') { wm_cycle_focus(1); continue; }
@@ -1694,14 +1694,14 @@ void gui_run(void) {
             if (keyboard_super_tapped()) {
                 launcher_open = !launcher_open;
                 if (launcher_open) { s_notif_center_open = false; s_control_center_open = false; }
-                g_last_activity_tick = timer_get_ticks();
+                g_last_activity_tick = timer_ms();
                 activity = true;
             }
 
             mouse_update(&mouse);
             if (mouse.x != lx || mouse.y != ly || mouse.left != lb || mouse.left_clicked || mouse.right_clicked || mouse.scroll_delta != 0) {
                 activity = true; lx = mouse.x; ly = mouse.y; lb = mouse.left;
-                g_last_activity_tick = timer_get_ticks();
+                g_last_activity_tick = timer_ms();
             }
             /* A left click ripples out from the cursor, everywhere. */
             if (mouse.left_clicked) { gfx_ripple(mouse.x, mouse.y, COL_ACCENT); activity = true; }
@@ -1714,13 +1714,13 @@ void gui_run(void) {
                 run_login_flow(&mouse, true);
                 session_begin(user_current_uid());
                 theme_switch(settings_get()->theme == 0);
-                g_last_activity_tick = timer_get_ticks();
+                g_last_activity_tick = timer_ms();
                 needs_redraw = true;
             }
 
-            /* Idle / Screensaver Check (10 minutes = 600,000 ms, screensaver at 30,000 ms) */
-            u32 now = timer_get_ticks();
-            if (now - g_last_activity_tick > 600000) {
+            /* Idle / screensaver timeouts are measured in milliseconds. */
+            u32 now = timer_ms();
+            if (now - g_last_activity_tick > GUI_AUTOLOCK_MS) {
                 /* Auto-lock the screen if idle for 10 mins. Same lock screen
                    as an explicit Lock: current user's password only, windows
                    stay open, no picker and no startup chime replay. */
@@ -1728,12 +1728,12 @@ void gui_run(void) {
                 run_login_flow(&mouse, true);
                 session_begin(user_current_uid());
                 theme_switch(settings_get()->theme == 0);
-                g_last_activity_tick = timer_get_ticks();
+                g_last_activity_tick = timer_ms();
                 needs_redraw = true;
-            } else if (now - g_last_activity_tick > 30000) {
-                /* Show Matrix Screensaver after 30 seconds */
+            } else if (now - g_last_activity_tick > GUI_SCREENSAVER_MS) {
+                /* Show Matrix screensaver after five minutes. */
                 run_matrix_screensaver(&mouse);
-                g_last_activity_tick = timer_get_ticks();
+                g_last_activity_tick = timer_ms();
                 needs_redraw = true;
             }
             /* Step window open/close/minimise animations every frame so they
@@ -1747,7 +1747,7 @@ void gui_run(void) {
                 activity = true;
             }
 
-            if (now - last_sysmon >= 20) {
+            if (now - last_sysmon >= 200) {
                 window_t *sm = wm_find_app(APP_SYSMON);
                 window_t *nm = wm_find_app(APP_NETMON);
                 if (sm) app_sysmon_tick(sm);
@@ -1756,7 +1756,7 @@ void gui_run(void) {
                 if (sm || nm) activity = true;   /* live graphs, only while a monitor is open */
             }
             if (now - last_netmon >= 100) { net_poll(); last_netmon = now; }
-            if (now - last_notify >= 10)  { notify_tick(); last_notify = now; }
+            if (now - last_notify >= 100)  { notify_tick(); last_notify = now; }
 
             /* Low-rate heartbeat: keeps on-screen clocks/meters ticking without
              * recompositing the whole glass desktop at 100 Hz while idle. Input
@@ -1766,7 +1766,7 @@ void gui_run(void) {
             {
                 static u32 last_clock = 0;
                 window_t *ck = wm_find_app(APP_CLOCK);
-                if (ck && !ck->minimized && now - last_clock >= 4) { last_clock = now; activity = true; }
+                if (ck && !ck->minimized && now - last_clock >= 40) { last_clock = now; activity = true; }
             }
 
             if (activity) needs_redraw = true;

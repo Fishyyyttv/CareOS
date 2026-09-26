@@ -251,7 +251,7 @@ void app_files_draw(window_t *w){
         gfx_set_clip(tx+4+pw, iy, cr.w-FM_SB-pw-8, 24);
         gfx_str(tx+4+pw,iy+6,w->input_buf,COL_TEXT,COL_INPUT_BG);
         /* Cursor */
-        if((timer_get_ticks()/30)%2==0){
+        if((timer_ms()/300)%2==0){
             i32 cx=tx+4+pw+(i32)w->input_len*FONT_W;
             gfx_vline(cx,iy+4,16,COL_TEXT);
         }

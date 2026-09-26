@@ -515,7 +515,7 @@ typedef struct { i32 x, y; u32 born; u32 color; bool active; } ripple_t;
 static ripple_t ripples[MAX_RIPPLES];
 
 void gfx_ripple(i32 x, i32 y, u32 color) {
-    u32 now = timer_get_ticks();
+    u32 now = timer_ms();
     int slot = 0; u32 oldest = 0xFFFFFFFFu;
     for (int i = 0; i < MAX_RIPPLES; i++) {
         if (!ripples[i].active) { slot = i; break; }
@@ -534,7 +534,7 @@ static void circle_blend(i32 cx, i32 cy, i32 r, u32 color, u32 a) {
 }
 
 void gfx_ripples_draw(void) {
-    u32 now = timer_get_ticks();
+    u32 now = timer_ms();
     const u32 life = 300, R = 48;
     for (int i = 0; i < MAX_RIPPLES; i++) {
         if (!ripples[i].active) continue;
@@ -967,9 +967,9 @@ void notify_push(const char *title, const char *body, u32 icon_color) {
     for (int i = 0; i < MAX_NOTIFICATIONS; i++) { if (!notifs[i].active) { slot = i; break; } if (notifs[i].born_tick < oldest_tick) { oldest_tick = notifs[i].born_tick; slot = i; } }
     if (slot < 0) slot = 0;
     kstrncpy(notifs[slot].title, title, 31); kstrncpy(notifs[slot].body, body, 127);
-    notifs[slot].icon_color = icon_color; notifs[slot].born_tick = timer_get_ticks(); notifs[slot].active = true; notif_hover[slot] = false;
+    notifs[slot].icon_color = icon_color; notifs[slot].born_tick = timer_ms(); notifs[slot].active = true; notif_hover[slot] = false;
 }
-void notify_tick(void) { u32 now = timer_get_ticks(); for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active && now - notifs[i].born_tick > 500) notifs[i].active = false; }
+void notify_tick(void) { u32 now = timer_ms(); for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active && now - notifs[i].born_tick > NOTIFY_LIFE_MS) notifs[i].active = false; }
 bool notify_active(void) { for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active) return true; return false; }
 void notify_draw(void) {
     /* Toast geometry follows the live font: an H3 title over a BODY line.
@@ -990,7 +990,7 @@ void notify_draw(void) {
         if (!notifs[i].active) continue;
         i32 nx = (i32)SCREEN_W - nw - 12;
         i32 ny = TOPBAR_H + 12 + slot*(nh+8);
-        u32 now = timer_get_ticks(); u32 age = now - notifs[i].born_tick; u32 life = 500;
+        u32 now = timer_ms(); u32 age = now - notifs[i].born_tick; u32 life = NOTIFY_LIFE_MS;
         u32 pct = (age < life) ? (100 * (life - age) / life) : 0;
         /* Floating frosted card: soft shadow, blurred wallpaper, tint, hairline. */
         gfx_shadow_soft(nx, ny, nw, nh, CDL_R_CARD);

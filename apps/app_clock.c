@@ -30,9 +30,9 @@ static void dial_point(i32 pos, i32 frac, i32 len, i32 *dx, i32 *dy) {
 static u32 sub_second_ms(u8 sec) {
     static u8  last_sec = 0xFF;
     static u32 sec_tick = 0;
-    u32 now = timer_get_ticks();
+    u32 now = timer_ms();
     if (sec != last_sec) { last_sec = sec; sec_tick = now; }
-    u32 ms = (now - sec_tick) * (1000 / PIT_HZ);
+    u32 ms = now - sec_tick;
     return ms > 999 ? 999 : ms;
 }
 

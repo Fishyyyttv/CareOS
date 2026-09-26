@@ -112,7 +112,7 @@ void app_notes_draw(window_t *w){
     /* Blinking caret after the last character typed (text is append-only).
      * A trailing newline leaves the loop on the fresh, still-empty line. */
     if (w->text_len == 0 || w->text_buf[w->text_len - 1] == '\n') y += lh;
-    if ((timer_get_ticks()/40)%2==0) {
+    if ((timer_ms()/400)%2==0) {
         gfx_vline(cr.x + gutter_w + 8 + gfx_str_width(last), y - lh, lh - 2, COL_PRIMARY);
     }
     gfx_clear_clip();

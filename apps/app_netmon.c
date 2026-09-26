@@ -3,8 +3,8 @@
 
 void app_netmon_tick(window_t *w){
     u32 pos = w->scroll % 60;
-    w->text_buf[pos]  = (u32)(timer_get_ticks() % 80);  /* rx_hist */
-    w->input_buf[pos] = (u32)(timer_get_ticks() % 40);  /* tx_hist */
+    w->text_buf[pos]  = (u32)(timer_ms() % 80);  /* rx_hist */
+    w->input_buf[pos] = (u32)(timer_ms() % 40);  /* tx_hist */
     w->scroll++;
 }
 

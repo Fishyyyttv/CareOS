@@ -252,7 +252,7 @@ static void wm_start_restore(window_t *w) {
     w->anim_from       = wm_dock_rect();
     w->target_rect     = home;
     w->anim_kind       = WM_ANIM_RESTORE;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->opacity         = 0;
     w->animating       = true;
     wm_focus(w);
@@ -313,7 +313,7 @@ window_t *wm_open(app_id_t app, const char *title,
          * first animation tick moves it. */
         win->anim_from       = rect_scale_center(win->rect, 95);
         win->anim_kind       = WM_ANIM_OPEN;
-        win->anim_start_tick = timer_get_ticks();
+        win->anim_start_tick = timer_ms();
         win->opacity         = 0;
         win->animating       = true;
 
@@ -380,7 +380,7 @@ void wm_close(window_t *w) {
     w->anim_from       = w->rect;
     w->target_rect     = rect_scale_center(w->rect, 95);
     w->anim_kind       = WM_ANIM_CLOSE;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->opacity         = 255;
     w->animating       = true;
     w->focused         = false;
@@ -417,7 +417,7 @@ void wm_minimize(window_t *w) {
     w->anim_from       = w->rect;
     w->target_rect     = wm_dock_rect();
     w->anim_kind       = WM_ANIM_MINIMIZE;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->opacity         = 255;
     w->animating       = true;
 
@@ -503,7 +503,7 @@ void wm_snap_focused(int mode) {
 
     w->maximized = false;
     w->animating = true;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->restore_rect = w->rect;
 
     switch (mode) {
@@ -567,7 +567,7 @@ static u32 detect_resize_edge(window_t *w, i32 mx, i32 my) {
 
 bool wm_animate_all(void) {
     bool any = false;
-    u32  now = timer_get_ticks();
+    u32  now = timer_ms();
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
         if (!w->active || !w->animating) continue;   // <-- add !w->animating
@@ -928,8 +928,8 @@ void wm_handle_mouse(mouse_t *m) {
         i32 bx_max = TB_BTN_MAX_X(hit->rect.x, hit->rect.w);
         i32 by     = TB_BTN_CY(hit->rect.y);
         if (hit_btn(m->x, m->y, bx_max, by)) {
-            if (hit->hover_start_tick == 0) hit->hover_start_tick = timer_get_ticks();
-            if (timer_get_ticks() - hit->hover_start_tick > 50) hit->showing_snap_layouts = true;
+            if (hit->hover_start_tick == 0) hit->hover_start_tick = timer_ms();
+            if (timer_ms() - hit->hover_start_tick > 500) hit->showing_snap_layouts = true;
         } else {
             hit->hover_start_tick = 0;
             hit->showing_snap_layouts = false;

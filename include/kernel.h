@@ -120,7 +120,7 @@ typedef void (*isr_handler_t)(registers_t*);
 /* -- PIT Timer ------------------------------------------------------------ */
 #define PIT_CHANNEL0    0x40
 #define PIT_CMD         0x43
-#define PIT_HZ          100   /* 100 Hz = 10ms tick */
+#define PIT_HZ          1000  /* 1 kHz = 1 ms tick. Use timer_ms() for time. */
 
 /* -- Keyboard ------------------------------------------------------------- */
 #define KB_DATA_PORT    0x60
@@ -179,6 +179,7 @@ void isr_handler(registers_t *r);
 /* -- Timer ---------------------------------------------------------------- */
 void timer_init(u32 hz);
 u32  timer_get_ticks(void);
+u32  timer_ms(void);
 void timer_wait(u32 ms);
 void timer_tick_advance(void);
 

@@ -7,7 +7,7 @@
  *
  * Everything here is integer-only (freestanding kernel: no libc, no FPU). Time
  * and date come from the RTC; the system meter reads the same real kernel stats
- * the System Monitor app uses (kmem_used / KERNEL_HEAP_SIZE, timer_get_ticks,
+ * the System Monitor app uses (kmem_used / KERNEL_HEAP_SIZE, timer_ms,
  * task_count_active) -- no fabricated "live" numbers.
  */
 #include "kernel.h"
@@ -266,8 +266,8 @@ static void draw_system(rect_t r) {
     draw_meter(cx, cy, inner, 12, mem_pct, mem_col);
     cy += 12 + WGT_GAP;
 
-    /* Uptime -- REAL: milliseconds since boot from timer_get_ticks(). */
-    u32 secs = timer_get_ticks() / 1000u;
+    /* Uptime -- REAL: milliseconds since boot from timer_ms(). */
+    u32 secs = timer_ms() / 1000u;
     u32 days = secs / 86400u; secs %= 86400u;
     u32 hrs  = secs / 3600u;  secs %= 3600u;
     u32 mins = secs / 60u;    secs %= 60u;

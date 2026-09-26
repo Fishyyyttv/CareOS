@@ -363,8 +363,7 @@ static void term_exec(window_t *w,char *line){
         char b[512]; res_status_text(b,sizeof(b)); win_append(w,b);
     }
     else if(!kstrcmp(cmd,"uptime")){
-        u32 ticks = timer_get_ticks();
-        u32 sec = ticks / 100;
+        u32 sec = timer_ms() / 1000;
         char b[12];
         win_append(w,"Uptime: "); kutoa(sec,b,10); win_append(w,b); win_append(w," seconds\n");
     }
@@ -608,8 +607,7 @@ void app_terminal_draw(window_t *w){
     gfx_str_clipped(input_x, ty, input_max_w, w->input_buf, cur_theme->text, COL_TRANSPARENT);
 
     /* Animated blinking cursor */
-    u32 tick = timer_get_ticks();
-    u32 phase = tick % 50; /* 500ms cycle */
+    u32 phase = (timer_ms() / 10) % 50; /* 500ms cycle */
     u8 cursor_alpha;
     if (phase < 25) {
         cursor_alpha = (u8)(50 + (phase * 205) / 25);

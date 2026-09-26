@@ -1,4 +1,4 @@
-﻿/* CareOS v9 - net/net.c - TCP/IP networking stack */
+/* CareOS v9 - net/net.c - TCP/IP networking stack */
 #include "kernel.h"
 
 /* Protocol numbers */
@@ -424,12 +424,12 @@ int sock_connect(int fd, u32 dip, u16 dp){
      * SYN, so restore syn_seq before each resend or the retransmit carries the
      * wrong sequence number. Budget ~5 s. */
     tcp_flags(s, 0x02, NULL, 0);
-    u32 start = timer_get_ticks();
+    u32 start = timer_ms();
     u32 last  = start;
-    while (timer_get_ticks() - start < 5000) {
+    while (timer_ms() - start < 5000) {
         net_poll();
         if (s->state == SOCK_ESTABLISHED) return 0;
-        u32 now = timer_get_ticks();
+        u32 now = timer_ms();
         if (now - last >= 600 && s->state == SOCK_SYN_SENT) {
             s->seq = syn_seq;
             tcp_flags(s, 0x02, NULL, 0);
@@ -469,8 +469,8 @@ int sock_recv(int fd, u8 *buf, u32 maxlen){
     /* Poll the NIC continuously (no hlt-sleep) so the RX descriptor ring is
      * drained as fast as frames arrive. Sleeping between polls lets a burst of
      * server frames overflow the ring and drop a segment, which stalls TLS. */
-    u32 deadline = timer_get_ticks() + 2000;
-    while (timer_get_ticks() < deadline) {
+    u32 deadline = timer_ms() + 2000;
+    while (timer_ms() < deadline) {
         net_poll();
         if (s->rx_len > 0) {
             u32 n = s->rx_len < maxlen ? s->rx_len : maxlen;
@@ -658,8 +658,8 @@ static int dns_query_a(const char *host, u32 *out){
     int n = -1;
     for (int attempt = 0; attempt < 5; attempt++) {
         if (attempt > 0 && sock_send(fd, req, qoff + 4) <= 0) break;
-        u32 deadline = timer_get_ticks() + 700;
-        while (timer_get_ticks() < deadline) {
+        u32 deadline = timer_ms() + 700;
+        while (timer_ms() < deadline) {
             net_poll();
             if (s->rx_len > 0) { n = sock_recv(fd, resp, sizeof(resp)); break; }
             timer_wait(5);

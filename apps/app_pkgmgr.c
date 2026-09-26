@@ -179,7 +179,7 @@ void app_pkgmgr_draw(window_t *w){
         gfx_rect_rounded(inp_x, y, inp_w, 24, 4, COL_INPUT_BG);
         gfx_rect_rounded_outline(inp_x, y, inp_w, 24, 4, COL_BORDER);
         gfx_str(inp_x + 8, y + 6, w->input_buf, COL_TEXT, COL_TRANSPARENT);
-        if ((timer_get_ticks() / 30) % 2 == 0) {
+        if ((timer_ms() / 300) % 2 == 0) {
             i32 cx = inp_x + 8 + (i32)w->input_len * FONT_W;
             gfx_vline(cx, y + 4, 16, COL_TEXT);
         }
@@ -242,7 +242,7 @@ void app_pkgmgr_draw(window_t *w){
     gfx_hline(cr.x, sb_y, cr.w, COL_BORDER);
     if (w->pkgmgr_installing) {
         static const char *dot_frames[] = { "Installing", "Installing.", "Installing..", "Installing..." };
-        const char *msg = dot_frames[(timer_get_ticks() / 20) % 4];
+        const char *msg = dot_frames[(timer_ms() / 200) % 4];
         gfx_str(cr.x + 12, sb_y + (PKG_SB_H - FONT_H) / 2, msg, COL_ACCENT, g_theme->surface3);
     } else {
         char status[64]; kstrcpy(status, "Status: "); kstrcat(status, w->pkgmgr_status);

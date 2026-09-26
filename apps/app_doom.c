@@ -36,7 +36,7 @@ void DG_SleepMs(uint32_t ms) {
 }
 
 uint32_t DG_GetTicksMs() {
-    return timer_get_ticks() * (1000 / PIT_HZ);
+    return timer_ms();
 }
 
 /* Key queue: the GUI thread owns the keyboard buffer and hands the focused
