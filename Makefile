@@ -383,7 +383,8 @@ test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_
 # HOST_TESTS; the test file is tests/host/test_<name>.c.
 HOST_TEST_DIR := build/host
 HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -DHOST_TEST \
-                 -fsanitize=address,undefined -fno-omit-frame-pointer
+                 -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+                 -fno-omit-frame-pointer
 HT_SRC_qoi    := gui/image_qoi.c
 HOST_TESTS    := qoi
 
