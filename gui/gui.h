@@ -176,6 +176,7 @@ extern volatile bool g_lock_request;
 #define NOTIFY_LIFE_MS      5000u               /* toast on screen */
 #define GUI_SCREENSAVER_MS  (5u * 60u * 1000u)  /* matches the old observed 5 min */
 #define GUI_AUTOLOCK_MS     (10u * 60u * 1000u) /* was really 100 min before */
+#define GUI_FRAME_MIN_MS    16u                  /* approximately 60 presents/s */
 
 /* Pointer shapes. wm_handle_mouse sets g_cursor_shape from what is under the
  * cursor (resize edge / corner / move) and mouse_draw_cursor renders it. */

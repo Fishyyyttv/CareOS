@@ -1789,9 +1789,34 @@ void gui_run(void) {
             }
             #endif
             if (perf_bench_active()) { perf_bench_step(); activity = true; }
+
+            /* Route mouse input before drawing its result in this iteration. */
+            g_cursor_shape = CURSOR_ARROW;
+            if (!notify_handle_mouse(&mouse)) {
+                if (handle_control_center_mouse(&mouse)) {
+                    needs_redraw = true;
+                } else if (handle_notification_center_mouse(&mouse)) {
+                    needs_redraw = true;
+                } else if (handle_top_bar_mouse(&mouse)) {
+                    needs_redraw = true;
+                } else if (launcher_open) {
+                    launcher_handle_mouse(&mouse);
+                } else if (widgets_handle_mouse(&mouse)) {
+                    needs_redraw = true;
+                } else {
+                    taskbar_handle_mouse(&mouse);
+                    desktop_handle_mouse(&mouse);
+                    wm_handle_mouse(&mouse);
+                }
+            }
             if (activity) needs_redraw = true;
 
-            if (needs_redraw) {
+            static u32 s_last_frame_start = 0;
+            u32 frame_now = timer_ms();
+            if (needs_redraw && (u32)(frame_now - s_last_frame_start) >= GUI_FRAME_MIN_MS) {
+                /* Count rendering toward the interval, avoiding an extra delay
+                 * after frames that already take longer than the budget. */
+                s_last_frame_start = frame_now;
                 perf_frame_begin();
                 /* The desktop backdrop (wallpaper + frosted sidebar + widget
                  * panels) is expensive to composite -- a per-frame blur and soft
@@ -1838,28 +1863,6 @@ void gui_run(void) {
                 needs_redraw = false;
             }
 
-            /* Default the pointer to the arrow each frame; wm_handle_mouse
-             * upgrades it to a resize/move shape when over a window edge. */
-            g_cursor_shape = CURSOR_ARROW;
-
-            /* Handle input every frame to ensure responsiveness */
-            if (!notify_handle_mouse(&mouse)) {
-                if (handle_control_center_mouse(&mouse)) {
-                    needs_redraw = true;
-                } else if (handle_notification_center_mouse(&mouse)) {
-                    needs_redraw = true;
-                } else if (handle_top_bar_mouse(&mouse)) {
-                    needs_redraw = true;
-                } else if (launcher_open) {
-                    launcher_handle_mouse(&mouse);
-                } else if (widgets_handle_mouse(&mouse)) {
-                    needs_redraw = true;
-                } else {
-                    taskbar_handle_mouse(&mouse);
-                    desktop_handle_mouse(&mouse);
-                    wm_handle_mouse(&mouse);
-                }
-            }
             perf_idle_begin();
             __asm__ volatile("sti; hlt");
             perf_idle_end();
