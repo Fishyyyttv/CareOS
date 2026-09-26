@@ -181,7 +181,7 @@ void wm_init(void) {
 void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     switch (app) {
     case APP_CALC:     *w = 320; *h = 440; return;
-    case APP_CLOCK:    *w = 280; *h = 240; return;
+    case APP_CLOCK:    *w = 300; *h = 330; return;   /* room for time + weekday/date lines */
     case APP_ABOUT: {
         /* app_about_draw stacks a logo, an H2 wordmark, a version line, a
          * rule, seven info rows and a footer, all on the live line height. A
@@ -236,6 +236,7 @@ static void wm_refocus_after(window_t *skip) {
  * original wm_close side effects (slot freed, cascade count decremented, buffer freed). */
 static void wm_finish_close(window_t *w) {
     if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
+    if (w->root) { widget_destroy(w->root); w->root = NULL; }
     w->active    = false;
     w->focused   = false;
     w->animating = false;
@@ -388,9 +389,11 @@ void wm_close(window_t *w) {
 
 void wm_close_all(void) {
     /* Close every open window (e.g. on Log Out / Switch User) so the next
-       session starts with a clean desktop. Mirrors wm_close() per-window. */
+       session starts with a clean desktop. Tears down synchronously: the login
+       flow runs its own loop and never ticks wm_animate_all(), so an animated
+       close would leave these windows alive into the next user's session. */
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        if (windows[i].active) wm_close(&windows[i]);
+        if (windows[i].active) wm_finish_close(&windows[i]);
     }
     open_count = 0;
 }
@@ -959,6 +962,14 @@ void wm_handle_mouse(mouse_t *m) {
         return;
     }
 
+    /* -- Right-click on titlebar: close window. Must run before the left-click
+     *    gate below, which returned early and made this unreachable. ------- */
+    if (m->right_clicked && hit &&
+        m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H) {
+        wm_close(hit);
+        return;
+    }
+
     /* Only discrete clicks from here */
     if (!m->left_clicked) return;
     if (!hit) return;
@@ -1031,18 +1042,10 @@ void wm_handle_mouse(mouse_t *m) {
         case APP_EDITOR:   app_editor_click(hit, m->x, m->y, m);   break;
         case APP_PAINT:    app_paint_click(hit, m->x, m->y, m);    break;
         case APP_USERS:    app_users_click(hit, m->x, m->y);       break;
+        case APP_NOTES:    app_notes_click(hit, m->x, m->y);       break;
         default: break;
         }
     }
-
-    /* -- 9. Right-click on titlebar: close window -------------------------- */
-    if (m->right_clicked && hit) {
-        if (m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H) {
-            wm_close(hit);
-            return;
-        }
-    }
-
 }
 
 /* -- Keyboard routing: ONLY to focused window ----------------------------- */

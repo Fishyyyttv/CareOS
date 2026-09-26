@@ -4,34 +4,7 @@
 void app_calc_init(window_t *w){
     kstrcpy(w->calc_display,"0"); kstrcpy(w->calc_expr,"");
     w->calc_val=0; w->calc_prev=0; w->calc_op=0; w->calc_new_num=true; w->calc_error=false;
-    
-    if (!w->root) return;
-    i32 sc = (i32)GFX_FONT_SCALE;
-    
-    /* Display Panel */
-    widget_t *disp = widget_create(WIDGET_PANEL, 0, 0, w->root->rect.w, 80 * sc);
-    disp->bg_color = COL_INPUT_BG;
-    widget_add_child(w->root, disp);
-    
-    /* Button Grid Container */
-    widget_t *grid = widget_create(WIDGET_PANEL, 0, 80 * sc, w->root->rect.w, w->root->rect.h - 80 * sc);
-    grid->bg_color = COL_TRANSPARENT;
-    widget_add_child(w->root, grid);
-    
-    const char *btns[] = {"7","8","9","/", "4","5","6","*", "1","2","3","-", "C","0","=","+"};
-    for (int r = 0; r < 4; r++) {
-        widget_t *row = widget_create(WIDGET_PANEL, 0, 0, grid->rect.w, 50 * sc);
-        widget_add_child(grid, row);
-        for (int c = 0; c < 4; c++) {
-            widget_t *b = widget_create(WIDGET_BUTTON, 0, 0, 60, 40);
-            kstrcpy(b->text, btns[r * 4 + c]);
-            b->bg_color = (r * 4 + c == 14) ? COL_PRIMARY : g_theme->surface3;
-            b->color = COL_TEXT;
-            widget_add_child(row, b);
-        }
-        layout_hbox(row, 8, 8);
-    }
-    layout_vbox(grid, 8, 8);
+    /* The keypad is drawn and hit-tested directly by app_calc_draw/_click. */
 }
 
 static void calc_layout(window_t *w, i32 *d_h, i32 *bw, i32 *bh, i32 *pad, i32 *gap) {
@@ -163,21 +136,38 @@ void app_calc_click(window_t *w, i32 x, i32 y){
     }
 }
 
+/* Press keypad button idx (row-major index into the 4x5 grid) by synthesising
+ * a click at its centre, so keyboard and mouse share one code path. */
+static void calc_press(window_t *w, int idx){
+    rect_t cr = wm_client_rect(w);
+    i32 d_h, bw, bh, pad, gap;
+    calc_layout(w, &d_h, &bw, &bh, &pad, &gap);
+    i32 grid_y = cr.y + pad + d_h + pad;
+    i32 col = idx%4, row = idx/4;
+    app_calc_click(w, cr.x + pad + col*(bw+gap) + bw/2, grid_y + row*(bh+gap) + bh/2);
+}
+
 void app_calc_key(window_t *w, char c){
-    if (c>='0'&&c<='9'){
-        rect_t cr = wm_client_rect(w);
-        i32 d_h, bw, bh, pad, gap;
-        calc_layout(w, &d_h, &bw, &bh, &pad, &gap);
-        i32 grid_y = cr.y + pad + d_h + pad;
-        /* Map digit to button index and click center (absolute coords) */
-        int idx = 0;
-        if      (c=='7') idx=4;  else if(c=='8') idx=5;  else if(c=='9') idx=6;
-        else if (c=='4') idx=8;  else if(c=='5') idx=9;  else if(c=='6') idx=10;
-        else if (c=='1') idx=12; else if(c=='2') idx=13; else if(c=='3') idx=14;
-        else if (c=='0') idx=16;
-        i32 col = idx%4, row = idx/4;
-        i32 cx = cr.x + pad + col*(bw+gap) + bw/2;
-        i32 cy = grid_y + row*(bh+gap) + bh/2;
-        app_calc_click(w, cx, cy);
+    /* Digits: '7'..'9' -> 4..6, '4'..'6' -> 8..10, '1'..'3' -> 12..14, '0' -> 16 */
+    if (c>='1'&&c<='9'){ int d=c-'1'; calc_press(w, 12 - (d/3)*4 + d%3); return; }
+    if (c=='0')                 { calc_press(w, 16); return; }
+    if (c=='.')                 { calc_press(w, 18); return; }
+    if (c=='+')                 { calc_press(w, 15); return; }
+    if (c=='-')                 { calc_press(w, 11); return; }
+    if (c=='*'||c=='x')         { calc_press(w, 7);  return; }
+    if (c=='/')                 { calc_press(w, 3);  return; }
+    if (c=='%')                 { calc_press(w, 2);  return; }
+    if (c=='\n'||c=='=')        { calc_press(w, 19); return; }
+    if (c=='c'||c=='C'||c==0x1B){ app_calc_init(w);  return; }
+    if (c=='\b'){
+        /* Only edit a number the user is still typing; after an operator or
+         * "=" the display holds a result/operator, not an editable entry. */
+        if (w->calc_error){ app_calc_init(w); return; }
+        if (w->calc_new_num) return;
+        u32 l = kstrlen(w->calc_display);
+        if (l > 0) w->calc_display[--l] = '\0';
+        if (l == 0 || (l == 1 && w->calc_display[0] == '-'))
+            kstrcpy(w->calc_display, "0");
+        w->calc_val = (i32)katoi(w->calc_display);
     }
 }

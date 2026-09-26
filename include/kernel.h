@@ -186,6 +186,7 @@ void timer_tick_advance(void);
 void keyboard_init(void);
 char keyboard_getchar(void);
 bool keyboard_haschar(void);
+char keyboard_peekchar(void);   /* 0 if empty; does not consume */
 void keyboard_flush(void);
 bool keyboard_ctrl_held(void);
 bool keyboard_alt_held(void);

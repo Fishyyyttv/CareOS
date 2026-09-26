@@ -242,6 +242,8 @@ static bool launcher_match(const app_entry_t *entry) {
 static void launcher_open_entry(const app_entry_t *entry) {
     if (!entry) return;
     launcher_open = false;
+    prev_launcher_open = false;   /* render isn't called while closed; re-arm the
+                                     open-edge reset so the next search starts empty */
 
     app_id_t app = launcher_app_id(entry);
     if (app != APP_NONE) {
@@ -268,6 +270,7 @@ static const char *footer_btn_labels[3] = { "Lock", "Log Out", "Switch" };
 /* Run a system action chosen from the search results. */
 static void launcher_run_action(u8 kind) {
     launcher_open = false;
+    prev_launcher_open = false;   /* see launcher_open_entry */
     switch (kind) {
     case ACT_SHUTDOWN: power_shutdown();   break;   /* does not return */
     case ACT_RESTART:  power_reboot();      break;   /* does not return */
@@ -587,15 +590,15 @@ void launcher_handle_key(char c) {
         return;
     }
 
-    /* Navigation: Tab or Ctrl+N (Down), Ctrl+P (Up) */
-    if (c == '\t' || c == 14) {
+    /* Navigation: Tab / Ctrl+N / Down, Ctrl+P / Up */
+    if (c == '\t' || c == 14 || (u8)c == KEY_NAV_DOWN) {
         launcher_update_matches();
         if (matched_count > 0) {
             selected_index = (selected_index + 1) % (int)matched_count;
         }
         return;
     }
-    if (c == 16) {
+    if (c == 16 || (u8)c == KEY_NAV_UP) {
         launcher_update_matches();
         if (matched_count > 0) {
             selected_index = (selected_index - 1 + (int)matched_count) % (int)matched_count;

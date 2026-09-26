@@ -540,6 +540,8 @@ bool        wallpaper_dominant_color(u32 *out_rgb);
 void widgets_init(void);
 void widgets_draw(mouse_t *m);          /* desktop layer, behind windows */
 bool widgets_handle_mouse(mouse_t *m);  /* true if a widget consumed the click/drag */
+void clock_read_local(rtc_time_t *out); /* RTC + desktop timezone, date-normalised */
+i32  clock_day_of_week(i32 y, i32 m, i32 d);  /* 0 = Sunday */
 
 void gfx_char(i32 x, i32 y, char c, u32 fg, u32 bg);
 void gfx_str(i32 x, i32 y, const char *s, u32 fg, u32 bg);
@@ -579,6 +581,7 @@ void app_terminal_key(window_t *w, char c);
 void app_notes_init(window_t *w);
 void app_notes_draw(window_t *w);
 void app_notes_key(window_t *w, char c);
+void app_notes_click(window_t *w, i32 x, i32 y);
 
 void app_files_init(window_t *w);
 void app_files_draw(window_t *w);
@@ -668,6 +671,7 @@ void mouse_draw_cursor(i32 x, i32 y);
 /* -- Widget System -------------------------------------------------------- */
 widget_t *widget_create(widget_type_t type, i32 x, i32 y, i32 w, i32 h);
 void widget_add_child(widget_t *parent, widget_t *child);
+void widget_destroy(widget_t *wi);   /* frees wi and its whole subtree */
 void widget_update_abs_rect(widget_t *wi, i32 px, i32 py);
 void widget_draw_recursive(widget_t *wi, gfx_buffer_t *target);
 void layout_vbox(widget_t *parent, i32 padding, i32 gap);
@@ -679,6 +683,21 @@ void gfx_set_target(gfx_buffer_t *target);
 void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy);
 void gui_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gui_run(void);
+
+/* -- Navigation keys ------------------------------------------------------
+ * The keyboard driver emits ANSI sequences (ESC [ A ...) for these keys; the
+ * GUI loop collapses each sequence into one of these single-byte codes before
+ * dispatch, so app key handlers never see a stray ESC. All are >= 0x80, i.e.
+ * negative as a (signed) char, so "c >= 32 && c < 127" printable filters
+ * ignore them automatically. Compare with (u8)c. */
+#define KEY_NAV_UP     0x80
+#define KEY_NAV_DOWN   0x81
+#define KEY_NAV_RIGHT  0x82
+#define KEY_NAV_LEFT   0x83
+#define KEY_NAV_HOME   0x84
+#define KEY_NAV_END    0x85
+#define KEY_NAV_DELETE 0x7F   /* driver sends a bare DEL byte */
+char gui_read_key(void);      /* keyboard_getchar() + sequence collapsing */
 
 /* -- Launcher ------------------------------------------------------------- */
 extern bool launcher_open;

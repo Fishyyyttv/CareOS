@@ -1,0 +1,9 @@
+-xc
+-std=gnu11
+--target=x86_64-elf
+-m64
+-ffreestanding
+-fno-builtin
+-Iinclude
+-Iinclude/libc
+-Igui

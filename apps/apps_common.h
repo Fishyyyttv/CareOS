@@ -14,6 +14,14 @@ static inline void win_append(window_t *w,const char *s){
 }
 static inline void win_clear(window_t *w){w->text_len=0;w->text_buf[0]='\0';w->scroll=0;}
 
+/* Logged-in user's home directory path: "/root" for uid 0, else
+ * "/home/<name>". out must hold at least 64 bytes. */
+static inline void app_home_path(char *out){
+    if(user_current_uid()==0){ kstrcpy(out,"/root"); return; }
+    kstrcpy(out,"/home/");
+    kstrncpy(out+6,user_current_name(),57); out[63]='\0';
+}
+
 static inline void draw_scrollable_text(window_t *w,rect_t cr){
     u32 line_h=(u32)(FONT_H * GFX_FONT_SCALE)+2;
     u32 lines_visible=(u32)cr.h/line_h;

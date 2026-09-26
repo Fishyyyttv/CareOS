@@ -476,7 +476,7 @@ void app_editor_key(window_t *w, char c){
             w->text_len += l;
             w->editor_modified = true;
         }
-    } else if (c >= 32 || c == '\n' || c == '\t') {
+    } else if ((c >= 32 && c < 127) || c == '\n' || c == '\t') {
         char ins[128]; 
         ins[0] = '\0';
         if (c == '\n') {
@@ -563,7 +563,7 @@ void app_editor_click(window_t *w, i32 x, i32 y, mouse_t *m) {
                         w->fm_sel = 0;
                     } else if (ch->type == FS_FILE) {
                         /* Open file */
-                        kstrncpy(w->editor_path, ch->name, FS_PATH_MAX - 1);
+                        vfs_get_path(ch, w->editor_path, FS_PATH_MAX);
                         u32 load_len = ch->size < WIN_TEXT_BUF - 1 ? ch->size : WIN_TEXT_BUF - 1;
                         if (!ch->data) load_len = 0;
                         if (load_len) kmemcpy(w->text_buf, ch->data, load_len);

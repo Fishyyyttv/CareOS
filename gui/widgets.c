@@ -82,6 +82,10 @@ static void read_local_time(rtc_time_t *out) {
     out->hour = (u8)h;
 }
 
+/* Public wrappers so apps (e.g. Clock) show exactly the widgets' local time. */
+void clock_read_local(rtc_time_t *out) { read_local_time(out); }
+i32  clock_day_of_week(i32 y, i32 m, i32 d) { return day_of_week(y, m, d); }
+
 /* ============================================================================
  * Init -- default positions, stacked down the right edge
  * ==========================================================================*/

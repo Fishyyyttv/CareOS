@@ -96,6 +96,47 @@ static u8  g_term_opacity   = 217; /* Default ~85% opacity (217/255) */
 
 static struct fs_node *term_cwd=NULL;
 
+/* Command history: 32-entry ring shared by all terminal windows. s_hist_idx
+ * is the browse position while pressing Up/Down; == s_hist_count means "not
+ * browsing" (the live line). s_hist_draft keeps the half-typed line so Down
+ * past the newest entry gives it back. */
+#define TERM_HIST 32
+static char s_term_hist[TERM_HIST][256];
+static u32  s_hist_count = 0;   /* total ever pushed (ring index = n % TERM_HIST) */
+static u32  s_hist_idx   = 0;
+static char s_hist_draft[256];
+
+static void term_hist_push(const char *line){
+    if(!line[0]) return;
+    /* Skip immediate duplicates, like bash's ignoredups. */
+    if(s_hist_count && !kstrcmp(s_term_hist[(s_hist_count-1)%TERM_HIST],line)) return;
+    kstrncpy(s_term_hist[s_hist_count%TERM_HIST],line,255);
+    s_term_hist[s_hist_count%TERM_HIST][255]='\0';
+    s_hist_count++;
+}
+
+static void term_set_input(window_t *w,const char *s){
+    kstrncpy(w->input_buf,s,255); w->input_buf[255]='\0';
+    w->input_len=kstrlen(w->input_buf);
+    w->cursor_pos=w->input_len;
+}
+
+/* Insert c at the cursor, shifting the tail right. */
+static void term_insert(window_t *w,char c){
+    if(w->input_len>=255) return;
+    if(w->cursor_pos>w->input_len) w->cursor_pos=w->input_len;
+    for(u32 i=w->input_len+1;i>w->cursor_pos;i--) w->input_buf[i]=w->input_buf[i-1];
+    w->input_buf[w->cursor_pos++]=c;
+    w->input_len++;
+}
+
+/* Delete the char at index i, shifting the tail left. */
+static void term_erase_at(window_t *w,u32 i){
+    if(i>=w->input_len) return;
+    for(u32 j=i;j<w->input_len;j++) w->input_buf[j]=w->input_buf[j+1];
+    w->input_len--;
+}
+
 static void term_path(struct fs_node *n,char *buf){
     vfs_get_path(n,buf,64); if(!buf[0]){buf[0]='/';buf[1]='\0';}
 }
@@ -471,6 +512,7 @@ static void term_exec(window_t *w,char *line){
 
 void app_terminal_init(window_t *w){
     win_clear(w); term_cwd=term_default_home();
+    w->cursor_pos=0; s_hist_idx=s_hist_count;
     win_append(w,"CareOS v9 Terminal\nType 'help' for commands.\n");
     win_append(w,"Tip: 'theme list' or Ctrl+T to change color theme.\n");
     term_prompt(w);
@@ -575,7 +617,12 @@ void app_terminal_draw(window_t *w){
         cursor_alpha = (u8)(50 + ((50 - phase) * 205) / 25);
     }
 
-    i32 cx = input_x + (i32)w->input_len * FONT_W * sc;
+    /* Cursor sits after the first cursor_pos chars; measure that prefix with
+     * the real font so it lines up with proportional glyphs too. */
+    char pre[256];
+    u32 cp = w->cursor_pos > w->input_len ? w->input_len : w->cursor_pos;
+    kmemcpy(pre, w->input_buf, cp); pre[cp] = '\0';
+    i32 cx = input_x + gfx_str_width(pre);
     i32 cursor_w = 2 * sc;
     i32 cursor_h = input_h - 8;
     i32 cursor_y = iy + 4;
@@ -583,10 +630,35 @@ void app_terminal_draw(window_t *w){
     gfx_rect_blend(cx, cursor_y, cursor_w, cursor_h, cur_theme->cursor, cursor_alpha);
 }
 void app_terminal_key(window_t *w,char c){
+    if(w->cursor_pos>w->input_len) w->cursor_pos=w->input_len;
+    u8 k=(u8)c;
+    if(k==KEY_NAV_UP){
+        if(s_hist_count==0) return;
+        u32 oldest=(s_hist_count>TERM_HIST)?s_hist_count-TERM_HIST:0;
+        if(s_hist_idx>s_hist_count) s_hist_idx=s_hist_count;
+        if(s_hist_idx==s_hist_count){ kstrncpy(s_hist_draft,w->input_buf,255); s_hist_draft[255]='\0'; }
+        if(s_hist_idx>oldest) s_hist_idx--;
+        term_set_input(w,s_term_hist[s_hist_idx%TERM_HIST]);
+        return;
+    }
+    if(k==KEY_NAV_DOWN){
+        if(s_hist_idx>=s_hist_count) return;
+        s_hist_idx++;
+        term_set_input(w,(s_hist_idx==s_hist_count)?s_hist_draft:s_term_hist[s_hist_idx%TERM_HIST]);
+        return;
+    }
+    if(k==KEY_NAV_LEFT){ if(w->cursor_pos>0) w->cursor_pos--; return; }
+    if(k==KEY_NAV_RIGHT){ if(w->cursor_pos<w->input_len) w->cursor_pos++; return; }
+    if(k==KEY_NAV_HOME){ w->cursor_pos=0; return; }
+    if(k==KEY_NAV_END){ w->cursor_pos=w->input_len; return; }
+    if(k==KEY_NAV_DELETE){ term_erase_at(w,w->cursor_pos); return; }
+
     if(c=='\n'){
         win_append(w,w->input_buf); win_append(w,"\n");
+        term_hist_push(w->input_buf);
+        s_hist_idx=s_hist_count; s_hist_draft[0]='\0';
         term_exec(w,w->input_buf);
-        w->input_len=0; w->input_buf[0]='\0';
+        w->input_len=0; w->input_buf[0]='\0'; w->cursor_pos=0;
         term_prompt(w);
         /* Auto-scroll to bottom */
         i32 sc2 = (i32)GFX_FONT_SCALE;
@@ -598,7 +670,7 @@ void app_terminal_key(window_t *w,char c){
         u32 vis=(u32)(cr.h - input_h2)/lh;
         w->scroll=(total>vis)?total-vis:0;
     } else if(c=='\b'){
-        if(w->input_len>0){w->input_len--;w->input_buf[w->input_len]='\0';}
+        if(w->cursor_pos>0){ w->cursor_pos--; term_erase_at(w,w->cursor_pos); }
     } else if(c==0x0C){ /* Ctrl+L: Clear */
         win_clear(w);
         term_prompt(w);
@@ -618,12 +690,9 @@ void app_terminal_key(window_t *w,char c){
     } else if(c==0x16){ /* Ctrl+V: Paste */
         for (u32 i=0; i<g_clipboard_len; i++) {
             char cc = g_clipboard[i];
-            if (cc >= 32 && cc < 127 && w->input_len < 255) {
-                w->input_buf[w->input_len++] = cc;
-                w->input_buf[w->input_len] = '\0';
-            }
+            if (cc >= 32 && cc < 127) term_insert(w, cc);
         }
-    } else if(c>=32&&c<127&&w->input_len<255){
-        w->input_buf[w->input_len++]=c; w->input_buf[w->input_len]='\0';
-    } else if(c=='\x1B'){ /* scroll up/down could go here */ }
+    } else if(c>=32&&c<127){
+        term_insert(w,c);
+    }
 }

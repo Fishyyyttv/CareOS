@@ -73,8 +73,29 @@ static void keyboard_irq(registers_t *r) {
             return;
         }
         /* Any other extended key (arrows, etc.) counts as "used" so it cannot be
-         * mistaken for a bare Super tap, then is otherwise ignored here. */
+         * mistaken for a bare Super tap. */
         if (super_down && !released) super_used = true;
+        if (key == 0x1D) { ctrl_down = !released; return; }   /* right Ctrl */
+        if (key == 0x38) { alt_down  = !released; return; }   /* right Alt  */
+        if (released) return;
+        /* Navigation keys become ANSI/xterm escape sequences, which the text
+         * shell already parses; the GUI collapses them to single KEY_* codes
+         * (see gui_read_key()). Home/End use ESC[H / ESC[F rather than
+         * Ctrl+A/Ctrl+E so they stay distinguishable from real chords. */
+        char seq = 0;
+        switch (key) {
+        case 0x48: seq = 'A'; break;   /* Up    */
+        case 0x50: seq = 'B'; break;   /* Down  */
+        case 0x4D: seq = 'C'; break;   /* Right */
+        case 0x4B: seq = 'D'; break;   /* Left  */
+        case 0x47: seq = 'H'; break;   /* Home  */
+        case 0x4F: seq = 'F'; break;   /* End   */
+        case 0x53: kb_push_char(0x7F); return;   /* Delete */
+        case 0x1C: kb_push_char('\n'); return;   /* keypad Enter */
+        case 0x35: kb_push_char('/');  return;   /* keypad '/'  */
+        default: return;
+        }
+        kb_push_char(0x1B); kb_push_char('['); kb_push_char(seq);
         return;
     }
 
@@ -114,6 +135,11 @@ char keyboard_getchar(void) {
     char c = kb_buf[kb_tail];
     kb_tail = (kb_tail + 1) % KB_BUF_SIZE;
     return c;
+}
+
+/* Next buffered char without consuming it, or 0 when the buffer is empty. */
+char keyboard_peekchar(void) {
+    return keyboard_haschar() ? kb_buf[kb_tail] : 0;
 }
 
 void keyboard_flush(void) { kb_head = kb_tail = 0; }

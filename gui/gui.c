@@ -204,6 +204,25 @@ static int s_nc_count = 0;
 static bool s_notif_center_open = false;
 static i32 s_notif_center_anim_x = 0;
 
+/* Read one key, collapsing the driver's "ESC [ X" navigation sequences into a
+ * single KEY_NAV_* code. The driver pushes all three bytes from one IRQ, so if
+ * '[' is not already queued behind the ESC it was a genuine Escape press. */
+char gui_read_key(void) {
+    char c = keyboard_getchar();
+    if (c != 0x1B || keyboard_peekchar() != '[') return c;
+    keyboard_getchar();                               /* '[' */
+    char f = keyboard_haschar() ? keyboard_getchar() : 0;
+    switch (f) {
+    case 'A': return (char)KEY_NAV_UP;
+    case 'B': return (char)KEY_NAV_DOWN;
+    case 'C': return (char)KEY_NAV_RIGHT;
+    case 'D': return (char)KEY_NAV_LEFT;
+    case 'H': return (char)KEY_NAV_HOME;
+    case 'F': return (char)KEY_NAV_END;
+    default:  return 0;                               /* unknown: drop */
+    }
+}
+
 /* Honoured by the desktop loop: lock the session on the next iteration. */
 volatile bool g_lock_request = false;
 static bool s_nc_inited = false;
@@ -345,6 +364,14 @@ static bool handle_top_bar_mouse(mouse_t *m) {
     i32 bell_w = 32;
     i32 bell_x = sw - clk_w - fw * 2 - bell_w - 16;
     i32 cc_btn_x = bell_x - 94;
+
+    /* Click on the logo badge + "CareOS" wordmark: toggle the launcher, like a
+     * classic OS menu button. Bounds mirror draw_top_bar(). */
+    if (m->x >= 4 && m->x < 8 + 26 + gfx_str_width("CareOS") + 4) {
+        launcher_open = !launcher_open;
+        if (launcher_open) { s_notif_center_open = false; s_control_center_open = false; }
+        return true;
+    }
 
     /* Click on Notification Center / Clock area */
     if (m->x >= bell_x - 10 && m->x <= sw) {
@@ -1340,7 +1367,7 @@ static bool run_login_flow(mouse_t *mouse, bool lock_mode) {
             glayout = greeter_make_layout(&login);
 
         while (keyboard_haschar()) {
-            char c = keyboard_getchar();
+            char c = gui_read_key();
 
             if (login.mode == LOGIN_MODE_PICK) {
                 /* Rows only cover the first GREETER_MAX_ROWS accounts, so
@@ -1622,7 +1649,7 @@ void gui_run(void) {
 
             while (keyboard_haschar()) {
                 activity = true;
-                char c = keyboard_getchar();
+                char c = gui_read_key();
                 char kl = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
                 
                 /* Global Activity Trigger */
@@ -1678,7 +1705,9 @@ void gui_run(void) {
             /* Explicit lock request (Spotlight "Lock Screen", a power menu, ...). */
             if (g_lock_request) {
                 g_lock_request = false;
-                run_login_flow(&mouse);
+                run_login_flow(&mouse, true);
+                session_begin(user_current_uid());
+                theme_switch(settings_get()->theme == 0);
                 g_last_activity_tick = timer_get_ticks();
                 needs_redraw = true;
             }
@@ -1727,6 +1756,12 @@ void gui_run(void) {
              * recompositing the whole glass desktop at 100 Hz while idle. Input
              * and animations (above) still drive full-rate redraws when needed. */
             if (now - last_slow >= 250) { last_slow = now; activity = true; }
+            /* ~25 Hz while a Clock window is showing, so its second hand sweeps. */
+            {
+                static u32 last_clock = 0;
+                window_t *ck = wm_find_app(APP_CLOCK);
+                if (ck && !ck->minimized && now - last_clock >= 4) { last_clock = now; activity = true; }
+            }
 
             if (activity) needs_redraw = true;
 

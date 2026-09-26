@@ -23,6 +23,7 @@ static u32     g_nlinks;
 static char g_resp[BROW_RESP_SZ];
 static char g_status[96] = "Ready";
 static int  g_redirect_depth = 0;   /* prevent infinite redirect loops */
+static char s_url_before_edit[256]; /* URL to restore if a Ctrl+L edit is cancelled */
 
 /* ── Forward declarations ────────────────────────────────────────── */
 static void app_browser_navigate(window_t *w, const char *url);
@@ -1233,12 +1234,35 @@ void app_browser_key(window_t *w, char c) {
             w->browser_source_view = !w->browser_source_view;
             return;
         }
+        if (c == 12) { /* Ctrl+L — focus address bar with a fresh, empty URL */
+            if (!w->browser_url_active) {
+                kstrncpy(s_url_before_edit, w->browser_url, 255);
+                s_url_before_edit[255] = '\0';
+            }
+            w->browser_url_active = true;
+            w->browser_find_active = false;
+            w->browser_url[0] = '\0';
+            return;
+        }
+        if (c == 18) { /* Ctrl+R — reload */
+            if (w->browser_url_active) {   /* reload what is loaded, not the draft */
+                kstrncpy(w->browser_url, s_url_before_edit, 255);
+                w->browser_url_active = false;
+            }
+            if (w->browser_url[0]) app_browser_navigate(w, w->browser_url);
+            return;
+        }
     }
 
     /* URL bar editing */
     if (w->browser_url_active) {
         if (c == '\n') { w->browser_url_active = false; smart_navigate(w, w->browser_url); return; }
-        if (c == 27)   { w->browser_url_active = false; return; }
+        if (c == 27)   {   /* cancel: put back the page's URL if Ctrl+L cleared it */
+            w->browser_url_active = false;
+            if (!w->browser_url[0] && s_url_before_edit[0])
+                kstrncpy(w->browser_url, s_url_before_edit, 255);
+            return;
+        }
         if (c == '\b') {
             u32 l = kstrlen(w->browser_url);
             if (l > 0) w->browser_url[l-1] = '\0';
@@ -1256,6 +1280,9 @@ void app_browser_key(window_t *w, char c) {
     else if (c == '\b')        w->browser_scroll -= FH * 10;
     else if (c == 'j')         w->browser_scroll += FH * 3;
     else if (c == 'k')         w->browser_scroll -= FH * 3;
+    else if ((u8)c == KEY_NAV_DOWN) w->browser_scroll += FH * 3;
+    else if ((u8)c == KEY_NAV_UP)   w->browser_scroll -= FH * 3;
+    else if ((u8)c == KEY_NAV_HOME) w->browser_scroll = 0;
     if (w->browser_scroll < 0) w->browser_scroll = 0;
 }
 

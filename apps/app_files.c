@@ -75,7 +75,8 @@ static void fm_build_breadcrumbs(const char *cur_path) {
 }
 
 void app_files_init(window_t *w){
-    w->fm_dir = vfs_resolve_path("/home/user");
+    char home[64]; app_home_path(home);
+    w->fm_dir = vfs_resolve_path(home);
     if(!w->fm_dir) w->fm_dir = vfs_root();
     w->fm_sel  = 0;
     w->tab     = FM_MODE_BROWSE;
@@ -140,7 +141,7 @@ void app_files_draw(window_t *w){
         /* Resolve ~ for display */
         char resolved[64]; kstrcpy(resolved, pl);
         if(kstrcmp(pl,"~")==0){
-            kstrcpy(resolved, user_current_uid()==0?"/root":"/home/user");
+            app_home_path(resolved);
         }
         bool active = (kstrcmp(cur_path,resolved)==0);
         bool sb_hover = (s_mouse_x >= cr.x + 2 && s_mouse_x < cr.x + FM_SB - 2 &&
@@ -648,7 +649,8 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
         int idx = (y - (cr.y + sb_h_h + 4)) / (sb_row_h + 4);
         if(idx>=0 && idx<FM_SB_ITEMS){
             const char *p = FM_PLACES[idx];
-            if(kstrcmp(p,"~")==0) p = user_current_uid()==0?"/root":"/home/user";
+            char home[64];
+            if(kstrcmp(p,"~")==0){ app_home_path(home); p = home; }
             fs_node_t *d = vfs_resolve_path(p);
             if(d){ w->fm_dir=d; w->fm_sel=0; w->scroll=0; }
         }
@@ -688,7 +690,8 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
                         window_t *ew = wm_open(APP_EDITOR,"Editor",
                             60,40,(i32)SCREEN_W*65/100,(i32)SCREEN_H*70/100);
                         if(ew){
-                            kstrncpy(ew->editor_path, ch->name, FS_PATH_MAX-1);
+                            /* Full path, or a save would land in / */
+                            vfs_get_path(ch, ew->editor_path, FS_PATH_MAX);
                             win_clear(ew);
                             if(ch->size>0) win_append(ew,vfs_file_str(ch));
                             ew->editor_modified=false;
@@ -766,7 +769,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
                     window_t *ew = wm_open(APP_EDITOR, "Editor",
                         60, 40, (i32)SCREEN_W * 65 / 100, (i32)SCREEN_H * 70 / 100);
                     if (ew) {
-                        kstrncpy(ew->editor_path, child->name, FS_PATH_MAX - 1);
+                        vfs_get_path(child, ew->editor_path, FS_PATH_MAX);
                         win_clear(ew);
                         if (child->size > 0) win_append(ew, vfs_file_str(child));
                         ew->editor_modified = false;

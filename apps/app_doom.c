@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "../gui/gui.h"
 #include "../doomgeneric/doomgeneric/doomgeneric.h"
+#include "../doomgeneric/doomgeneric/doomkeys.h"
 
 static window_t *doom_win = NULL;
 static char *doom_argv[] = {"doom", "-iwad", "/home/user/DOOM1.WAD"};
@@ -38,11 +39,60 @@ uint32_t DG_GetTicksMs() {
     return timer_get_ticks() * (1000 / PIT_HZ);
 }
 
+/* Key queue: the GUI thread owns the keyboard buffer and hands the focused
+ * Doom window its keys via app_doom_key(); DG_GetKey() drains them on the Doom
+ * thread. (Reading the keyboard directly from here raced the GUI loop, which
+ * usually won and swallowed the key.) Single producer / single consumer. */
+#define DOOM_KQ 64
+static volatile u8  s_kq[DOOM_KQ];
+static volatile u32 s_kq_head = 0, s_kq_tail = 0;
+static int  s_pending_release = -1;   /* key whose synthetic key-up is due */
+static bool s_fire_down = false;
+
+/* CareOS char / KEY_NAV_* code -> Doom key code, 0 = unmapped. */
+static unsigned char doom_map_key(u8 c) {
+    switch (c) {
+    case KEY_NAV_UP:    return KEY_UPARROW;
+    case KEY_NAV_DOWN:  return KEY_DOWNARROW;
+    case KEY_NAV_LEFT:  return KEY_LEFTARROW;
+    case KEY_NAV_RIGHT: return KEY_RIGHTARROW;
+    case '\n':          return KEY_ENTER;
+    case 0x1B:          return KEY_ESCAPE;
+    case ' ':           return KEY_USE;
+    case '\b':          return KEY_BACKSPACE;
+    case '\t':          return KEY_TAB;
+    }
+    if (c >= 'A' && c <= 'Z') return (unsigned char)(c + 32);   /* Doom wants lowercase */
+    if (c >= 32 && c < 127)   return c;                          /* menus, cheats, y/n */
+    return 0;
+}
+
 int DG_GetKey(int* pressed, unsigned char* key) {
-    /* TODO: Map CareOS keyboard driver to Doom keys */
-    if (keyboard_haschar()) {
+    /* The keyboard only delivers make codes, so every key is a tap: emit its
+     * key-down now and the matching key-up on the next call. Held keys still
+     * move continuously thanks to PS/2 typematic repeat. */
+    if (s_pending_release >= 0) {
+        *pressed = 0;
+        *key = (unsigned char)s_pending_release;
+        s_pending_release = -1;
+        return 1;
+    }
+    /* Ctrl is a pure modifier (no char), so poll it for Fire. */
+    bool ctrl = keyboard_ctrl_held();
+    if (ctrl != s_fire_down) {
+        s_fire_down = ctrl;
+        *pressed = ctrl ? 1 : 0;
+        *key = KEY_FIRE;
+        return 1;
+    }
+    while (s_kq_tail != s_kq_head) {
+        u8 c = s_kq[s_kq_tail];
+        s_kq_tail = (s_kq_tail + 1) % DOOM_KQ;
+        unsigned char k = doom_map_key(c);
+        if (!k) continue;
         *pressed = 1;
-        *key = (unsigned char)keyboard_getchar();
+        *key = k;
+        s_pending_release = k;
         return 1;
     }
     return 0;
@@ -117,8 +167,15 @@ void app_doom_draw(window_t *w) {
         for (i32 dx = x0; dx < x1; dx++)
             dst[dx] = src[dx - cr.x] & 0x00FFFFFF;   /* drop Doom's alpha byte */
     }
+    /* Raw backbuffer writes bypass the gfx_* primitives that normally record
+     * damage, so report the frame or the flip may skip it. */
+    if (x1 > x0 && y1 > y0) gfx_dirty(x0, y0, x1 - x0, y1 - y0);
 }
 
 void app_doom_key(window_t *w, char c) {
-    /* Input is handled by DG_GetKey polling global state */
+    (void)w;
+    u32 next = (s_kq_head + 1) % DOOM_KQ;
+    if (next == s_kq_tail) return;          /* full: drop rather than block the GUI */
+    s_kq[s_kq_head] = (u8)c;
+    s_kq_head = next;
 }
