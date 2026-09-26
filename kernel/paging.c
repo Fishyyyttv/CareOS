@@ -230,6 +230,60 @@ void paging_map_mmio(u32 phys_start, u32 size) {
     serial_write("[paging] mmio mapped (uncached huge page)\n");
 }
 
+#define MSR_IA32_PAT 0x277
+
+static inline u64 rdmsr(u32 msr) {
+    u32 lo, hi;
+    __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((u64)hi << 32) | lo;
+}
+
+static inline void wrmsr(u32 msr, u64 value) {
+    __asm__ volatile ("wrmsr" : : "c"(msr), "a"((u32)value),
+                      "d"((u32)(value >> 32)) : "memory");
+}
+
+static bool cpu_has_pat(void) {
+    u32 a, b, c, d;
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                      : "a"(1), "c"(0));
+    return (d & (1u << 16)) != 0;
+}
+
+/* Map the linear framebuffer write-combining. PAT entry 1 is selected by
+ * PWT=1, PCD=0, PAT=0; set it to WC after flushing the old WB cache lines.
+ * This kernel currently runs only on the BSP, so its PAT MSR is the only one
+ * that needs updating. Keep interrupts disabled across the MSR and PDE change
+ * so a task switch cannot observe the new PAT with stale framebuffer TLBs. */
+void paging_map_framebuffer(u32 phys_start, u32 size) {
+    if (!cpu_has_pat()) {
+        paging_map_mmio(phys_start, size);
+        return;
+    }
+
+    u64 flags;
+    __asm__ volatile ("pushfq; cli; pop %0" : "=r"(flags) :: "memory");
+
+    u64 pat = rdmsr(MSR_IA32_PAT);
+    pat = (pat & ~(0xFFULL << 8)) | (0x01ULL << 8); /* PAT1 = WC */
+    __asm__ volatile ("wbinvd" ::: "memory");
+    wrmsr(MSR_IA32_PAT, pat);
+
+    pde_t *pds[4] = { kernel_pd1, kernel_pd2, kernel_pd3, kernel_pd4 };
+    u64 start = (u64)phys_start & ~0x1FFFFFULL;
+    u64 end = ((u64)phys_start + size + 0x1FFFFFULL) & ~0x1FFFFFULL;
+    for (u64 p = start; p < end && p < 0x100000000ULL; p += 0x200000ULL) {
+        u32 gb = (u32)(p >> 30);
+        u32 idx = (u32)((p >> 21) & 0x1FF);
+        pds[gb][idx] = (pds[gb][idx] & ~(u64)PDE_PCD) | PDE_PWT;
+        __asm__ volatile ("invlpg (%0)" : : "r"(p) : "memory");
+    }
+
+    __asm__ volatile ("wbinvd" ::: "memory");
+    __asm__ volatile ("push %0; popfq" : : "r"(flags) : "memory", "cc");
+    serial_write("[paging] framebuffer mapped write-combining (PAT1=WC)\n");
+}
+
 pde_t *paging_create_dir(void) {
     u32 frame = pmm_alloc_frame();
     if (frame == (u32)~0u) return NULL;

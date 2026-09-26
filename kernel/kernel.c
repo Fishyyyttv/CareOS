@@ -487,7 +487,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
                         fb_h     = got_h;
                         fb_bpp   = 32;
                         fb_pitch = (u32)got_w * 4u;
-                        paging_map_mmio(bar0, (u32)got_h * fb_pitch + 0x400000u);
+                        paging_map_framebuffer(bar0, (u32)got_h * fb_pitch);
                         serial_write("  [FB] VBE fallback selected\n");
                         slog_u32("  FB width   = ", fb_w);
                         slog_u32("  FB height  = ", fb_h);
@@ -507,7 +507,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
     }
 
     if ((u32)fb_addr >= 0x100000u)
-        paging_map_mmio((u32)fb_addr, fb_h * fb_pitch + 0x400000u);
+        paging_map_framebuffer((u32)fb_addr, fb_h * fb_pitch);
 
     slog_u32("  FB ready: bpp=", fb_bpp);
 
