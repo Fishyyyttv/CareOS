@@ -250,14 +250,32 @@ static bool cpu_has_pat(void) {
     return (d & (1u << 16)) != 0;
 }
 
-/* Map the linear framebuffer write-combining. PAT entry 1 is selected by
- * PWT=1, PCD=0, PAT=0; set it to WC after flushing the old WB cache lines.
+/* Map the requested framebuffer range UC first. Since this kernel uses 2 MiB
+ * identity mappings, boundary pages can also contain unrelated resources and
+ * must stay UC. Only complete 2 MiB pages wholly inside the framebuffer can
+ * safely be switched to WC. PAT entry 1 is selected by PWT=1, PCD=0, PAT=0.
  * This kernel currently runs only on the BSP, so its PAT MSR is the only one
- * that needs updating. Keep interrupts disabled across the MSR and PDE change
- * so a task switch cannot observe the new PAT with stale framebuffer TLBs. */
+ * that needs updating. Keep interrupts disabled across the WC transition so a
+ * task switch cannot observe a new PAT with stale framebuffer TLB entries. */
 void paging_map_framebuffer(u32 phys_start, u32 size) {
+    if (size == 0) return;
+
     if (!cpu_has_pat()) {
         paging_map_mmio(phys_start, size);
+        return;
+    }
+
+    /* UC is safe for the full range, including partial 2 MiB boundary pages. */
+    paging_map_mmio(phys_start, size);
+
+    const u64 page_2m = 0x200000ULL;
+    const u64 range_start = (u64)phys_start;
+    const u64 range_end = range_start + (u64)size;
+    u64 start = (range_start + page_2m - 1) & ~(page_2m - 1);
+    u64 end = range_end & ~(page_2m - 1);
+    if (end > 0x100000000ULL) end = 0x100000000ULL;
+    if (start >= end) {
+        serial_write("[paging] framebuffer mapped UC (no complete 2 MiB pages)\n");
         return;
     }
 
@@ -270,18 +288,22 @@ void paging_map_framebuffer(u32 phys_start, u32 size) {
     wrmsr(MSR_IA32_PAT, pat);
 
     pde_t *pds[4] = { kernel_pd1, kernel_pd2, kernel_pd3, kernel_pd4 };
-    u64 start = (u64)phys_start & ~0x1FFFFFULL;
-    u64 end = ((u64)phys_start + size + 0x1FFFFFULL) & ~0x1FFFFFULL;
-    for (u64 p = start; p < end && p < 0x100000000ULL; p += 0x200000ULL) {
+    u32 wc_pages = 0;
+    for (u64 p = start; p < end; p += page_2m) {
         u32 gb = (u32)(p >> 30);
         u32 idx = (u32)((p >> 21) & 0x1FF);
         pds[gb][idx] = (pds[gb][idx] & ~(u64)PDE_PCD) | PDE_PWT;
         __asm__ volatile ("invlpg (%0)" : : "r"(p) : "memory");
+        wc_pages++;
     }
 
     __asm__ volatile ("wbinvd" ::: "memory");
     __asm__ volatile ("push %0; popfq" : : "r"(flags) : "memory", "cc");
-    serial_write("[paging] framebuffer mapped write-combining (PAT1=WC)\n");
+
+    char count[16];
+    serial_write("[paging] framebuffer: ");
+    kutoa(wc_pages, count, 10); serial_write(count);
+    serial_write(" complete 2 MiB pages WC; partial boundary pages UC (PAT1=WC)\n");
 }
 
 pde_t *paging_create_dir(void) {
