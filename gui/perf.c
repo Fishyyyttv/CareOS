@@ -52,11 +52,49 @@ bool perf_hud_enabled(void) { return s_hud; }
 void perf_hud_set(bool on) { s_hud = on; }
 
 static u32 s_bench_t0, s_bench_i, s_bench_frames, s_bench_over, s_bench_heap0;
+static u32 s_bench_elapsed_ms;
+static bool s_bench_failed;
+static window_t *s_bench_prev_focus;
+static u32 s_bench_prev_focus_id;
 static u32 s_bench_samples[1024];
 static u32 s_bench_sample_n;
 static u32 s_bench_worst;
-static window_t *s_bench_windows[4];
+typedef struct {
+    window_t *window;
+    u32 instance_id;
+    bool owned, was_minimized;
+    rect_t rect;
+} bench_window_t;
+static bench_window_t s_bench_windows[4];
 static i32 s_bench_x, s_bench_y;
+
+static window_t *bench_valid_window(int i) {
+    bench_window_t *entry = &s_bench_windows[i];
+    window_t *w = entry->window;
+    return w && w->active && w->instance_id == entry->instance_id ? w : NULL;
+}
+
+static void bench_restore_borrowed(void) {
+    for (int i = 0; i < 4; i++) {
+        bench_window_t *entry = &s_bench_windows[i];
+        window_t *w = bench_valid_window(i);
+        if (!w || entry->owned) continue;
+        w->rect = entry->rect;
+        w->target_rect = entry->rect;
+        w->restore_rect = entry->rect;
+        w->minimized = entry->was_minimized;
+        w->animating = false;
+        w->anim_kind = WM_ANIM_NONE;
+        w->opacity = 255;
+    }
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = wm_get_window(i);
+        if (w && w->active) w->focused = false;
+    }
+    if (s_bench_prev_focus && s_bench_prev_focus->active &&
+        s_bench_prev_focus->instance_id == s_bench_prev_focus_id)
+        s_bench_prev_focus->focused = true;
+}
 
 static void bench_record(u32 us) {
     if (!s_bench) return;
@@ -124,14 +162,60 @@ static window_t *bench_open(app_id_t app, const char *title) {
 
 void perf_bench_start(const char *url) {
     (void)url;
+    if (perf_bench_active()) {
+        serial_write("[perf-bench] REJECTED: benchmark already active\n");
+        notify_push("Benchmark", "Already running", COL_YELLOW);
+        return;
+    }
+    s_bench_failed = false;
+    s_bench_elapsed_ms = 0;
+    kmemset(s_bench_windows, 0, sizeof(s_bench_windows));
+    s_bench_prev_focus = wm_focused();
+    s_bench_prev_focus_id = s_bench_prev_focus ? s_bench_prev_focus->instance_id : 0;
     s_bench_heap0 = kmem_used();
-    s_bench_windows[0] = bench_open(APP_TERMINAL, "Terminal");
-    s_bench_windows[1] = bench_open(APP_FILES, "Files");
-    s_bench_windows[2] = bench_open(APP_SETTINGS, "Settings");
-    s_bench_windows[3] = bench_open(APP_BROWSER, "Browser");
-    if (s_bench_windows[3]) {
-        s_bench_x = s_bench_windows[3]->rect.x;
-        s_bench_y = s_bench_windows[3]->rect.y;
+    static const app_id_t apps[4] = { APP_TERMINAL, APP_FILES, APP_SETTINGS, APP_BROWSER };
+    static const char *titles[4] = { "Terminal", "Files", "Settings", "Browser" };
+    /* Snapshot all borrowed windows before opening apps can change focus. */
+    for (int i = 0; i < 4; i++) {
+        bench_window_t *entry = &s_bench_windows[i];
+        window_t *prior = wm_find_app(apps[i]);
+        if (prior) {
+            entry->window = prior;
+            entry->instance_id = prior->instance_id;
+            entry->owned = false;
+            entry->rect = prior->rect;
+            entry->was_minimized = prior->minimized;
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        bench_window_t *entry = &s_bench_windows[i];
+        if (entry->window) {
+            entry->window = wm_open(apps[i], titles[i], 0, 0, 0, 0);
+        } else {
+            entry->window = bench_open(apps[i], titles[i]);
+            entry->owned = entry->window != NULL;
+            if (entry->window) entry->instance_id = entry->window->instance_id;
+        }
+        if (!entry->window) {
+            s_bench_failed = true;
+            break;
+        }
+    }
+    if (s_bench_failed) {
+        for (int i = 0; i < 4; i++) {
+            window_t *w = bench_valid_window(i);
+            if (w && s_bench_windows[i].owned) wm_close(w);
+        }
+        bench_restore_borrowed();
+        s_bench_closing = true;
+        serial_write("[perf-bench] UNAVAILABLE: could not open all four windows\n");
+        notify_push("Benchmark", "Could not open 4 windows", COL_RED);
+        return;
+    }
+    window_t *browser = bench_valid_window(3);
+    if (browser) {
+        s_bench_x = browser->rect.x;
+        s_bench_y = browser->rect.y;
     }
     s_bench_sample_n = 0;
     s_bench_frames = s_bench_over = s_bench_i = 0;
@@ -147,9 +231,16 @@ bool perf_bench_active(void) { return s_bench || s_bench_closing; }
 void perf_bench_step(void) {
     if (s_bench_closing) {
         for (int i = 0; i < 4; i++)
-            if (s_bench_windows[i] && s_bench_windows[i]->active) return;
+            if (s_bench_windows[i].owned && bench_valid_window(i)) return;
+        for (int i = 0; i < 4; i++)
+            if (!s_bench_windows[i].owned && !bench_valid_window(i)) s_bench_failed = true;
+        bench_restore_borrowed();
         s_bench_closing = false;
-        u32 elapsed = timer_ms() - s_bench_t0;
+        if (s_bench_failed) {
+            serial_write("[perf-bench] RESULT unavailable (window set changed)\n");
+            return;
+        }
+        u32 elapsed = s_bench_elapsed_ms;
         u32 fps = s_bench_frames * 1000u / (elapsed ? elapsed : 1u);
         u32 p95 = bench_pct(95);
         bool pass = fps >= 30u && p95 <= 33000u;
@@ -159,28 +250,50 @@ void perf_bench_step(void) {
         char delta_text[20];
         delta_text[0] = used >= s_bench_heap0 ? '+' : '-';
         kutoa(delta / 1024u, delta_text + 1, 10);
-        ksprintf(line, "[perf-bench] RESULT fps=%d p95_ms=%d worst_ms=%d frames_over_33ms=%d heap_delta_kb=%s %s\n",
+        u32 borrowed_alive = 0;
+        for (int i = 0; i < 4; i++)
+            if (!s_bench_windows[i].owned && bench_valid_window(i)) borrowed_alive++;
+        ksprintf(line, "[perf-bench] RESULT elapsed_ms=%d fps=%d p95_ms=%d worst_ms=%d frames_over_33ms=%d borrowed_alive=%d heap_delta_kb=%s %s\n",
+                  (int)elapsed,
                   (int)fps, (int)(p95 / 1000u), (int)(s_bench_worst / 1000u),
-                  (int)s_bench_over, delta_text, pass ? "PASS" : "FAIL");
+                  (int)s_bench_over, (int)borrowed_alive, delta_text, pass ? "PASS" : "FAIL");
         serial_write(line);
         notify_push("Benchmark", pass ? "PASS (>=30 fps)" : "FAIL (<30 fps)", pass ? COL_GREEN : COL_RED);
         return;
     }
     if (!s_bench) return;
+    for (int i = 0; i < 4; i++) {
+        window_t *w = bench_valid_window(i);
+        if (!w || w->minimized || w->anim_kind == WM_ANIM_CLOSE) {
+            s_bench_failed = true;
+            s_bench = false;
+            for (int j = 0; j < 4; j++) {
+                window_t *owned = bench_valid_window(j);
+                if (owned && s_bench_windows[j].owned) wm_close(owned);
+            }
+            bench_restore_borrowed();
+            s_bench_closing = true;
+            serial_write("[perf-bench] ABORTED: benchmark window changed during sampling\n");
+            return;
+        }
+    }
     static const i8 orbit[16][2] = {
         {40,0},{37,15},{28,28},{15,37},{0,40},{-15,37},{-28,28},{-37,15},
         {-40,0},{-37,-15},{-28,-28},{-15,-37},{0,-40},{15,-37},{28,-28},{37,-15}
     };
-    window_t *browser = s_bench_windows[3];
-    if (browser && browser->active) {
+    window_t *browser = bench_valid_window(3);
+    if (browser) {
         browser->rect.x = s_bench_x + orbit[s_bench_i % 16][0];
         browser->rect.y = s_bench_y + orbit[s_bench_i % 16][1];
     }
     s_bench_i++;
     u32 elapsed = timer_ms() - s_bench_t0;
     if (elapsed < 10000u) return;
-    for (int i = 0; i < 4; i++)
-        if (s_bench_windows[i] && s_bench_windows[i]->active) wm_close(s_bench_windows[i]);
+    s_bench_elapsed_ms = elapsed;
+    for (int i = 0; i < 4; i++) {
+        window_t *w = bench_valid_window(i);
+        if (w && s_bench_windows[i].owned) wm_close(w);
+    }
     s_bench = false;
     s_bench_closing = true;
 }

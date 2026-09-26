@@ -257,6 +257,7 @@ void gfx_draw_icon(app_id_t app, i32 x, i32 y, i32 size, u32 color);
 
 typedef struct window {
     bool      active, focused, minimized, dragging;
+    u32       instance_id; /* monotonic identity; slot addresses are reused */
     bool      resizing;
     u32       resize_edge;
     app_id_t  app;

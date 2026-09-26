@@ -31,9 +31,8 @@ u32 timer_get_ticks(void) { return ticks; }
 u32 timer_ms(void) { return ticks * (1000u / PIT_HZ); }
 
 void timer_wait(u32 ms) {
-    u32 start = ticks;
-    u32 duration = (ms * PIT_HZ / 1000) + 1;
-    while ((u32)(ticks - start) < duration) {
-        __asm__ volatile ("hlt");
-    }
+	u32 start = timer_ms();
+	while ((u32)(timer_ms() - start) < ms) {
+		__asm__ volatile ("hlt");
+	}
 }

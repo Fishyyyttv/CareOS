@@ -25,3 +25,7 @@ while ! grep -q '\[perf-bench\] RESULT' "$LOG" 2>/dev/null; do
   sleep 5
 done
 grep '\[perf-bench\]' "$LOG"
+grep -Eq '\[perf-bench\] RESULT elapsed_ms=1[0-9]{4} .*borrowed_alive=[1-4] ' "$LOG" || {
+  echo "perf-bench did not report a bounded active duration and preserved borrowed window" >&2
+  exit 1
+}

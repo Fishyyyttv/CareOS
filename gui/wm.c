@@ -23,6 +23,7 @@
 #include "icon.h"
 
 static window_t windows[MAX_WINDOWS];
+static u32 next_window_instance_id;
 window_t *wm_get_window(int i) { if(i<0||i>=MAX_WINDOWS) return NULL; return &windows[i]; }
 static u32      wm_next_z    = 1;
 bool     launcher_open = false;
@@ -279,6 +280,8 @@ window_t *wm_open(app_id_t app, const char *title,
         window_t *win = &windows[i];
         kmemset(win, 0, sizeof(window_t));
         win->active   = true;
+        win->instance_id = ++next_window_instance_id;
+        if (!win->instance_id) win->instance_id = ++next_window_instance_id;
         win->focused  = true;
         win->app      = app;
         win->z_order  = wm_next_z++;
@@ -321,6 +324,10 @@ window_t *wm_open(app_id_t app, const char *title,
         /* Initialize structural UI root */
         rect_t cr = wm_client_rect(win);
         win->root = widget_create(WIDGET_PANEL, 0, 0, cr.w, cr.h);
+        if (!win->root) {
+            win->active = false;
+            return NULL;
+        }
         win->root->bg_color = COL_SURFACE;
         
         /* Allocate offscreen buffer */
@@ -328,9 +335,13 @@ window_t *wm_open(app_id_t app, const char *title,
         win->win_buffer.h = (u32)h;
         win->win_buffer.pitch = (u32)w * 4;
         win->win_buffer.pixels = (u32 *)kmalloc((size_t)w * (size_t)h * 4);
-        if (win->win_buffer.pixels) {
-            kmemset(win->win_buffer.pixels, 0, (size_t)w * (size_t)h * 4);
+        if (!win->win_buffer.pixels) {
+            widget_destroy(win->root);
+            win->root = NULL;
+            win->active = false;
+            return NULL;
         }
+        kmemset(win->win_buffer.pixels, 0, (size_t)w * (size_t)h * 4);
 
         open_count++;
 
