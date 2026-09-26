@@ -1326,6 +1326,12 @@ static void run_matrix_screensaver(mouse_t *mouse) {
 }
 
 static bool run_login_flow(mouse_t *mouse, bool lock_mode) {
+#ifdef CAREOS_QA_AUTOLOGIN
+    /* Headless QA build: the login gate needs a mouse/keyboard that the
+     * harness cannot reliably drive. Built only with make QA_AUTOLOGIN=1. */
+    (void)mouse; (void)lock_mode;
+    return true;
+#endif
     login_state_t login;
     kmemset(&login, 0, sizeof(login));
     login.locked = lock_mode;

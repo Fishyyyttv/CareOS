@@ -34,3 +34,5 @@ tools/.venv/
 shots/
 
 doomgeneric/
+build/
+.build-defs

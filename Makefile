@@ -6,10 +6,34 @@ QEMU      := qemu-system-x86_64
 GCC_INC   := $(shell gcc -print-file-name=include 2>/dev/null)
 LIBGCC    := $(shell gcc -print-libgcc-file-name 2>/dev/null)
 
+# Build-time switches. Defaults give a normal desktop build.
+#   SMOKE=1         run the ring-3 smoke tests at boot (they can page-fault
+#                   and reboot under QEMU TCG, so they are opt-in)
+#   QA_AUTOLOGIN=1  skip the login gate (headless QA only -- never ship)
+#   PERF_BENCH=1    run the 10 s compositor benchmark 3 s after the desktop
+#   QA_LAYOUT=1     cycle every app at its minimum size for screenshots
+SMOKE        ?= 0
+QA_AUTOLOGIN ?= 0
+PERF_BENCH   ?= 0
+QA_LAYOUT    ?= 0
+BUILD_DEFS :=
+ifeq ($(SMOKE),0)
+BUILD_DEFS += -DCAREOS_SKIP_SMOKE_TESTS
+endif
+ifeq ($(QA_AUTOLOGIN),1)
+BUILD_DEFS += -DCAREOS_QA_AUTOLOGIN
+endif
+ifeq ($(PERF_BENCH),1)
+BUILD_DEFS += -DCAREOS_PERF_BENCH_AT_BOOT
+endif
+ifeq ($(QA_LAYOUT),1)
+BUILD_DEFS += -DCAREOS_QA_LAYOUT
+endif
+
 KERN_CFLAGS := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
                -Iinclude -Iinclude/libc -Igui -fno-builtin \
-               -mno-red-zone -mno-mmx -mno-sse -mno-sse2
+               -mno-red-zone -mno-mmx -mno-sse -mno-sse2 $(BUILD_DEFS)
 
 APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
@@ -192,6 +216,13 @@ kernel/libc_shim.o: kernel/libc_shim.c
 	@echo "  CC    $<"
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Rebuild objects that read BUILD_DEFS whenever the flag set changes.
+.build-defs: FORCE
+	@echo '$(BUILD_DEFS)' | cmp -s - $@ || echo '$(BUILD_DEFS)' > $@
+kernel/kernel.o gui/gui.o gui/perf.o: .build-defs
+.PHONY: FORCE
+FORCE:
+
 # Header dependency tracking. Without this, editing a header (e.g. the
 # fs_node_t layout in include/kernel.h) rebuilds nothing, and stale objects
 # get linked against new ones with mismatched struct layouts.
@@ -203,7 +234,7 @@ kernel/kernel.elf: $(ALL_OBJ)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJ) $(LIBGCC)
 	@echo "  Size: $$(du -h $@ | cut -f1)"
 
-careos.iso: kernel/kernel.elf
+careos.iso: kernel/kernel.elf iso/boot/grub/grub.cfg
 	@echo "  ISO   building..."
 	@mkdir -p iso/boot/grub
 	@cp kernel/kernel.elf iso/boot/kernel.elf
@@ -347,14 +378,23 @@ DOOM1.WAD.bin.o: DOOM1.WAD
 
 test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_isolate_b
 
-# Host-side unit test for the QOI decoder. Built with the host gcc (not the
-# freestanding kernel toolchain) so it can link libc and run directly -- no
-# QEMU needed. gui/image_qoi.c compiles under -DHOST_TEST with its own
-# u8/u32/u64 typedefs, matching tests/host/test_qoi.c.
-host-test:
-	gcc -Iinclude -Igui -o /tmp/test_qoi tests/host/test_qoi.c gui/image_qoi.c \
-	    -DHOST_TEST 2>&1 || true
-	/tmp/test_qoi
+# Host unit tests (host gcc, not the kernel toolchain). Register a test by
+# adding HT_SRC_<name> := <sources under test> and appending <name> to
+# HOST_TESTS; the test file is tests/host/test_<name>.c.
+HOST_TEST_DIR := build/host
+HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -DHOST_TEST \
+                 -fsanitize=address,undefined -fno-omit-frame-pointer
+HT_SRC_qoi    := gui/image_qoi.c
+HOST_TESTS    := qoi
+
+.SECONDEXPANSION:
+$(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
+	@mkdir -p $(HOST_TEST_DIR)
+	gcc $(HOST_CFLAGS) -o $@ $< $(HT_SRC_$*)
+
+.PHONY: host-test
+host-test: $(addprefix $(HOST_TEST_DIR)/test_,$(HOST_TESTS))
+	@set -e; for t in $^; do echo "  HOST  $$t"; ./$$t; done
 
 clean:
 	@rm -f $(ALL_OBJ) $(ALL_OBJ:.o=.d) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
