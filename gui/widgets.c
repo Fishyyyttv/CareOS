@@ -7,7 +7,7 @@
  *
  * Everything here is integer-only (freestanding kernel: no libc, no FPU). Time
  * and date come from the RTC; the system meter reads the same real kernel stats
- * the System Monitor app uses (kmem_used / KERNEL_HEAP_SIZE, timer_ms,
+ * the System Monitor app uses (kmem_used / kheap_size, timer_ms,
  * task_count_active) -- no fabricated "live" numbers.
  */
 #include "kernel.h"
@@ -254,7 +254,7 @@ static void draw_system(rect_t r) {
 
     /* Memory meter -- REAL: kmem_used() over the kernel heap size. 64-bit
      * intermediate so used*100 can't wrap the u32 range at large heaps. */
-    u32 mem_pct = (u32)((u64)kmem_used() * 100u / (u64)KERNEL_HEAP_SIZE);
+    u32 mem_pct = (u32)((u64)kmem_used() * 100u / (u64)kheap_size());
     char pct_s[8];
     ksprintf(pct_s, "%d%%", (int)mem_pct);
     gfx_str_ex(cx, cy, "Memory", COL_DIM, COL_TRANSPARENT, FONT_CAPTION);

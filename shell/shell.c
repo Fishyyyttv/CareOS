@@ -375,7 +375,7 @@ static void exec_cmd(char *line){
          char b[12];
          terminal_write("              total        used        free\n");
          terminal_write("Mem:     ");
-         kutoa(KERNEL_HEAP_SIZE/1024,b,10); while(kstrlen(b)<12){char t[12];t[0]=' ';kstrcpy(t+1,b);kstrcpy(b,t);} terminal_write(b);
+         kutoa((u32)(kheap_size()/1024),b,10); while(kstrlen(b)<12){char t[12];t[0]=' ';kstrcpy(t+1,b);kstrcpy(b,t);} terminal_write(b);
          kutoa(kmem_used()/1024,b,10); while(kstrlen(b)<12){char t[12];t[0]=' ';kstrcpy(t+1,b);kstrcpy(b,t);} terminal_write(b);
          kutoa(kmem_free_bytes()/1024,b,10); while(kstrlen(b)<12){char t[12];t[0]=' ';kstrcpy(t+1,b);kstrcpy(b,t);} terminal_write(b);
          terminal_write("\n"); return;

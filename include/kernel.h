@@ -133,11 +133,14 @@ typedef void (*isr_handler_t)(registers_t*);
  * Growing KERNEL_HEAP_SIZE therefore grows the kernel image's memory footprint
  * directly, and the loader must zero all of it at boot.
  *
- * 512 MB against the 4 GB the VM is given. Consumers are the framebuffer
- * backbuffer (8 MB at 1080p), the image cache (RES_BUDGET_BYTES, 32 MB),
- * per-window buffers, and VFS file contents. */
+ * 192 MB = about 2x the measured peak (2026-09-26: 68,955 KB with twelve apps
+ * open plus the compositor benchmark, 1080p; Terminal 'free' reports it).
+ * Consumers: three screen-sized buffers (backbuffer + wallpaper/desktop
+ * caches, 8 MB each at 1080p), the image cache (RES_BUDGET_BYTES, 32 MB),
+ * unfocused-window pixel caches, DOOM's 6 MB zone, and VFS file contents.
+ * It was 512 MB, which made the kernel image 554 MB and ruled out small VMs. */
 #define KERNEL_HEAP_START   0x400000    /* vestigial; heap_mem[] lives in .bss */
-#define KERNEL_HEAP_SIZE    (512*1024*1024) /* 512 MB heap */
+#define KERNEL_HEAP_SIZE    (192*1024*1024) /* 192 MB heap */
 
 /* FLOOR for the physical frames paging_init() withholds from pmm_alloc_frame().
  * The real reservation is computed from the _kernel_end symbol emitted by
@@ -242,7 +245,7 @@ __attribute__((noreturn)) void kernel_panic(u32 code, const char *msg);
 #define FS_PATH_MAX     256
 
 /* Upper bound on a single file's heap allocation. File contents live on the
- * kernel heap (KERNEL_HEAP_SIZE, 192 MiB); this ceiling stops one runaway
+ * kernel heap (KERNEL_HEAP_SIZE); this ceiling stops one runaway
  * write from consuming it. Previously file data was a 5 MiB inline array,
  * which cost 640 MiB of BSS for the 128-node pool whether used or not. */
 #define FS_FILE_MAX_BYTES (16u*1024u*1024u)

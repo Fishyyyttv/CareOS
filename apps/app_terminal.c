@@ -356,7 +356,7 @@ static void term_exec(window_t *w,char *line){
     }
     else if(!kstrcmp(cmd,"free")){
         char b[12]; win_append(w,"     total    used    free\nMem: ");
-        kutoa(KERNEL_HEAP_SIZE/1024,b,10); win_append(w,b); win_append(w,"K  ");
+        kutoa((u32)(kheap_size()/1024),b,10); win_append(w,b); win_append(w,"K  ");
         kutoa(kmem_used()/1024,b,10); win_append(w,b); win_append(w,"K  ");
         kutoa(kmem_free_bytes()/1024,b,10); win_append(w,b); win_append(w,"K\n");
         win_append(w,"Peak: "); kutoa(kmem_peak()/1024,b,10); win_append(w,b);
