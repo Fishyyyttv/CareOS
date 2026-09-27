@@ -360,6 +360,7 @@ typedef struct window {
 
     /* Clock / NetMon */
     u32   clock_tick;
+    u32   netmon_rx, netmon_tx, netmon_ms;   /* last counter sample (NetMon) */
 
     /* Users app */
     u32   users_sel;

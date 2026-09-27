@@ -1,9 +1,12 @@
 /* CareOS v9 -- apps/app_sysmon.c -- System Monitor */
 #include "apps_common.h"
+#include "perf.h"
 
 void app_sysmon_tick(window_t *w){
     u32 pos = w->sysmon_hist_pos % 64;
-    w->sysmon_cpu_hist[pos] = (timer_ms() % 70) + 5;
+    /* Real CPU busy %: the share of wall time the GUI loop did not spend
+     * halted (background tasks count as busy). It used to be ticks % 70. */
+    w->sysmon_cpu_hist[pos] = perf_cpu_busy_pct();
     w->sysmon_mem_hist[pos] = (u32)((u64)kmem_used() * 100u / kheap_size());
     w->sysmon_hist_pos++;
 }

@@ -1,10 +1,18 @@
 /* CareOS v9 -- apps/app_netmon.c -- Network Monitor */
 #include "apps_common.h"
+#include "netrate.h"
 
 void app_netmon_tick(window_t *w){
+    /* Real throughput from the NIC byte counters, sampled per window. It used
+     * to plot timer_ms() % 80 -- a fake graph. */
     u32 pos = w->scroll % 60;
-    w->text_buf[pos]  = (u32)(timer_ms() % 80);  /* rx_hist */
-    w->input_buf[pos] = (u32)(timer_ms() % 40);  /* tx_hist */
+    u32 rx, tx, now = timer_ms();
+    net_get_counters(&rx, &tx);
+    if (w->netmon_ms == 0) { w->netmon_rx = rx; w->netmon_tx = tx; w->netmon_ms = now; }
+    u32 dt = now - w->netmon_ms;
+    w->text_buf[pos]  = (char)net_rate_cap8(net_rate_kbs(w->netmon_rx, rx, dt));   /* rx_hist */
+    w->input_buf[pos] = (char)net_rate_cap8(net_rate_kbs(w->netmon_tx, tx, dt));   /* tx_hist */
+    w->netmon_rx = rx; w->netmon_tx = tx; w->netmon_ms = now;
     w->scroll++;
 }
 

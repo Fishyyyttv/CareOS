@@ -426,7 +426,8 @@ HT_SRC_mb2mmap := kernel/mb2mmap.c
 HT_SRC_term_layout := apps/term_layout.c
 HT_SRC_http_parse := apps/http_parse.c
 HT_SRC_fetch_token := apps/fetch_token.c
-HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token
+HT_SRC_netrate :=
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h

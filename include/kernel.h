@@ -339,6 +339,8 @@ void task_wake(int idx);                      /* idx as returned by task_create 
 bool sched_other_ready(void);
 void task_set_timeslice(int idx, u32 ticks);
 bool net_trylock(void);
+void net_count_tx(u32 len);
+void net_get_counters(u32 *rx_bytes, u32 *tx_bytes);
 void net_lock(void);
 void net_unlock(void);
 __attribute__((noreturn)) void task_exit(void);

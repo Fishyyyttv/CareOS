@@ -504,8 +504,14 @@ void sock_close(int fd){
     kmemset(s, 0, sizeof(socket_t));
 }
 
+/* Byte counters for the Network Monitor (free-running; readers diff them). */
+static volatile u32 s_rx_bytes, s_tx_bytes;
+void net_count_tx(u32 len) { s_tx_bytes += len; }
+void net_get_counters(u32 *rx, u32 *tx) { *rx = s_rx_bytes; *tx = s_tx_bytes; }
+
 /* Incoming frame dispatch */
 void net_handle_frame(const u8 *frame, u32 len){
+    s_rx_bytes += len;
     if (len < 14) return;
     u16 et = (u16)((frame[12] << 8) | frame[13]);
 

@@ -173,6 +173,8 @@ static void e1000_init_tx(void) {
 /* ── Public: send a raw Ethernet frame ──────────────────────────────────────── */
 void net_send_frame(const u8 *frame, u32 len) {
     if (!e1000_up || !frame || len > 2048) return;
+    extern void net_count_tx(u32 len);
+    net_count_tx(len);
 
     tx_desc_t *d = &tx_descs[tx_tail];
     /* Wait for previous transmit to finish */
