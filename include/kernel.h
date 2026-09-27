@@ -202,19 +202,14 @@ void power_reboot(void);
 /* -- Memory --------------------------------------------------------------- */
 void  pmm_init(void);
 /* -- Memory / Heap -------------------------------------------------------- */
-typedef struct block_hdr {
-    u64              magic;
-    u64              size;
-    bool             free;
-    u8               reserved[15];
-    struct block_hdr *next;
-    struct block_hdr *prev;
-} block_hdr_t;
-
-#define HEAP_MAGIC  0xC4E05AFE
+#include "heap_types.h"
 
 void  *kmalloc(size_t size);
 void   kfree(void *ptr);
+void   kheap_init(void *base, size_t size);   /* kernel/heap.c */
+size_t kheap_size(void);
+u32    kmem_peak(void);
+u32    kmem_largest_free(void);
 void *kmemset(void *dst, int c, size_t n);
 void *kmemcpy(void *dst, const void *src, size_t n);
 int   kmemcmp(const void *a, const void *b, size_t n);

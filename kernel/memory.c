@@ -4,65 +4,12 @@
  * ============================================================================= */
 #include "kernel.h"
 
-/* -- Heap ------------------------------------------------------------------- */
-#define HDR_SIZE    sizeof(block_hdr_t)
-#define MIN_SPLIT   (HDR_SIZE + 16)
+/* -- Heap -------------------------------------------------------------------
+ * The allocator lives in kernel/heap.c (host-tested); this file only owns the
+ * static arena it manages. */
+static u8 heap_mem[KERNEL_HEAP_SIZE] __attribute__((aligned(16)));
 
-static u8          heap_mem[KERNEL_HEAP_SIZE] __attribute__((aligned(16)));
-static block_hdr_t *heap_head = NULL;
-
-void pmm_init(void) {
-    heap_head         = (block_hdr_t *)heap_mem;
-    heap_head->magic  = HEAP_MAGIC;
-    heap_head->size   = KERNEL_HEAP_SIZE - HDR_SIZE;
-    heap_head->free   = true;
-    heap_head->next   = NULL;
-    heap_head->prev   = NULL;
-}
-
-void *kmalloc(size_t sz) {
-    if (!sz) return NULL;
-    sz = (sz + 15) & ~15UL;
-
-    block_hdr_t *b = heap_head;
-    while (b) {
-        if (b->free && b->size >= sz) {
-            if (b->size >= sz + MIN_SPLIT) {
-                block_hdr_t *nb = (block_hdr_t *)((u8*)b + HDR_SIZE + sz);
-                nb->magic = HEAP_MAGIC;
-                nb->size  = b->size - sz - HDR_SIZE;
-                nb->free  = true;
-                nb->next  = b->next;
-                nb->prev  = b;
-                if (b->next) b->next->prev = nb;
-                b->next   = nb;
-                b->size   = sz;
-            }
-            b->free = false;
-            return (void *)((u8*)b + HDR_SIZE);
-        }
-        b = b->next;
-    }
-    return NULL;
-}
-
-void kfree(void *ptr) {
-    if (!ptr) return;
-    block_hdr_t *b = (block_hdr_t *)((u8*)ptr - HDR_SIZE);
-    if (b->magic != HEAP_MAGIC) return;
-    b->free = true;
-
-    if (b->next && b->next->free) {
-        b->size += HDR_SIZE + b->next->size;
-        b->next = b->next->next;
-        if (b->next) b->next->prev = b;
-    }
-    if (b->prev && b->prev->free) {
-        b->prev->size += HDR_SIZE + b->size;
-        b->prev->next  = b->next;
-        if (b->next) b->next->prev = b->prev;
-    }
-}
+void pmm_init(void) { kheap_init(heap_mem, KERNEL_HEAP_SIZE); }
 
 /* -- Memory utilities -------------------------------------------------------- */
 void *kmemset(void *dst, int c, size_t n) {
@@ -269,27 +216,6 @@ __attribute__((noreturn)) void kernel_panic(u32 code, const char *msg) {
 
     __asm__ volatile ("cli");
     while (1) { __asm__ volatile ("hlt"); }
-}
-
-/* -- Heap stats expected by shell.c / apps.c -------------------------------- */
-u32 kmem_used(void) {
-    u32 used = 0;
-    block_hdr_t *b = heap_head;
-    while (b) {
-        if (!b->free) used += b->size;
-        b = b->next;
-    }
-    return used;
-}
-
-u32 kmem_free_bytes(void) {
-    u32 free_bytes = 0;
-    block_hdr_t *b = heap_head;
-    while (b) {
-        if (b->free) free_bytes += b->size;
-        b = b->next;
-    }
-    return free_bytes;
 }
 
 void sysinfo_print(void) {

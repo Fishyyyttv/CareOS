@@ -113,6 +113,7 @@ ASM_SRC   := boot/boot.asm
 C_SRC     := kernel/kernel.c       \
              kernel/gdt_idt.c      \
              kernel/memory.c       \
+             kernel/heap.c         \
              kernel/paging.c       \
              kernel/vfs.c          \
              kernel/scheduler.c    \
@@ -412,7 +413,8 @@ HT_SRC_keychord :=
 HT_SRC_blit := gui/blit.c
 HT_SRC_wcache := gui/wcache.c
 HT_SRC_shadow := gui/shadow.c
-HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow
+HT_SRC_heap := kernel/heap.c
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h

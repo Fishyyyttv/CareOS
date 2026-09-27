@@ -359,6 +359,9 @@ static void term_exec(window_t *w,char *line){
         kutoa(KERNEL_HEAP_SIZE/1024,b,10); win_append(w,b); win_append(w,"K  ");
         kutoa(kmem_used()/1024,b,10); win_append(w,b); win_append(w,"K  ");
         kutoa(kmem_free_bytes()/1024,b,10); win_append(w,b); win_append(w,"K\n");
+        win_append(w,"Peak: "); kutoa(kmem_peak()/1024,b,10); win_append(w,b);
+        win_append(w,"K  largest free block: ");
+        kutoa(kmem_largest_free()/1024,b,10); win_append(w,b); win_append(w,"K\n");
     }
     else if(!kstrcmp(cmd,"res")){
         char b[512]; res_status_text(b,sizeof(b)); win_append(w,b);
