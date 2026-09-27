@@ -776,6 +776,8 @@ void browser_fetch_cancel(u32 owner);   /* apps/browser_fetch.c */
 void app_terminal_scroll(window_t *w, i32 delta);   /* + = back in history */
 void app_terminal_close(window_t *w);
 void app_min_size(app_id_t app, i32 *w, i32 *h);   /* smallest usable window */
+bool wm_on_current_desktop(const window_t *w);
+void wm_switch_desktop(u32 d);          /* 0..3 */
 void app_pkgmgr_click(window_t *w, i32 x, i32 y);
 void app_paint_click(window_t *w, i32 x, i32 y, mouse_t *m);
 void app_users_click(window_t *w, i32 x, i32 y);

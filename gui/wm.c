@@ -38,6 +38,13 @@ bool g_clipboard_is_cut = false;
 /* -- Multi-desktop -------------------------------------------------------- */
 u32  g_current_desktop = 0;
 
+/* Is w shown on the current workspace? (0xFF = sticky, on every workspace.)
+ * Every focus/input path uses this: windows on other workspaces used to stay
+ * focusable and clickable while invisible. */
+bool wm_on_current_desktop(const window_t *w) {
+    return w->desktop == g_current_desktop || w->desktop == 0xFF;
+}
+
 /* Last pointer position seen by wm_handle_mouse: an unfocused window with the
  * pointer near it may show hover effects, so it is drawn live, not cached. */
 static i32 s_wm_mouse_x = -10000, s_wm_mouse_y = -10000;
@@ -319,7 +326,7 @@ static void wm_refocus_after(window_t *skip) {
     window_t *top = NULL; u32 bz = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *o = &windows[i];
-        if (o == skip || !o->active || o->minimized) continue;
+        if (o == skip || !o->active || o->minimized || !wm_on_current_desktop(o)) continue;
         if (o->anim_kind == WM_ANIM_CLOSE || o->anim_kind == WM_ANIM_MINIMIZE) continue;
         if (o->z_order >= bz) { top = o; bz = o->z_order; }
     }
@@ -375,6 +382,7 @@ window_t *wm_open(app_id_t app, const char *title,
     /* If app already open -- restore + focus, no re-init */
     for (int i = 0; i < MAX_WINDOWS; i++) {
         if (windows[i].active && windows[i].app == app && app != APP_NONE) {
+            windows[i].desktop = g_current_desktop;
             if (windows[i].minimized) wm_start_restore(&windows[i]); /* grow from dock */
             else                      wm_focus(&windows[i]);
             serial_write("  [wm_open] restored existing window\n");
@@ -388,6 +396,7 @@ window_t *wm_open(app_id_t app, const char *title,
 
         window_t *win = &windows[i];
         kmemset(win, 0, sizeof(window_t));
+        win->desktop = g_current_desktop;
         /* Every app's text/state buffer. Zero-filled: Paint uses it as a 64x64
          * canvas and NetMon as history bytes. If it cannot be allocated the
          * window is not created at all (the slot stays free). */
@@ -566,7 +575,8 @@ rect_t wm_client_rect(window_t *w) {
 window_t *wm_focused(void) {
     window_t *best = NULL; u32 bz = 0;
     for (int i = 0; i < MAX_WINDOWS; i++)
-        if (windows[i].active && windows[i].focused && windows[i].z_order >= bz) {
+        if (windows[i].active && windows[i].focused && wm_on_current_desktop(&windows[i]) &&
+            windows[i].z_order >= bz) {
             best = &windows[i]; bz = windows[i].z_order;
         }
     return best;
@@ -582,7 +592,7 @@ void wm_cycle_focus(int dir) {
     int order[MAX_WINDOWS];
     int cnt = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        if (windows[i].active && !windows[i].minimized)
+        if (windows[i].active && !windows[i].minimized && wm_on_current_desktop(&windows[i]))
             order[cnt++] = i;
     }
     if (cnt <= 1) return;
@@ -972,7 +982,7 @@ void wm_handle_mouse(mouse_t *m) {
             window_t *h = NULL; u32 hz = 0;
             for (int i = 0; i < MAX_WINDOWS; i++) {
                 window_t *w = &windows[i];
-                if (!w->active || w->minimized) continue;
+                if (!w->active || w->minimized || !wm_on_current_desktop(w)) continue;
                 if (rect_contains(w->rect, m->x, m->y) && w->z_order >= hz) { h = w; hz = w->z_order; }
             }
             if (h && !h->maximized) {
@@ -1072,7 +1082,7 @@ void wm_handle_mouse(mouse_t *m) {
     window_t *hit = NULL; u32 hz = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
-        if (!w->active || w->minimized) continue;
+        if (!w->active || w->minimized || !wm_on_current_desktop(w)) continue;
         if (rect_contains(w->rect, m->x, m->y) && w->z_order >= hz) {
             hit = w; hz = w->z_order;
         }
@@ -1285,7 +1295,7 @@ void desktop_handle_mouse(mouse_t *m) {
 
 void wm_minimize_all(void) {
     for (int i = 0; i < MAX_WINDOWS; i++)
-        if (windows[i].active && !windows[i].minimized) {
+        if (windows[i].active && !windows[i].minimized && wm_on_current_desktop(&windows[i])) {
             windows[i].minimized = true;
             windows[i].focused   = false;
         }
@@ -1293,3 +1303,16 @@ void wm_minimize_all(void) {
 
 /* -- App Launcher overlay (Now in launcher.c) ----------------------------- */
 /* Legacy code removed to resolve conflicts with new launcher.c */
+
+/* Switch workspace: focus the topmost visible window there, if any. */
+void wm_switch_desktop(u32 d) {
+    if (d > 3) return;
+    g_current_desktop = d;
+    window_t *top = NULL; u32 bz = 0;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        w->focused = false;
+        if (w->active && !w->minimized && wm_on_current_desktop(w) && w->z_order >= bz) { top = w; bz = w->z_order; }
+    }
+    if (top) top->focused = true;
+}

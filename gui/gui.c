@@ -283,6 +283,16 @@ static void draw_top_bar(const mouse_t *m) {
     gfx_str(x, ty, "Machine", COL_DIM, COL_TRANSPARENT);
     x += gfx_str_width("Machine") + fw * 3;
     gfx_str(x, ty, "View", COL_DIM, COL_TRANSPARENT);
+    {   /* Workspace indicator: filled dot = current workspace (Ctrl+1..4). */
+        extern u32 g_current_desktop;
+        i32 dx = x + gfx_str_width("View") + fw * 3;
+        i32 dcy = ty + (i32)(FONT_H * GFX_FONT_SCALE) / 2;
+        for (u32 d = 0; d < 4; d++) {
+            i32 cx = dx + (i32)d * 14 + 4;
+            if (d == g_current_desktop) gfx_circle_fill(cx, dcy, 4, COL_ACCENT);
+            else                        gfx_circle(cx, dcy, 4, COL_MUTED);
+        }
+    }
 
     /* Right: status icons + clock + control/notification center triggers */
     rtc_time_t t; rtc_read(&t);
@@ -1678,7 +1688,8 @@ void gui_run(void) {
 
                 /* Multi-desktop Switch: Ctrl + 1-4 */
                 if (keyboard_ctrl_held() && c >= '1' && c <= '4') {
-                    g_current_desktop = (u32)(c - '1');
+                    wm_switch_desktop((u32)(c - '1'));
+                    activity = true;
                     notify_push("Workspace", (c == '1' ? "Desktop 1" : (c == '2' ? "Desktop 2" : (c == '3' ? "Desktop 3" : "Desktop 4"))), COL_ACCENT);
                     continue;
                 }
