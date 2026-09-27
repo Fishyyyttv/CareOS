@@ -138,7 +138,11 @@ void app_doom_init(window_t *w) {
     
     if (!doom_started) {
         kprintf("[doom] Spawning Doom thread...\n");
-        task_create("doom", doom_task_entry);
+        {   /* 10 ms slices: the GUI loop yields to runnable tasks, so a
+             * long slice here would stall desktop frames. */
+            int tid = task_create("doom", doom_task_entry);
+            task_set_timeslice(tid, 10 * PIT_HZ / 1000);
+        }
         doom_started = true;
     }
 }

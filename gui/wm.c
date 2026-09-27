@@ -332,6 +332,7 @@ static void wm_finish_close(window_t *w) {
     if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
     if (w->wcache_px) { kfree(w->wcache_px); w->wcache_px = NULL; }
     if (w->app == APP_TERMINAL) app_terminal_close(w);
+    if (w->app == APP_BROWSER) browser_fetch_cancel(w->instance_id);
     if (w->text_buf) { kfree(w->text_buf); w->text_buf = NULL; w->text_cap = 0; }
     w->wcache.valid = false;
     if (w->root) { widget_destroy(w->root); w->root = NULL; }

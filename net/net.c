@@ -202,6 +202,14 @@ void net_init(void){
 void net_get_mac(u8 mac[6]){ kmemcpy(mac, nic_mac, 6); }
 void net_poll(void){ if (nic_up) e1000_poll(); }
 
+/* One network user at a time. The browser fetch worker holds this for a
+ * whole request; GUI-thread callers use net_trylock() and back off rather
+ * than block the desktop. */
+static volatile int s_net_lock = 0;
+bool net_trylock(void) { return __sync_lock_test_and_set(&s_net_lock, 1) == 0; }
+void net_lock(void)    { while (__sync_lock_test_and_set(&s_net_lock, 1)) task_yield(); }
+void net_unlock(void)  { __sync_lock_release(&s_net_lock); }
+
 /* ARP */
 u8 *arp_lookup(u32 ip){
     static u8 bcast[6] = {0xff,0xff,0xff,0xff,0xff,0xff};

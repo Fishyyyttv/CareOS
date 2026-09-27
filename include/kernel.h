@@ -334,6 +334,13 @@ void task_init(void);
 int  task_create(const char *name, task_func_t fn);
 int  task_create_user(const char *name, u64 entry, pde_t *page_dir, int session);
 void task_yield(void);
+void task_block_unless(volatile bool *flag);  /* sleep until task_wake unless *flag */
+void task_wake(int idx);                      /* idx as returned by task_create */
+bool sched_other_ready(void);
+void task_set_timeslice(int idx, u32 ticks);
+bool net_trylock(void);
+void net_lock(void);
+void net_unlock(void);
 __attribute__((noreturn)) void task_exit(void);
 task_t *task_current(void);
 void task_list(void);

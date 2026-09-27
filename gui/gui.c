@@ -1769,7 +1769,16 @@ void gui_run(void) {
                 last_sysmon = now;
                 if (sm || nm) activity = true;   /* live graphs, only while a monitor is open */
             }
-            if (now - last_netmon >= 100) { net_poll(); last_netmon = now; }
+            /* The browser fetch worker owns the NIC while it runs (it polls it
+             * itself); poll here only when the network is free. */
+            if (now - last_netmon >= 100 && net_trylock()) { net_poll(); net_unlock(); last_netmon = now; }
+            for (int bi = 0; bi < MAX_WINDOWS; bi++) {
+                window_t *bw = wm_get_window(bi);
+                if (bw && bw->active && bw->app == APP_BROWSER && bw->browser_loading) {
+                    app_browser_tick(bw);
+                    activity = true;           /* spinner + result */
+                }
+            }
             if (now - last_notify >= 100)  { notify_tick(); last_notify = now; }
 
             /* Low-rate heartbeat: keeps on-screen clocks/meters ticking without
@@ -1898,9 +1907,15 @@ void gui_run(void) {
                 needs_redraw = false;
             }
 
-            perf_idle_begin();
-            __asm__ volatile("sti; hlt");
-            perf_idle_end();
+            if (sched_other_ready()) {
+                /* Background work (page loads, DOOM) gets the rest of this
+                 * frame; its short time slice brings us back quickly. */
+                task_yield();
+            } else {
+                perf_idle_begin();
+                __asm__ volatile("sti; hlt");
+                perf_idle_end();
+            }
             perf_tick();
     }
 }

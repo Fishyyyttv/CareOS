@@ -562,7 +562,9 @@ static void term_exec(window_t *w,char *line){
             if(argc<3){ term_out(w,"usage: wifi connect <ssid> [password]\n"); return; }
             const char *pw=(argc>=4)?argv[3]:"";
             settings_set_wifi_profile(argv[2],pw,true);
-            if(net_dhcp_renew()==0){ term_out(w,"wifi connected\n"); }
+            if(!net_trylock()){ term_out(w,"network busy (page loading) - try again\n"); return; }
+            int rc=net_dhcp_renew(); net_unlock();
+            if(rc==0){ term_out(w,"wifi connected\n"); }
             else term_out(w,"wifi profile saved; no link now\n");
             return;
         }
@@ -600,17 +602,21 @@ static void term_exec(window_t *w,char *line){
     }
     else if(!kstrcmp(cmd,"ping")){
         if(argc<2){term_out(w,"usage: ping <host>\n");return;}
+        if(!net_trylock()){ term_out(w,"network busy (page loading) - try again\n"); return; }
         term_out(w,"PING "); term_out(w,argv[1]); term_out(w,"\n");
         for(int i=0;i<3;i++){
             icmp_ping(net_get_ip(),i); timer_wait(200);
             term_out(w,"64 bytes: icmp_seq="); char n[4]; kutoa((u32)i,n,10);
             term_out(w,n); term_out(w," time=~1ms\n");
         }
+        net_unlock();
     }
     else if(!kstrcmp(cmd,"curl")){
         if(argc<2){term_out(w,"usage: curl <url>\n");return;}
+        if(!net_trylock()){ term_out(w,"network busy (page loading) - try again\n"); return; }
         term_out(w,"Fetching...\n");
         char resp[1024]; int n=http_get("example.com",80,"/",resp,sizeof(resp));
+        net_unlock();
         if(n>0){term_out(w,resp);}else term_out(w,"Failed.\n");
     }
     else if(!kstrcmp(cmd,"perf")){

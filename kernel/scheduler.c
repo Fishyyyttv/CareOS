@@ -326,6 +326,41 @@ void task_yield(void) {
     __asm__ volatile ("int $0x30");
 }
 
+/* Block the calling task until task_wake(), unless *flag is already set.
+ * The check and the state change happen with interrupts off, so a wake that
+ * races with this call is never lost. */
+void task_block_unless(volatile bool *flag) {
+    u64 f;
+    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    if (!*flag) tasks[current_task].state = TASK_BLOCKED;
+    if (f & 0x200) __asm__ volatile ("sti" ::: "memory");
+    task_yield();
+}
+
+/* Make a blocked task (by task_create index) runnable again. */
+void task_wake(int idx) {
+    if (idx < 0 || (u32)idx >= task_count) return;
+    u64 f;
+    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    if (tasks[idx].state == TASK_BLOCKED) tasks[idx].state = TASK_READY;
+    if (f & 0x200) __asm__ volatile ("sti" ::: "memory");
+}
+
+/* Is any task other than the caller ready to run? The GUI loop yields
+ * instead of halting when one is, so background work gets the idle time. */
+bool sched_other_ready(void) {
+    for (u32 i = 0; i < task_count; i++)
+        if (i != current_task && tasks[i].state == TASK_READY) return true;
+    return false;
+}
+
+/* Time slice in PIT ticks for a task (by task_create index). */
+void task_set_timeslice(int idx, u32 ticks) {
+    if (idx < 0 || (u32)idx >= task_count || ticks == 0) return;
+    tasks[idx].timeslice = ticks;
+    if (tasks[idx].ticks_remaining > ticks) tasks[idx].ticks_remaining = ticks;
+}
+
 __attribute__((noreturn)) void task_exit(void) {
     /* Reclaim the process's private address space now. Note: we do NOT
      * free tasks[current_task].kstack here — task_exit() is running on

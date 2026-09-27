@@ -305,6 +305,9 @@ typedef struct window {
     char  browser_content[65536];
     char  browser_title[128];
     bool  browser_loading;
+    u8    browser_redirects;     /* redirect hops in the current load */
+    bool  browser_push_history;  /* record the URL once this load finishes */
+    bool  browser_autohttps;     /* https:// was assumed; retry http:// on failure */
     bool  browser_url_active;
     i32   browser_scroll;
     u32   browser_history_pos;
@@ -752,6 +755,9 @@ void app_calc_click(window_t *w, i32 x, i32 y);
 void app_sysmon_click(window_t *w, i32 x, i32 y);
 void app_browser_click(window_t *w, i32 x, i32 y);
 void app_browser_scroll(window_t *w, i32 delta);
+void app_browser_tick(window_t *w);                  /* apply a finished background fetch */
+void app_browser_open_url(window_t *w, const char *url);
+void browser_fetch_cancel(u32 owner);   /* apps/browser_fetch.c */
 void app_terminal_scroll(window_t *w, i32 delta);   /* + = back in history */
 void app_terminal_close(window_t *w);
 void app_min_size(app_id_t app, i32 *w, i32 *h);   /* smallest usable window */

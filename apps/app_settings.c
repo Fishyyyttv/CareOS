@@ -546,8 +546,12 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
             }
         }
         if (rect_contains(rect_make(cx + 176, cy + 144, 138, 34), x, y)) {
-            if (net_dhcp_renew() == 0) settings_set_status(w, "DHCP lease renewed", COL_GREEN);
-            else settings_set_status(w, "DHCP request failed", COL_RED);
+            if (!net_trylock()) settings_set_status(w, "Network busy - try again", COL_DIM);
+            else {
+                int rc = net_dhcp_renew(); net_unlock();
+                if (rc == 0) settings_set_status(w, "DHCP lease renewed", COL_GREEN);
+                else settings_set_status(w, "DHCP request failed", COL_RED);
+            }
         }
         break;
 

@@ -166,7 +166,6 @@ static window_t *bench_open(app_id_t app, const char *title) {
 }
 
 void perf_bench_start(const char *url) {
-    (void)url;
     if (perf_bench_active()) {
         serial_write("[perf-bench] REJECTED: benchmark already active\n");
         notify_push("Benchmark", "Already running", COL_YELLOW);
@@ -225,6 +224,9 @@ void perf_bench_start(const char *url) {
     if (browser) {
         s_bench_x = browser->rect.x;
         s_bench_y = browser->rect.y;
+        /* With a URL the page loads in the background during the run, so the
+         * benchmark also covers the fetch worker's share of the CPU. */
+        if (url && url[0]) app_browser_open_url(browser, url);
     }
     s_bench_sample_n = 0;
     s_bench_frames = s_bench_over = s_bench_i = 0;

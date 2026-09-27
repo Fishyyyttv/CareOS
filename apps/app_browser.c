@@ -1,6 +1,7 @@
 /* CareOS v9 -- apps/app_browser.c -- Web Browser */
 #include "apps_common.h"
 #include "http_parse.h"
+#include "browser_fetch.h"
 
 /* ── Layout ──────────────────────────────────────────────────────── */
 #define BROW_BAR_H    48
@@ -21,9 +22,10 @@ static blink_t g_links[BROW_LINK_MAX];
 static u32     g_nlinks;
 
 /* ── Static buffers ─────────────────────────────────────────────── */
-static char g_resp[BROW_RESP_SZ];
+/* Raw responses live in the fetch worker's buffer (apps/browser_fetch.c). */
+#define g_resp (browser_fetch_buffer())
 static char g_status[96] = "Ready";
-static int  g_redirect_depth = 0;   /* prevent infinite redirect loops */
+static bool s_redirecting = false;  /* navigate() called for a redirect or fallback */
 static char s_url_before_edit[256]; /* URL to restore if a Ctrl+L edit is cancelled */
 
 /* ── Forward declarations ────────────────────────────────────────── */
@@ -546,13 +548,13 @@ static void browser_apply_response(window_t *w, const char *url, const char *hos
     g_resp[n] = '\0';
     int code = http_status_code(g_resp, (u32)n);
     if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) &&
-        g_redirect_depth < 6) {
+        w->browser_redirects < 6) {
         char loc[512];
         if (http_header(g_resp, (u32)n, "Location", loc, sizeof loc)) {
             char next[512]; http_url_resolve(url, loc, next, sizeof next);
-            w->browser_loading = false;
-            g_redirect_depth++; app_browser_navigate(w, next); g_redirect_depth--;
-            return;
+            w->browser_redirects++;
+            s_redirecting = true; app_browser_navigate(w, next); s_redirecting = false;
+            return;                              /* still loading: the next hop */
         }
     }
     u32 off = http_body_offset(g_resp, (u32)n);
@@ -567,17 +569,18 @@ static void browser_apply_response(window_t *w, const char *url, const char *hos
     browser_save_tab(w);
     ksprintf(g_status, "%s  %d bytes%s", host, (int)blen,
              kstrncmp(url, "https://", 8) == 0 ? " (HTTPS)" : "");
-    if (g_redirect_depth == 0) history_push(w, url);
+    if (w->browser_push_history) { history_push(w, url); w->browser_push_history = false; }
     w->browser_loading = false;
 }
 
 static void app_browser_navigate(window_t *w, const char *url) {
     kstrncpy(w->browser_url, url, 255);
-    w->browser_loading = true;
-    w->browser_scroll  = 0;
+    w->browser_scroll = 0;
+    if (!s_redirecting) { w->browser_redirects = 0; }
 
-    /* about: pages */
+    /* about: pages need no network; also stop any fetch still in flight. */
     if (kstrncmp(url, "about:", 6) == 0) {
+        browser_fetch_cancel(w->instance_id);
         w->browser_content[0] = '\0';
         kstrcpy(w->browser_title, "New Tab");
         kstrcpy(g_status, "about:home");
@@ -585,81 +588,23 @@ static void app_browser_navigate(window_t *w, const char *url) {
         return;
     }
 
-    /* HTTPS */
-    if (kstrncmp(url, "https://", 8) == 0) {
-        const char *h = url + 8;
-        char hbuf[128]={0}; const char *hpath="/";
-        const char *sl = kstrchr(h,'/');
-        if(sl){ u32 hl=(u32)(sl-h); if(hl>127)hl=127; kmemcpy(hbuf,h,hl); hpath=sl; }
-        else kstrncpy(hbuf,h,127);
-        ksprintf(g_status,"Connecting to %s (HTTPS)...", hbuf);
-        int n = https_get(hbuf, hpath, g_resp, BROW_RESP_SZ-1);
-        if(n<=0){
-            extern char g_net_diag[];
-            ksprintf(w->browser_content,
-                "<h1>Connection Failed</h1>"
-                "<p>Could not load this page over HTTPS.</p>"
-                "<p>Stage: %s</p>",
-                g_net_diag[0] ? g_net_diag : "unknown");
-            kstrcpy(w->browser_title,"Error");
-            ksprintf(g_status,"Failed: %s", g_net_diag[0]?g_net_diag:"unknown");
-            w->browser_loading=false; return;
-        }
-        browser_apply_response(w, url, hbuf, n);
-        return;
-    }
-
-    /* parse http:// URL */
-    const char *host = url;
-    if (kstrncmp(url, "http://", 7) == 0) host = url + 7;
-
-    char host_buf[128] = {0};
-    const char *path = "/";
-    u16 port = 80;
-
-    const char *slash = kstrchr(host, '/');
-    if (slash) {
-        u32 hl = (u32)(slash - host);
-        if (hl > 127) hl = 127;
-        kmemcpy(host_buf, host, hl); host_buf[hl] = '\0';
-        path = slash;
-    } else {
-        kstrncpy(host_buf, host, 127);
-    }
-
-    /* extract port from host:port */
-    char *colon = kstrchr(host_buf, ':');
-    if (colon) {
-        *colon = '\0';
-        port = 0;
-        for (char *d = colon+1; *d>='0' && *d<='9'; d++)
-            port = (u16)(port*10 + (*d-'0'));
-        if (port == 0) port = 80;
-    }
-
-    ksprintf(g_status, "Connecting to %s...", host_buf);
-
-    int n = http_get(host_buf, port, path, g_resp, BROW_RESP_SZ-1);
-    if (n <= 0) {
-        const char *err = net_last_error();
-        kstrcpy(w->browser_content,
-            "<h1>Connection Failed</h1>"
-            "<p>Could not reach the server. "
-            "Check the address and network status.</p>");
-        kstrcpy(w->browser_title, "Error");
-        if (err && err[0]) kstrncpy(g_status, err, sizeof(g_status) - 1);
-        else ksprintf(g_status, "Failed: %s", host_buf);
-        g_status[sizeof(g_status) - 1] = '\0';
-        w->browser_loading = false;
-        return;
-    }
-    browser_apply_response(w, url, host_buf, n);
+    /* Hand the request to the fetch worker; app_browser_tick() applies the
+     * result, so the desktop keeps running while the page loads. */
+    char host[128] = {0};
+    const char *h = url;
+    if (!kstrncmp(url, "https://", 8)) h = url + 8;
+    else if (!kstrncmp(url, "http://", 7)) h = url + 7;
+    for (u32 i = 0; i < 127 && h[i] && h[i] != '/'; i++) host[i] = h[i];
+    ksprintf(g_status, "Connecting to %s...", host);
+    w->browser_loading = true;
+    browser_fetch_submit(w->instance_id, w->browser_tab_sel, url);
 }
 
 /* smart dispatch: detect domain vs search query */
 static void smart_navigate(window_t *w, const char *input) {
     if (!input || !*input) return;
     char url[512];
+    w->browser_autohttps = false;
 
     if (kstrncmp(input,"http://",7)==0 || kstrncmp(input,"https://",8)==0
         || kstrncmp(input,"about:",6)==0) {
@@ -673,6 +618,7 @@ static void smart_navigate(window_t *w, const char *input) {
         }
         if (has_dot && !has_space) {
             ksprintf(url, "https://%s", input);
+            w->browser_autohttps = true;     /* fall back to http:// if it fails */
         } else {
             char enc[256];
             url_encode(input, enc, sizeof(enc));
@@ -682,11 +628,8 @@ static void smart_navigate(window_t *w, const char *input) {
         }
     }
 
+    w->browser_push_history = true;          /* recorded once the page arrives */
     app_browser_navigate(w, url);
-
-    /* push to history after final navigation (handles redirects too) */
-    if (kstrncmp(w->browser_url, "about:", 6) != 0)
-        history_push(w, w->browser_url);
 }
 
 /* ── Tab helpers ─────────────────────────────────────────────────── */
@@ -698,6 +641,7 @@ static void browser_save_tab(window_t *w) {
 }
 
 static void browser_switch_tab(window_t *w, u32 idx) {
+    if (w->browser_loading) { browser_fetch_cancel(w->instance_id); w->browser_loading = false; }
     if (idx >= w->browser_tab_count) return;
     browser_save_tab(w);
     w->browser_tab_sel = idx;
@@ -865,6 +809,15 @@ static void draw_home(window_t *w, rect_t cr) {
 }
 
 /* ── Draw ────────────────────────────────────────────────────────── */
+static const char *browser_loading_text(void) {
+    static char lb[64];
+    static const char spin[] = "|/-\\";
+    u32 el = browser_fetch_elapsed_ms();
+    ksprintf(lb, "%c  Loading... %d.%d s   (Esc to stop)",
+             spin[(timer_ms() / 120) % 4], (int)(el / 1000), (int)(el / 100 % 10));
+    return lb;
+}
+
 void app_browser_draw(window_t *w) {
     rect_t cr = wm_client_rect(w);
     g_nlinks = 0;
@@ -1022,7 +975,7 @@ void app_browser_draw(window_t *w) {
 
     if (w->browser_loading) {
         gfx_str_centered(cr.x, cont_y + cont_h/2 - FH/2, cr.w,
-                         "Loading...", COL_DIM, COL_TRANSPARENT);
+                         browser_loading_text(), COL_DIM, COL_TRANSPARENT);
         gfx_clear_clip();
         return;
     }
@@ -1078,6 +1031,13 @@ void app_browser_draw(window_t *w) {
 /* ── Input ───────────────────────────────────────────────────────── */
 void app_browser_key(window_t *w, char c) {
     extern bool keyboard_ctrl_held(void);
+
+    if (c == 27 && w->browser_loading && !w->browser_url_active && !w->browser_find_active) {
+        browser_fetch_cancel(w->instance_id);
+        w->browser_loading = false;
+        kstrcpy(g_status, "Stopped");
+        return;
+    }
 
     /* Find bar mode */
     if (w->browser_find_active) {
@@ -1331,6 +1291,8 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
             if (x>=l->x&&x<l->x+l->w&&y>=l->y&&y<l->y+l->h) {
                 /* Resolve relative / protocol-relative hrefs against this page. */
                 char abs[512]; http_url_resolve(w->browser_url, l->url, abs, sizeof(abs));
+                w->browser_push_history = true;
+                w->browser_autohttps = false;
                 app_browser_navigate(w, abs);
                 return;
             }
@@ -1343,3 +1305,49 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
         if (w->browser_scroll < 0) w->browser_scroll = 0;
     }
 }
+
+/* Called every GUI loop iteration for a browser window that is loading:
+ * applies the finished fetch, or notices the fetch was superseded. */
+void app_browser_tick(window_t *w) {
+    if (!w->browser_loading) return;
+    char url[512]; int n = 0;
+    if (!browser_fetch_take(w->instance_id, w->browser_tab_sel, url, sizeof url, &n)) {
+        if (!browser_fetch_busy(w->instance_id, w->browser_tab_sel)) {
+            w->browser_loading = false;          /* another window/tab took the worker */
+            kstrcpy(g_status, "Stopped");
+        }
+        return;
+    }
+    char host[128] = {0};
+    const char *h = url;
+    if (!kstrncmp(url, "https://", 8)) h = url + 8;
+    else if (!kstrncmp(url, "http://", 7)) h = url + 7;
+    for (u32 i = 0; i < 127 && h[i] && h[i] != '/'; i++) host[i] = h[i];
+    if (n <= 0) {
+        if (w->browser_autohttps && !kstrncmp(url, "https://", 8)) {
+            /* Typed a bare domain and HTTPS failed: try plain HTTP. */
+            char alt[512]; ksprintf(alt, "http://%s", url + 8);
+            w->browser_autohttps = false;
+            s_redirecting = true; app_browser_navigate(w, alt); s_redirecting = false;
+            return;
+        }
+        /* g_net_diag describes the last TLS attempt; for plain HTTP use the
+         * TCP layer's error so a fallback shows why IT failed. */
+        extern char g_net_diag[];
+        const char *err = net_last_error();
+        bool tls = !kstrncmp(url, "https://", 8);
+        const char *why = (tls && g_net_diag[0]) ? g_net_diag
+                        : (err && err[0]) ? err : "No response (timeout)";
+        ksprintf(w->browser_content, "<h1>Connection Failed</h1><p>Could not load %s.</p><p>%s</p>",
+                 host, why);
+        kstrcpy(w->browser_title, "Error");
+        ksprintf(g_status, "Failed: %s", host);
+        w->browser_loading = false;
+        w->browser_push_history = false;
+        return;
+    }
+    if ((u32)n >= browser_fetch_buffer_size()) n = (int)browser_fetch_buffer_size() - 1;
+    browser_apply_response(w, url, host, n);
+}
+
+void app_browser_open_url(window_t *w, const char *url) { smart_navigate(w, url); }
