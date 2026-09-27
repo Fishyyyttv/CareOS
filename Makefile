@@ -176,6 +176,7 @@ C_SRC     := kernel/kernel.c       \
              gui/gui.c             \
              apps/apps.c           \
              apps/app_terminal.c   \
+             apps/term_layout.c    \
              apps/app_notes.c      \
              apps/app_files.c      \
              apps/app_sysmon.c     \

@@ -381,6 +381,7 @@ typedef struct window {
     gfx_buffer_t win_buffer;
 
     /* Pixel cache for unfocused, settled windows (gui/wcache.h). */
+    void          *term_state;   /* Terminal wrap/scroll state (apps/app_terminal.c) */
     wcache_state_t wcache;
     u32           *wcache_px;
 } window_t;
@@ -719,6 +720,8 @@ void gui_run(void);
 #define KEY_NAV_HOME   0x84
 #define KEY_NAV_END    0x85
 #define KEY_NAV_DELETE 0x7F   /* driver sends a bare DEL byte */
+#define KEY_NAV_PGUP   0x86
+#define KEY_NAV_PGDN   0x87
 char gui_read_key(void);      /* keyboard_getchar() + sequence collapsing */
 
 /* -- Launcher ------------------------------------------------------------- */
@@ -745,6 +748,8 @@ void app_calc_click(window_t *w, i32 x, i32 y);
 void app_sysmon_click(window_t *w, i32 x, i32 y);
 void app_browser_click(window_t *w, i32 x, i32 y);
 void app_browser_scroll(window_t *w, i32 delta);
+void app_terminal_scroll(window_t *w, i32 delta);   /* + = back in history */
+void app_terminal_close(window_t *w);
 void app_pkgmgr_click(window_t *w, i32 x, i32 y);
 void app_paint_click(window_t *w, i32 x, i32 y, mouse_t *m);
 void app_users_click(window_t *w, i32 x, i32 y);

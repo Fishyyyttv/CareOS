@@ -91,6 +91,8 @@ static void keyboard_irq(registers_t *r) {
         case 0x47: seq = 'H'; break;   /* Home  */
         case 0x4F: seq = 'F'; break;   /* End   */
         case 0x53: kb_push_char(0x7F); return;   /* Delete */
+        case 0x49: kb_push_char(0x1B); kb_push_char('['); kb_push_char('5'); kb_push_char('~'); return; /* PgUp */
+        case 0x51: kb_push_char(0x1B); kb_push_char('['); kb_push_char('6'); kb_push_char('~'); return; /* PgDn */
         case 0x1C: kb_push_char('\n'); return;   /* keypad Enter */
         case 0x35: kb_push_char('/');  return;   /* keypad '/'  */
         default: return;

@@ -302,6 +302,7 @@ static void wm_refocus_after(window_t *skip) {
 static void wm_finish_close(window_t *w) {
     if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
     if (w->wcache_px) { kfree(w->wcache_px); w->wcache_px = NULL; }
+    if (w->app == APP_TERMINAL) app_terminal_close(w);
     if (w->text_buf) { kfree(w->text_buf); w->text_buf = NULL; w->text_cap = 0; }
     w->wcache.valid = false;
     if (w->root) { widget_destroy(w->root); w->root = NULL; }
@@ -1051,6 +1052,8 @@ void wm_handle_mouse(mouse_t *m) {
         if (rect_contains(scr, m->x, m->y)) {
             if (hit->app == APP_BROWSER) {
                 app_browser_scroll(hit, m->scroll_delta);
+            } else if (hit->app == APP_TERMINAL) {
+                app_terminal_scroll(hit, m->scroll_delta * 3);   /* 3 lines / notch */
             } else {
                 i32 ns = (i32)hit->scroll - m->scroll_delta * 3;   /* 3 lines / notch */
                 hit->scroll = (ns > 0) ? (u32)ns : 0;

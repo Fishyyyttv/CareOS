@@ -1,5 +1,7 @@
 /* CareOS v9 -- apps/app_terminal.c -- Terminal application */
 #include "apps_common.h"
+#include "term_layout.h"
+#include "font.h"
 #include "perf.h"
 
 /* -- Terminal Themes & Customization --------------------------------------
@@ -97,6 +99,109 @@ static u8  g_term_opacity   = 217; /* Default ~85% opacity (217/255) */
 
 static struct fs_node *term_cwd=NULL;
 
+/* -- Scrollback, wrapping and scrolling state (per Terminal window) --------
+ * Output is capped at TERM_SCROLLBACK_MAX bytes (oldest lines dropped). The
+ * buffer is wrapped into visual lines for the current width; that layout is
+ * cached and rebuilt only when the text, width, font or scale changes. */
+#define TERM_SCROLLBACK_MAX  (256u * 1024u)
+#define TERM_SCROLLBACK_KEEP (192u * 1024u)
+#define TERM_FONT            FONT_BODY
+
+typedef struct {
+    term_vline_t *lines;
+    u32  cap, n;                   /* allocated / used visual lines */
+    u32  key_len, key_font, key_scale;
+    i32  key_width;
+    bool follow;                   /* stick to the newest output */
+} term_state_t;
+
+typedef struct { i32 lh, input_h, text_h, text_x, text_w; u32 vis; } term_metrics_t;
+
+static term_state_t *term_st(window_t *w) {
+    if (!w->term_state) {
+        term_state_t *st = (term_state_t *)kmalloc(sizeof(term_state_t));
+        if (!st) return NULL;
+        kmemset(st, 0, sizeof *st);
+        st->follow = true;
+        st->key_len = 0xFFFFFFFFu;
+        w->term_state = st;
+    }
+    return (term_state_t *)w->term_state;
+}
+
+static void term_invalidate(window_t *w) {
+    term_state_t *st = term_st(w);
+    if (st) st->key_len = 0xFFFFFFFFu;
+}
+
+/* All Terminal output goes through here: append, then cap the scrollback. */
+static void term_out(window_t *w, const char *s) {
+    win_append(w, s);
+    if (w->text_len > TERM_SCROLLBACK_MAX) {
+        w->text_len = term_trim(w->text_buf, w->text_len, TERM_SCROLLBACK_MAX, TERM_SCROLLBACK_KEEP);
+        term_invalidate(w);            /* content shifted; same length can hide it */
+    }
+}
+
+/* The ONE place Terminal geometry is computed (draw, Enter, wheel and
+ * PgUp/PgDn used to disagree, which hid the newest lines after Enter). */
+static term_metrics_t term_metrics(window_t *w) {
+    rect_t cr = wm_client_rect(w);
+    term_metrics_t m;
+    i32 sc = (i32)GFX_FONT_SCALE;
+    m.lh      = FONT_H * sc + 3;
+    m.input_h = m.lh + 16;
+    m.text_h  = cr.h - m.input_h - 6;
+    m.text_x  = cr.x + 12;
+    m.text_w  = cr.w - 12 - 14;          /* room for the scrollbar */
+    if (m.text_h < m.lh) m.text_h = m.lh;
+    m.vis = (u32)(m.text_h / m.lh);
+    if (m.vis == 0) m.vis = 1;
+    return m;
+}
+
+static i32 term_char_w(char c) { return gfx_str_width_n(&c, 1, TERM_FONT); }
+
+/* Re-wrap only when the text, width, font or scale changed. */
+static void term_relayout(window_t *w, term_state_t *st, i32 width) {
+    u32 font = font_active_index(), scale = GFX_FONT_SCALE;
+    if (st->lines && st->key_len == w->text_len && st->key_width == width &&
+        st->key_font == font && st->key_scale == scale) return;
+    u32 need = term_wrap(w->text_buf, w->text_len, width, term_char_w, st->lines, st->cap);
+    if (need > st->cap) {
+        u32 cap = need + need / 2 + 64;
+        term_vline_t *nl = (term_vline_t *)kmalloc(cap * sizeof(term_vline_t));
+        if (nl) {
+            if (st->lines) kfree(st->lines);
+            st->lines = nl; st->cap = cap;
+            need = term_wrap(w->text_buf, w->text_len, width, term_char_w, st->lines, cap);
+        }
+    }
+    st->n = need < st->cap ? need : st->cap;
+    st->key_len = w->text_len; st->key_width = width; st->key_font = font; st->key_scale = scale;
+}
+
+/* Scroll by delta visual lines (positive = back in history, like the wheel). */
+void app_terminal_scroll(window_t *w, i32 delta) {
+    term_state_t *st = term_st(w);
+    if (!st) return;
+    term_metrics_t m = term_metrics(w);
+    u32 max_scroll = st->n > m.vis ? st->n - m.vis : 0;
+    i32 ns = (i32)w->scroll - delta;
+    if (ns < 0) ns = 0;
+    if ((u32)ns >= max_scroll) { ns = (i32)max_scroll; st->follow = true; }
+    else st->follow = false;
+    w->scroll = (u32)ns;
+}
+
+void app_terminal_close(window_t *w) {
+    term_state_t *st = (term_state_t *)w->term_state;
+    if (!st) return;
+    if (st->lines) kfree(st->lines);
+    kfree(st);
+    w->term_state = NULL;
+}
+
 /* Command history: 32-entry ring shared by all terminal windows. s_hist_idx
  * is the browse position while pressing Up/Down; == s_hist_count means "not
  * browsing" (the live line). s_hist_draft keeps the half-typed line so Down
@@ -187,8 +292,8 @@ static int term_parse_ipv4(const char *s, u32 *out){
 }
 static void term_prompt(window_t *w){
     char p[64]; term_path(term_cwd,p);
-    win_append(w,"\n"); win_append(w,user_current_name());
-    win_append(w,"@careos:"); win_append(w,p); win_append(w,"$ ");
+    term_out(w,"\n"); term_out(w,user_current_name());
+    term_out(w,"@careos:"); term_out(w,p); term_out(w,"$ ");
 }
 
 static void term_exec(window_t *w,char *line){
@@ -202,17 +307,17 @@ static void term_exec(window_t *w,char *line){
     else if(!kstrcmp(cmd,"theme") || !kstrcmp(cmd,"termtheme")){
         if(argc<2 || !kstrcmp(argv[1],"list")){
             char cntbuf[4]; kutoa(TERM_THEME_COUNT, cntbuf, 10);
-            win_append(w,"Terminal Theme Presets:\n");
+            term_out(w,"Terminal Theme Presets:\n");
             for(u32 i=0; i<TERM_THEME_COUNT; i++){
                 char num[4]; kutoa(i+1, num, 10);
-                win_append(w, " "); win_append(w, num); win_append(w, ". ");
-                win_append(w, g_term_themes[i].name);
-                if(i == g_term_theme_idx) win_append(w, "  [active]");
-                win_append(w, "\n");
+                term_out(w, " "); term_out(w, num); term_out(w, ". ");
+                term_out(w, g_term_themes[i].name);
+                if(i == g_term_theme_idx) term_out(w, "  [active]");
+                term_out(w, "\n");
             }
-            win_append(w,"usage: theme <name|1-"); win_append(w,cntbuf);
-            win_append(w,">   (name = first word, e.g. careos, gruvbox, light)\n");
-            win_append(w,"tip: Ctrl+T cycles themes\n");
+            term_out(w,"usage: theme <name|1-"); term_out(w,cntbuf);
+            term_out(w,">   (name = first word, e.g. careos, gruvbox, light)\n");
+            term_out(w,"tip: Ctrl+T cycles themes\n");
             return;
         }
         const char *arg = argv[1];
@@ -242,11 +347,11 @@ static void term_exec(window_t *w,char *line){
         }
         if(chosen >= 0 && (u32)chosen < TERM_THEME_COUNT){
             g_term_theme_idx = (u32)chosen;
-            win_append(w, "Terminal theme set to ");
-            win_append(w, g_term_themes[g_term_theme_idx].name);
-            win_append(w, "\n");
+            term_out(w, "Terminal theme set to ");
+            term_out(w, g_term_themes[g_term_theme_idx].name);
+            term_out(w, "\n");
         } else {
-            win_append(w, "theme: unknown preset. Use 'theme list' to view options.\n");
+            term_out(w, "theme: unknown preset. Use 'theme list' to view options.\n");
         }
     }
     else if(!kstrcmp(cmd,"opacity") || !kstrcmp(cmd,"transparency")){
@@ -254,12 +359,12 @@ static void term_exec(window_t *w,char *line){
             char valbuf[16];
             u32 pct = (g_term_opacity * 100) / 255;
             kutoa(pct, valbuf, 10);
-            win_append(w, "Current terminal opacity: ");
-            win_append(w, valbuf);
-            win_append(w, "% (alpha ");
+            term_out(w, "Current terminal opacity: ");
+            term_out(w, valbuf);
+            term_out(w, "% (alpha ");
             kutoa(g_term_opacity, valbuf, 10);
-            win_append(w, valbuf);
-            win_append(w, "/255)\nusage: opacity <0-100>\n");
+            term_out(w, valbuf);
+            term_out(w, "/255)\nusage: opacity <0-100>\n");
             return;
         }
         int val = katoi(argv[1]);
@@ -272,18 +377,18 @@ static void term_exec(window_t *w,char *line){
         u32 pct = (g_term_opacity * 100) / 255;
         char valbuf[16];
         kutoa(pct, valbuf, 10);
-        win_append(w, "Terminal opacity set to ");
-        win_append(w, valbuf);
-        win_append(w, "%\n");
+        term_out(w, "Terminal opacity set to ");
+        term_out(w, valbuf);
+        term_out(w, "%\n");
     }
     else if(!kstrcmp(cmd,"ls")){
         struct fs_node *d=(argc>=2&&argv[1][0]!='/')?vfs_find(term_cwd,argv[1]):(argc>=2?vfs_resolve_path(argv[1]):term_cwd);
-        if(!d){win_append(w,"ls: not found\n");return;}
+        if(!d){term_out(w,"ls: not found\n");return;}
         for(u32 i=0;i<d->child_count;i++){
-            win_append(w,d->children[i]->name);
-            win_append(w,d->children[i]->type==FS_DIR?"/  ":"  ");
+            term_out(w,d->children[i]->name);
+            term_out(w,d->children[i]->type==FS_DIR?"/  ":"  ");
         }
-        win_append(w,"\n");
+        term_out(w,"\n");
     }
     else if(!kstrcmp(cmd,"cd")){
         const char *dest=(argc<2)?"~":argv[1];
@@ -292,33 +397,33 @@ static void term_exec(window_t *w,char *line){
         else if(kstrcmp(dest,"..")==0) nd=term_cwd->parent?term_cwd->parent:term_cwd;
         else nd=dest[0]=='/'?vfs_resolve_path(dest):vfs_find(term_cwd,dest);
         if(nd&&nd->type==FS_DIR) term_cwd=nd;
-        else win_append(w,"cd: not found\n");
+        else term_out(w,"cd: not found\n");
     }
-    else if(!kstrcmp(cmd,"pwd")){char pp[64];term_path(term_cwd,pp);win_append(w,pp);win_append(w,"\n");}
+    else if(!kstrcmp(cmd,"pwd")){char pp[64];term_path(term_cwd,pp);term_out(w,pp);term_out(w,"\n");}
     else if(!kstrcmp(cmd,"cat")){
-        if(argc<2){win_append(w,"usage: cat <file>\n");return;}
+        if(argc<2){term_out(w,"usage: cat <file>\n");return;}
         struct fs_node *f=argv[1][0]=='/'?vfs_resolve_path(argv[1]):vfs_find(term_cwd,argv[1]);
-        if(!f){win_append(w,"cat: not found\n");return;}
-        if(f->type==FS_DIR){win_append(w,"cat: is a directory\n");return;}
+        if(!f){term_out(w,"cat: not found\n");return;}
+        if(f->type==FS_DIR){term_out(w,"cat: is a directory\n");return;}
         const char *txt=vfs_file_str(f);
-        win_append(w,txt);
-        if(f->size&&txt[f->size-1]!='\n') win_append(w,"\n");
+        term_out(w,txt);
+        if(f->size&&txt[f->size-1]!='\n') term_out(w,"\n");
     }
-    else if(!kstrcmp(cmd,"mkdir")){if(argc<2)return;struct fs_node *d=vfs_mkdir(term_cwd,argv[1]);if(!d)win_append(w,"mkdir: failed\n");}
+    else if(!kstrcmp(cmd,"mkdir")){if(argc<2)return;struct fs_node *d=vfs_mkdir(term_cwd,argv[1]);if(!d)term_out(w,"mkdir: failed\n");}
     else if(!kstrcmp(cmd,"rm")){
         if(argc<2)return;
         struct fs_node *f=argv[1][0]=='/'?vfs_resolve_path(argv[1]):vfs_find(term_cwd,argv[1]);
-        if(!f){win_append(w,"rm: not found\n");return;}
-        if(vfs_delete(f)!=0) win_append(w,"rm: failed\n");
+        if(!f){term_out(w,"rm: not found\n");return;}
+        if(vfs_delete(f)!=0) term_out(w,"rm: failed\n");
     }
     else if(!kstrcmp(cmd,"touch")){
-        if(argc<2)return; struct fs_node *f=vfs_mkfile(term_cwd,argv[1]); if(!f) win_append(w,"touch: failed\n");
+        if(argc<2)return; struct fs_node *f=vfs_mkfile(term_cwd,argv[1]); if(!f) term_out(w,"touch: failed\n");
     }
     else if(!kstrcmp(cmd,"echo")){
-        for(int i=1;i<argc;i++){win_append(w,argv[i]);if(i<argc-1)win_append(w," ");}win_append(w,"\n");
+        for(int i=1;i<argc;i++){term_out(w,argv[i]);if(i<argc-1)term_out(w," ");}term_out(w,"\n");
     }
     else if(!kstrcmp(cmd,"ps")){
-        win_append(w,"  PID  STATE    NAME\n");
+        term_out(w,"  PID  STATE    NAME\n");
         for(u32 i=0;i<MAX_TASKS;i++){
             task_t *t=task_get(i+1); if(!t||t->state==TASK_DEAD) continue;
             char line[48]; char n[8]; kstrcpy(line,"  "); kutoa(t->id,n,10); kstrcat(line,n);
@@ -327,100 +432,100 @@ static void term_exec(window_t *w,char *line){
             kstrcat(line,t->state<=TASK_DEAD?st[t->state]:"?");
             while(kstrlen(line)<16) kstrcat(line," ");
             kstrcat(line,t->name); kstrcat(line,"\n");
-            win_append(w,line);
+            term_out(w,line);
         }
     }
     else if(!kstrcmp(cmd,"carepkg")){ 
-        if(argc<2){win_append(w,"usage: carepkg <cmd> [pkg]\n");return;}
+        if(argc<2){term_out(w,"usage: carepkg <cmd> [pkg]\n");return;}
         carepkg_run(argv[1],argc>=3?argv[2]:"");
     }
-    else if(!kstrcmp(cmd,"whoami")){ win_append(w,user_current_name()); win_append(w,"\n"); }
+    else if(!kstrcmp(cmd,"whoami")){ term_out(w,user_current_name()); term_out(w,"\n"); }
     else if(!kstrcmp(cmd,"ifconfig")){
         if(net_is_up()){
             u32 ip=net_get_ip(); char b[4][5];
             kutoa((ip>>24)&0xff,b[0],10); kutoa((ip>>16)&0xff,b[1],10);
             kutoa((ip>>8)&0xff,b[2],10); kutoa(ip&0xff,b[3],10);
-            win_append(w,"eth0: "); win_append(w,b[0]); win_append(w,".");
-            win_append(w,b[1]); win_append(w,"."); win_append(w,b[2]);
-            win_append(w,"."); win_append(w,b[3]); win_append(w,"\n");
-        } else win_append(w,"eth0: down\nlo: 127.0.0.1\n");
+            term_out(w,"eth0: "); term_out(w,b[0]); term_out(w,".");
+            term_out(w,b[1]); term_out(w,"."); term_out(w,b[2]);
+            term_out(w,"."); term_out(w,b[3]); term_out(w,"\n");
+        } else term_out(w,"eth0: down\nlo: 127.0.0.1\n");
     }
-    else if(!kstrcmp(cmd,"uname"))  win_append(w,"CareOS v9.0 x86 2026\n");
+    else if(!kstrcmp(cmd,"uname"))  term_out(w,"CareOS v9.0 x86 2026\n");
     else if(!kstrcmp(cmd,"date")){
         rtc_time_t t; rtc_read(&t); char b[8];
-        kutoa(t.year,b,10); win_append(w,b); win_append(w,"-");
-        kutoa(t.month,b,10); if(t.month<10) win_append(w,"0"); win_append(w,b); win_append(w,"-");
-        kutoa(t.day,b,10); if(t.day<10) win_append(w,"0"); win_append(w,b); win_append(w," ");
-        kutoa(t.hour,b,10); if(t.hour<10) win_append(w,"0"); win_append(w,b); win_append(w,":");
-        kutoa(t.minute,b,10); if(t.minute<10) win_append(w,"0"); win_append(w,b); win_append(w,"\n");
+        kutoa(t.year,b,10); term_out(w,b); term_out(w,"-");
+        kutoa(t.month,b,10); if(t.month<10) term_out(w,"0"); term_out(w,b); term_out(w,"-");
+        kutoa(t.day,b,10); if(t.day<10) term_out(w,"0"); term_out(w,b); term_out(w," ");
+        kutoa(t.hour,b,10); if(t.hour<10) term_out(w,"0"); term_out(w,b); term_out(w,":");
+        kutoa(t.minute,b,10); if(t.minute<10) term_out(w,"0"); term_out(w,b); term_out(w,"\n");
     }
     else if(!kstrcmp(cmd,"free")){
-        char b[12]; win_append(w,"     total    used    free\nMem: ");
-        kutoa((u32)(kheap_size()/1024),b,10); win_append(w,b); win_append(w,"K  ");
-        kutoa(kmem_used()/1024,b,10); win_append(w,b); win_append(w,"K  ");
-        kutoa(kmem_free_bytes()/1024,b,10); win_append(w,b); win_append(w,"K\n");
-        win_append(w,"Peak: "); kutoa(kmem_peak()/1024,b,10); win_append(w,b);
-        win_append(w,"K  largest free block: ");
-        kutoa(kmem_largest_free()/1024,b,10); win_append(w,b); win_append(w,"K\n");
+        char b[12]; term_out(w,"     total    used    free\nMem: ");
+        kutoa((u32)(kheap_size()/1024),b,10); term_out(w,b); term_out(w,"K  ");
+        kutoa(kmem_used()/1024,b,10); term_out(w,b); term_out(w,"K  ");
+        kutoa(kmem_free_bytes()/1024,b,10); term_out(w,b); term_out(w,"K\n");
+        term_out(w,"Peak: "); kutoa(kmem_peak()/1024,b,10); term_out(w,b);
+        term_out(w,"K  largest free block: ");
+        kutoa(kmem_largest_free()/1024,b,10); term_out(w,b); term_out(w,"K\n");
     }
     else if(!kstrcmp(cmd,"res")){
-        char b[512]; res_status_text(b,sizeof(b)); win_append(w,b);
+        char b[512]; res_status_text(b,sizeof(b)); term_out(w,b);
     }
     else if(!kstrcmp(cmd,"uptime")){
         u32 sec = timer_ms() / 1000;
         char b[12];
-        win_append(w,"Uptime: "); kutoa(sec,b,10); win_append(w,b); win_append(w," seconds\n");
+        term_out(w,"Uptime: "); kutoa(sec,b,10); term_out(w,b); term_out(w," seconds\n");
     }
     else if(!kstrcmp(cmd,"sysinfo")){
         if(argc>1 && !kstrcmp(argv[1],"--version")){
-            win_append(w,"CareOS v9.0 x86 2026\n");
+            term_out(w,"CareOS v9.0 x86 2026\n");
         } else if(argc>1 && !kstrcmp(argv[1],"--cpu")){
-            win_append(w,"CPU: Generic x86\n");
+            term_out(w,"CPU: Generic x86\n");
         } else if(argc>1 && !kstrcmp(argv[1],"--mem")){
-            char b[12]; win_append(w,"Memory Free: ");
-            kutoa(kmem_free_bytes()/1024,b,10); win_append(w,b); win_append(w,"K\n");
+            char b[12]; term_out(w,"Memory Free: ");
+            kutoa(kmem_free_bytes()/1024,b,10); term_out(w,b); term_out(w,"K\n");
         } else {
-            win_append(w,"usage: sysinfo [--version|--cpu|--mem]\n");
+            term_out(w,"usage: sysinfo [--version|--cpu|--mem]\n");
         }
     }
     else if(!kstrcmp(cmd,"network")){
         if(argc>1 && !kstrcmp(argv[1],"--status")){
-            win_append(w,net_is_up()?"Network is UP\n":"Network is DOWN\n");
+            term_out(w,net_is_up()?"Network is UP\n":"Network is DOWN\n");
         } else if(argc>1 && !kstrcmp(argv[1],"--ip")){
             if(net_is_up()){
                 char ip[24]; term_ip_to_str(net_get_ip(),ip);
-                win_append(w,"IP: "); win_append(w,ip); win_append(w,"\n");
+                term_out(w,"IP: "); term_out(w,ip); term_out(w,"\n");
             } else {
-                win_append(w,"Not connected.\n");
+                term_out(w,"Not connected.\n");
             }
         } else {
-            win_append(w,"usage: network [--status|--ip]\n");
+            term_out(w,"usage: network [--status|--ip]\n");
         }
     }
     else if(!kstrcmp(cmd,"dmesg")){
         if(argc>1 && !kstrcmp(argv[1],"clear")){
             serial_log_clear();
-            win_append(w,"dmesg: cleared\n");
+            term_out(w,"dmesg: cleared\n");
             return;
         }
         char logbuf[1024];
         serial_log_tail(logbuf,sizeof(logbuf));
-        if(logbuf[0]){ win_append(w,logbuf); if(logbuf[kstrlen(logbuf)-1] != '\n') win_append(w,"\n"); }
-        else win_append(w,"(no logs)\n");
+        if(logbuf[0]){ term_out(w,logbuf); if(logbuf[kstrlen(logbuf)-1] != '\n') term_out(w,"\n"); }
+        else term_out(w,"(no logs)\n");
     }
     else if(!kstrcmp(cmd,"settings")){
         const careos_settings_t *cfg=settings_get();
         if(argc<2 || !kstrcmp(argv[1],"show")){
             char n[12];
-            win_append(w,"theme="); kutoa(cfg->theme,n,10); win_append(w,n);
-            win_append(w," mouse="); kutoa(cfg->mouse_sensitivity,n,10); win_append(w,n); win_append(w,"%\n");
-            win_append(w,"boot_fast="); win_append(w,cfg->boot_fast?"1":"0");
-            win_append(w," clock24="); win_append(w,cfg->clock_24h?"1":"0");
-            win_append(w," wallpaper="); kutoa(cfg->wallpaper,n,10); win_append(w,n); win_append(w,"\n");
+            term_out(w,"theme="); kutoa(cfg->theme,n,10); term_out(w,n);
+            term_out(w," mouse="); kutoa(cfg->mouse_sensitivity,n,10); term_out(w,n); term_out(w,"%\n");
+            term_out(w,"boot_fast="); term_out(w,cfg->boot_fast?"1":"0");
+            term_out(w," clock24="); term_out(w,cfg->clock_24h?"1":"0");
+            term_out(w," wallpaper="); kutoa(cfg->wallpaper,n,10); term_out(w,n); term_out(w,"\n");
             return;
         }
         if(!kstrcmp(argv[1],"set")){
-            if(argc<4){ win_append(w,"usage: settings set <theme|mouse|boot_fast|clock24|wallpaper|dns> <value>\n"); return; }
+            if(argc<4){ term_out(w,"usage: settings set <theme|mouse|boot_fast|clock24|wallpaper|dns> <value>\n"); return; }
             if(!kstrcmp(argv[2],"theme")) settings_set_theme((u32)katoi(argv[3]));
             else if(!kstrcmp(argv[2],"mouse")) settings_set_mouse_sensitivity((u32)katoi(argv[3]));
             else if(!kstrcmp(argv[2],"boot_fast")) settings_set_boot_fast(!kstrcmp(argv[3],"1")||!kstrcmp(argv[3],"on")||!kstrcmp(argv[3],"true"));
@@ -428,110 +533,111 @@ static void term_exec(window_t *w,char *line){
             else if(!kstrcmp(argv[2],"wallpaper")) settings_set_wallpaper((u32)katoi(argv[3]));
             else if(!kstrcmp(argv[2],"dns")){
                 u32 dns=0;
-                if(term_parse_ipv4(argv[3],&dns)!=0){ win_append(w,"settings: invalid IPv4\n"); return; }
+                if(term_parse_ipv4(argv[3],&dns)!=0){ term_out(w,"settings: invalid IPv4\n"); return; }
                 net_set_dns_server(dns);
-            } else { win_append(w,"settings: unknown key\n"); return; }
-            win_append(w,"settings saved\n");
+            } else { term_out(w,"settings: unknown key\n"); return; }
+            term_out(w,"settings saved\n");
             return;
         }
-        win_append(w,"usage: settings [show|set]\n");
+        term_out(w,"usage: settings [show|set]\n");
     }
     else if(!kstrcmp(cmd,"wifi")){
-        if(argc<2){ win_append(w,"usage: wifi <scan|status|connect|disconnect>\n"); return; }
+        if(argc<2){ term_out(w,"usage: wifi <scan|status|connect|disconnect>\n"); return; }
         if(!kstrcmp(argv[1],"scan")){
-            win_append(w,"CareHome-5G  WPA2  92%\nOfficeMesh  WPA2  81%\nCoffeeShopGuest  Open 58%\n");
+            term_out(w,"CareHome-5G  WPA2  92%\nOfficeMesh  WPA2  81%\nCoffeeShopGuest  Open 58%\n");
             return;
         }
         if(!kstrcmp(argv[1],"status")){
             const careos_settings_t *cfg=settings_get();
-            win_append(w,"wifi: "); win_append(w,cfg->wifi_connected?"connected":"disconnected");
-            if(cfg->wifi_ssid[0]){ win_append(w," ssid="); win_append(w,cfg->wifi_ssid); }
-            win_append(w,"\n");
+            term_out(w,"wifi: "); term_out(w,cfg->wifi_connected?"connected":"disconnected");
+            if(cfg->wifi_ssid[0]){ term_out(w," ssid="); term_out(w,cfg->wifi_ssid); }
+            term_out(w,"\n");
             if(net_is_up()){
                 char ip[24]; term_ip_to_str(net_get_ip(),ip);
-                win_append(w,"ip: "); win_append(w,ip); win_append(w,"\n");
+                term_out(w,"ip: "); term_out(w,ip); term_out(w,"\n");
             }
             return;
         }
         if(!kstrcmp(argv[1],"connect")){
-            if(argc<3){ win_append(w,"usage: wifi connect <ssid> [password]\n"); return; }
+            if(argc<3){ term_out(w,"usage: wifi connect <ssid> [password]\n"); return; }
             const char *pw=(argc>=4)?argv[3]:"";
             settings_set_wifi_profile(argv[2],pw,true);
-            if(net_dhcp_renew()==0){ win_append(w,"wifi connected\n"); }
-            else win_append(w,"wifi profile saved; no link now\n");
+            if(net_dhcp_renew()==0){ term_out(w,"wifi connected\n"); }
+            else term_out(w,"wifi profile saved; no link now\n");
             return;
         }
         if(!kstrcmp(argv[1],"disconnect")){
             settings_set_wifi_profile("","",false);
             net_set_ip((127u<<24)|(0u<<16)|(0u<<8)|1u,(255u<<24)|(0u<<16)|(0u<<8)|0u,0);
             net_set_dns_server(0);
-            win_append(w,"wifi disconnected\n");
+            term_out(w,"wifi disconnected\n");
             return;
         }
-        win_append(w,"wifi: unknown action\n");
+        term_out(w,"wifi: unknown action\n");
     }
     else if(!kstrcmp(cmd,"care")){
-        if(argc<2){win_append(w,"usage: care <file.cl>\n");return;}
+        if(argc<2){term_out(w,"usage: care <file.cl>\n");return;}
         struct fs_node *f=argv[1][0]=='/'?vfs_resolve_path(argv[1]):vfs_find(term_cwd,argv[1]);
-        if(!f||f->type!=FS_FILE){win_append(w,"care: file not found\n");return;}
+        if(!f||f->type!=FS_FILE){term_out(w,"care: file not found\n");return;}
         char outbuf[2048];
         if(care_lang_exec_buf(vfs_file_str(f),f->size,outbuf,sizeof(outbuf))!=0)
-            win_append(w,"care: script error\n");
-        else if(outbuf[0]) win_append(w,outbuf);
+            term_out(w,"care: script error\n");
+        else if(outbuf[0]) term_out(w,outbuf);
     }
     else if(!kstrcmp(cmd,"help")){
-        win_append(w,"Available commands:\n");
-        win_append(w,"- ls, cd, pwd, cat, mkdir, rm, touch\n");
-        win_append(w,"- echo, ps, whoami, clear, help\n");
-        win_append(w,"- theme [list|<name>|<n>]  color theme (Ctrl+T cycles)\n");
-        win_append(w,"- opacity <0-100>  set window transparency\n");
-        win_append(w,"- ifconfig, ping, curl, wifi\n");
-        win_append(w,"- uname, date, free, uptime\n");
-        win_append(w,"- carepkg, dmesg, settings\n");
-        win_append(w,"- sysinfo (--version, --cpu, --mem)\n");
-        win_append(w,"- res   icon theme, wallpaper and image cache status\n");
-        win_append(w,"- network (--status, --ip)\n");
-        win_append(w,"- care <file.cl>  run a Care language script\n");
+        term_out(w,"Available commands:\n");
+        term_out(w,"- ls, cd, pwd, cat, mkdir, rm, touch\n");
+        term_out(w,"- echo, ps, whoami, clear, help\n");
+        term_out(w,"- theme [list|<name>|<n>]  color theme (Ctrl+T cycles)\n");
+        term_out(w,"- opacity <0-100>  set window transparency\n");
+        term_out(w,"- ifconfig, ping, curl, wifi\n");
+        term_out(w,"- uname, date, free, uptime\n");
+        term_out(w,"- carepkg, dmesg, settings\n");
+        term_out(w,"- sysinfo (--version, --cpu, --mem)\n");
+        term_out(w,"- res   icon theme, wallpaper and image cache status\n");
+        term_out(w,"- network (--status, --ip)\n");
+        term_out(w,"- care <file.cl>  run a Care language script\n");
     }
     else if(!kstrcmp(cmd,"ping")){
-        if(argc<2){win_append(w,"usage: ping <host>\n");return;}
-        win_append(w,"PING "); win_append(w,argv[1]); win_append(w,"\n");
+        if(argc<2){term_out(w,"usage: ping <host>\n");return;}
+        term_out(w,"PING "); term_out(w,argv[1]); term_out(w,"\n");
         for(int i=0;i<3;i++){
             icmp_ping(net_get_ip(),i); timer_wait(200);
-            win_append(w,"64 bytes: icmp_seq="); char n[4]; kutoa((u32)i,n,10);
-            win_append(w,n); win_append(w," time=~1ms\n");
+            term_out(w,"64 bytes: icmp_seq="); char n[4]; kutoa((u32)i,n,10);
+            term_out(w,n); term_out(w," time=~1ms\n");
         }
     }
     else if(!kstrcmp(cmd,"curl")){
-        if(argc<2){win_append(w,"usage: curl <url>\n");return;}
-        win_append(w,"Fetching...\n");
+        if(argc<2){term_out(w,"usage: curl <url>\n");return;}
+        term_out(w,"Fetching...\n");
         char resp[1024]; int n=http_get("example.com",80,"/",resp,sizeof(resp));
-        if(n>0){win_append(w,resp);}else win_append(w,"Failed.\n");
+        if(n>0){term_out(w,resp);}else term_out(w,"Failed.\n");
     }
     else if(!kstrcmp(cmd,"perf")){
         if(argc >= 2 && !kstrcmp(argv[1], "on")) {
             perf_hud_set(true);
-            win_append(w, "perf HUD on (Ctrl+Alt+P toggles)\n");
+            term_out(w, "perf HUD on (Ctrl+Alt+P toggles)\n");
         } else if(argc >= 2 && !kstrcmp(argv[1], "off")) {
             perf_hud_set(false);
-            win_append(w, "perf HUD off\n");
+            term_out(w, "perf HUD off\n");
         } else if(argc >= 2 && !kstrcmp(argv[1], "bench")) {
-            win_append(w, "running 10 s benchmark... result in notification and on serial\n");
+            term_out(w, "running 10 s benchmark... result in notification and on serial\n");
             perf_bench_start(argc >= 3 ? argv[2] : NULL);
         } else {
-            win_append(w, "usage: perf on|off|bench [url]\n");
+            term_out(w, "usage: perf on|off|bench [url]\n");
         }
     }
     else {
-        win_append(w,cmd); win_append(w,": command not found\n");
+        term_out(w,cmd); term_out(w,": command not found\n");
     }
 }
 
 void app_terminal_init(window_t *w){
     win_clear(w); term_cwd=term_default_home();
+    term_invalidate(w);
     w->cursor_pos=0; s_hist_idx=s_hist_count;
-    win_append(w,"CareOS v9 Terminal\nType 'help' for commands.\n");
-    win_append(w,"Tip: 'theme list' or Ctrl+T to change color theme.\n");
+    term_out(w,"CareOS v9 Terminal\nType 'help' for commands.\n");
+    term_out(w,"Tip: 'theme list' or Ctrl+T to change color theme.\n");
     term_prompt(w);
 }
 void app_terminal_draw(window_t *w){
@@ -546,48 +652,49 @@ void app_terminal_draw(window_t *w){
     }
 
     i32 sc = (i32)GFX_FONT_SCALE;
-    i32 lh = FONT_H * sc + 3;
-    i32 input_h = lh + 16;
+    term_metrics_t m = term_metrics(w);
+    i32 input_h = m.input_h;
     i32 text_h  = cr.h - input_h;
 
-    /* ---- Scrollable output ---- */
-    {
-        /* Count total lines */
-        u32 total = 1;
-        for(u32 i=0;i<w->text_len;i++) if(w->text_buf[i]=='\n') total++;
-        u32 vis = (u32)text_h / (u32)lh;
-        
-        /* Clamp scroll if it goes out of bounds */
-        if (w->scroll > total) w->scroll = total;
-        if (total > vis && w->scroll > total - vis) w->scroll = total - vis;
+    /* ---- Scrollable, wrapped output ---- */
+    term_state_t *st = term_st(w);
+    if (st) {
+        term_relayout(w, st, m.text_w);
+        u32 total = st->n ? st->n : 1;
+        u32 max_scroll = total > m.vis ? total - m.vis : 0;
+        if (st->follow || w->scroll > max_scroll) w->scroll = max_scroll;
+        if (w->scroll == max_scroll) st->follow = true;
 
-        /* Find start */
-        u32 line = 0;
-        const char *p = w->text_buf;
-        while (line < w->scroll && *p) { if(*p=='\n') line++; p++; }
+        /* Prompt lines start "<user>@careos:" -- colour them for any user. */
+        char pfx[64]; kstrncpy(pfx, user_current_name(), 40); pfx[40] = '\0';
+        kstrcat(pfx, "@careos:");
+        u32 pfx_len = (u32)kstrlen(pfx);
 
-        /* Draw each visible line with theme prompt/text colouring */
-        i32 y = cr.y + 6;
-        u32 drawn = 0;
         gfx_set_clip(cr.x, cr.y, cr.w, text_h);
-        while (*p && drawn < vis) {
-            const char *end = p;
-            while (*end && *end != '\n') end++;
-            u32 len = (u32)(end - p);
-            char tmp[160]; if(len>159) len=159;
-            kmemcpy(tmp, p, len); tmp[len]='\0';
-
-            /* Prompt vs regular text color from active theme */
+        i32 y = cr.y + 6;
+        for (u32 li = w->scroll; li < st->n && li < w->scroll + m.vis; li++) {
+            const term_vline_t *vl = &st->lines[li];
+            char tmp[1024];
+            u32 len = vl->len < sizeof(tmp) - 1 ? vl->len : (u32)sizeof(tmp) - 1;
+            kmemcpy(tmp, w->text_buf + vl->off, len); tmp[len] = '\0';
+            bool line_start = (vl->off == 0) || (w->text_buf[vl->off - 1] == '\n');
             u32 col = cur_theme->text;
-            if (tmp[0] && (kstrncmp(tmp, "user@", 5) == 0 || kstrncmp(tmp, "root@", 5) == 0 || kstrncmp(tmp, "CareOS", 6) == 0 || tmp[0] == '$'))
+            if (line_start && ((len >= pfx_len && !kstrncmp(tmp, pfx, pfx_len)) ||
+                               !kstrncmp(tmp, "CareOS", 6) || tmp[0] == '$'))
                 col = cur_theme->prompt;
-
-            gfx_str_clipped(cr.x + 12, y, cr.w - 20, tmp, col, COL_TRANSPARENT);
-            y += lh;
-            drawn++;
-            if(*end=='\n') p=end+1; else break;
+            gfx_str(m.text_x, y, tmp, col, COL_TRANSPARENT);
+            y += m.lh;
         }
         gfx_clear_clip();
+
+        /* Scrollbar, only when there is something to scroll. */
+        if (total > m.vis) {
+            i32 sb_h = m.text_h;
+            i32 th = sb_h * (i32)m.vis / (i32)total; if (th < 20) th = 20;
+            i32 ty2 = cr.y + 6 + (i32)((i64)(sb_h - th) * (i64)w->scroll /
+                                       (i64)(max_scroll ? max_scroll : 1));
+            gfx_rect_rounded(cr.x + cr.w - 9, ty2, 4, th, 2, cur_theme->dim);
+        }
     }
 
     /* ---- Input bar ---- */
@@ -606,23 +713,30 @@ void app_terminal_draw(window_t *w){
     i32 input_x = cr.x + 12 + (FONT_W + 2) * sc;
 
     /* Theme indicator: active theme name + accent swatch on the right of the
-     * input bar. The terminal has no click hook (wm dispatches only draw/key),
-     * so this is a visible affordance rather than a button; Ctrl+T and the
-     * 'theme' command change the selection. */
+     * input bar (Ctrl+T and the 'theme' command change it). */
     i32 sw   = FONT_H * sc;
     i32 sw_x = cr.x + cr.w - 12 - sw;
     i32 sw_y = iy + (input_h - sw) / 2;
-    i32 name_w = (i32)kstrlen(cur_theme->name) * FONT_W * sc;
+    i32 name_w = gfx_str_width(cur_theme->name);
     i32 name_x = sw_x - 8 - name_w;
     i32 input_max_w = cr.w - 28;
-    if(name_x > input_x + 40){ /* only when the bar is wide enough */
+    if(name_x > input_x + 120){ /* only when the bar is wide enough */
         gfx_str(name_x, ty, cur_theme->name, cur_theme->dim, COL_TRANSPARENT);
         gfx_rect_rounded(sw_x, sw_y, sw, sw, 3, cur_theme->prompt);
         gfx_rect_rounded_outline(sw_x, sw_y, sw, sw, 3, cur_theme->border);
         input_max_w = (name_x - 8) - input_x;
-        if(input_max_w < 20) input_max_w = 20;
     }
-    gfx_str_clipped(input_x, ty, input_max_w, w->input_buf, cur_theme->text, COL_TRANSPARENT);
+    if(input_max_w < 20) input_max_w = 20;
+
+    /* Keep the cursor visible: scroll the input horizontally when it is
+     * longer than the bar. */
+    u32 cp = w->cursor_pos > w->input_len ? w->input_len : w->cursor_pos;
+    u32 first = 0;
+    while (first < cp && gfx_str_width_n(w->input_buf + first, cp - first, TERM_FONT) > input_max_w - 8)
+        first++;
+    gfx_set_clip(input_x, iy + 1, input_max_w, input_h - 1);
+    gfx_str(input_x, ty, w->input_buf + first, cur_theme->text, COL_TRANSPARENT);
+    gfx_clear_clip();
 
     /* Animated blinking cursor */
     u32 phase = (timer_ms() / 10) % 50; /* 500ms cycle */
@@ -632,18 +746,8 @@ void app_terminal_draw(window_t *w){
     } else {
         cursor_alpha = (u8)(50 + ((50 - phase) * 205) / 25);
     }
-
-    /* Cursor sits after the first cursor_pos chars; measure that prefix with
-     * the real font so it lines up with proportional glyphs too. */
-    char pre[256];
-    u32 cp = w->cursor_pos > w->input_len ? w->input_len : w->cursor_pos;
-    kmemcpy(pre, w->input_buf, cp); pre[cp] = '\0';
-    i32 cx = input_x + gfx_str_width(pre);
-    i32 cursor_w = 2 * sc;
-    i32 cursor_h = input_h - 8;
-    i32 cursor_y = iy + 4;
-
-    gfx_rect_blend(cx, cursor_y, cursor_w, cursor_h, cur_theme->cursor, cursor_alpha);
+    i32 cx = input_x + gfx_str_width_n(w->input_buf + first, cp - first, TERM_FONT);
+    gfx_rect_blend(cx, iy + 4, 2 * sc, input_h - 8, cur_theme->cursor, cursor_alpha);
 }
 void app_terminal_key(window_t *w,char c){
     if(w->cursor_pos>w->input_len) w->cursor_pos=w->input_len;
@@ -668,27 +772,28 @@ void app_terminal_key(window_t *w,char c){
     if(k==KEY_NAV_HOME){ w->cursor_pos=0; return; }
     if(k==KEY_NAV_END){ w->cursor_pos=w->input_len; return; }
     if(k==KEY_NAV_DELETE){ term_erase_at(w,w->cursor_pos); return; }
+    if(k==KEY_NAV_PGUP || k==KEY_NAV_PGDN){
+        term_metrics_t m = term_metrics(w);
+        i32 step = (i32)m.vis - 1; if (step < 1) step = 1;
+        app_terminal_scroll(w, k==KEY_NAV_PGUP ? step : -step);
+        return;
+    }
 
     if(c=='\n'){
-        win_append(w,w->input_buf); win_append(w,"\n");
+        term_out(w,w->input_buf); term_out(w,"\n");
         term_hist_push(w->input_buf);
         s_hist_idx=s_hist_count; s_hist_draft[0]='\0';
         term_exec(w,w->input_buf);
         w->input_len=0; w->input_buf[0]='\0'; w->cursor_pos=0;
         term_prompt(w);
-        /* Auto-scroll to bottom */
-        i32 sc2 = (i32)GFX_FONT_SCALE;
-        u32 lh = (u32)(FONT_H * sc2) + 2;
-        u32 total = 1;
-        for(u32 i=0;i<w->text_len;i++) if(w->text_buf[i]=='\n') total++;
-        rect_t cr=wm_client_rect(w);
-        i32 input_h2 = FONT_H * sc2 + 16;
-        u32 vis=(u32)(cr.h - input_h2)/lh;
-        w->scroll=(total>vis)?total-vis:0;
+        /* Running a command jumps back to the newest output. */
+        { term_state_t *st = term_st(w); if (st) st->follow = true; }
     } else if(c=='\b'){
         if(w->cursor_pos>0){ w->cursor_pos--; term_erase_at(w,w->cursor_pos); }
     } else if(c==0x0C){ /* Ctrl+L: Clear */
         win_clear(w);
+        term_invalidate(w);
+        { term_state_t *st = term_st(w); if (st) st->follow = true; }
         term_prompt(w);
     } else if(c==0x14){ /* Ctrl+T: cycle terminal color theme */
         g_term_theme_idx = (g_term_theme_idx + 1) % TERM_THEME_COUNT;
@@ -699,8 +804,12 @@ void app_terminal_key(window_t *w,char c){
             kstrncpy(g_clipboard, w->input_buf, CLIPBOARD_SIZE-1);
             g_clipboard_len = w->input_len;
         } else {
-            kstrncpy(g_clipboard, w->text_buf, CLIPBOARD_SIZE-1);
-            g_clipboard_len = w->text_len;
+            /* The scrollback can be far larger than the clipboard: copy its
+             * newest part, and never report more than was copied. */
+            u32 n = w->text_len < CLIPBOARD_SIZE - 1 ? w->text_len : CLIPBOARD_SIZE - 1;
+            kmemcpy(g_clipboard, w->text_buf + (w->text_len - n), n);
+            g_clipboard[n] = '\0';
+            g_clipboard_len = n;
         }
         notify_push("Clipboard", "Copied terminal text", COL_ACCENT);
     } else if(c==0x16){ /* Ctrl+V: Paste */

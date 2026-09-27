@@ -221,6 +221,8 @@ char gui_read_key(void) {
     case 'D': return (char)KEY_NAV_LEFT;
     case 'H': return (char)KEY_NAV_HOME;
     case 'F': return (char)KEY_NAV_END;
+    case '5': if (keyboard_peekchar() == '~') keyboard_getchar(); return (char)KEY_NAV_PGUP;
+    case '6': if (keyboard_peekchar() == '~') keyboard_getchar(); return (char)KEY_NAV_PGDN;
     default:  return 0;                               /* unknown: drop */
     }
 }
