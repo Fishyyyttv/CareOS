@@ -419,7 +419,8 @@ HT_SRC_shadow := gui/shadow.c
 HT_SRC_heap := kernel/heap.c
 HT_SRC_textbuf := gui/textbuf.c
 HT_SRC_mb2mmap := kernel/mb2mmap.c
-HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap
+HT_SRC_term_layout := apps/term_layout.c
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
