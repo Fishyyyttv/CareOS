@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "gui.h"
 #include "font.h"
+#include "blit.h"
 #define GFX_TRANSPARENT 0xFFFFFFFF  /* internal skip-pixel sentinel */
 
 u32  SCREEN_W     = 1920;
@@ -74,45 +75,62 @@ void gfx_dirty(i32 x, i32 y, i32 w, i32 h) {
     dirty_rects[dirty_count++] = (dirty_rect_t){x, y, w, h};
 }
 
-#ifdef __SSE2__
-#include <immintrin.h>
-static void gfx_flip_sse2(void) {
-    if (dirty_full || dirty_count == 0) {
-        __m128i *src = (__m128i*)BACKBUFFER;
-        __m128i *dst = (__m128i*)FRAMEBUFFER;
-        size_t n = (SCREEN_W * SCREEN_H * 4) / 16;
-        for (size_t i = 0; i < n; i++) _mm_storeu_si128(dst + i, _mm_loadu_si128(src + i));
-    } else {
-        for (u32 i = 0; i < dirty_count; i++) {
-            dirty_rect_t *d = &dirty_rects[i];
-            for (i32 y = d->y; y < d->y + d->h; y++) {
-                __m128i *src = (__m128i*)&BACKBUFFER[y * SCREEN_W + d->x];
-                __m128i *dst = (__m128i*)&FRAMEBUFFER[y * SCREEN_W + d->x];
-                i32 nw = d->w / 4;
-                for (i32 x = 0; x < nw; x++) _mm_storeu_si128(dst + x, _mm_loadu_si128(src + x));
-            }
-        }
-    }
-}
-#endif
-
+/* Present the backbuffer. Rows go through blit_copy_rows, which honours the
+ * framebuffer's real pitch (padded modes used to skew), 24 bpp, and non-RGB
+ * channel order; the native 32 bpp RGB case is still one memcpy per row.
+ * (The old __SSE2__ path was dead under -mno-sse2 and dropped up to three
+ * pixels at the right edge of every dirty rect.) */
 void gfx_flip(void) {
-    if (!FRAMEBUFFER || !BACKBUFFER) return;
-#ifdef __SSE2__
-    gfx_flip_sse2();
-#else
+    if (!FRAMEBUFFER || !BACKBUFFER || gfx_direct_mode) { dirty_reset(); return; }
+    u8 *fb = (u8 *)FRAMEBUFFER;
     if (dirty_full || dirty_count == 0) {
-        kmemcpy(FRAMEBUFFER, BACKBUFFER, SCREEN_W * SCREEN_H * 4);
+        blit_copy_rows(fb, SCREEN_PITCH, FB_BPP, BACKBUFFER, SCREEN_W,
+                       0, 0, (i32)SCREEN_W, (i32)SCREEN_H, FB_R_SHIFT, FB_G_SHIFT, FB_B_SHIFT);
     } else {
         for (u32 i = 0; i < dirty_count; i++) {
             dirty_rect_t *d = &dirty_rects[i];
-            for (i32 y = d->y; y < d->y + d->h; y++) {
-                kmemcpy(&FRAMEBUFFER[y * SCREEN_W + d->x], &BACKBUFFER[y * SCREEN_W + d->x], d->w * 4);
-            }
+            blit_copy_rows(fb, SCREEN_PITCH, FB_BPP, BACKBUFFER, SCREEN_W,
+                           d->x, d->y, d->w, d->h, FB_R_SHIFT, FB_G_SHIFT, FB_B_SHIFT);
         }
     }
-#endif
     dirty_reset();
+}
+
+/* Copy an ARGB image into the current target at (dx,dy), clipped to the
+ * given rect, the active gfx clip, and the target. One memcpy per row. */
+void gfx_blit_argb(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh,
+                   i32 cx, i32 cy, i32 cw, i32 ch) {
+    if (!g_target || !g_target->pixels || !src) return;
+    if (clip_active) {
+        blit_box_t c;
+        if (!blit_clip(cx, cy, cw, ch, clip_x, clip_y, clip_w, clip_h,
+                       (i32)g_target->w, (i32)g_target->h, &c)) return;
+        cx = c.x0; cy = c.y0; cw = c.x1 - c.x0; ch = c.y1 - c.y0;
+    }
+    blit_box_t b;
+    if (!blit_clip(dx, dy, sw, sh, cx, cy, cw, ch,
+                   (i32)g_target->w, (i32)g_target->h, &b)) return;
+    u32 st = g_target->pitch / 4u;
+    for (i32 y = b.y0; y < b.y1; y++)
+        kmemcpy(&g_target->pixels[(u64)(u32)y * st + (u32)b.x0],
+                &src[(u64)(u32)(y - dy) * (u32)sw + (u32)(b.x0 - dx)],
+                (size_t)(b.x1 - b.x0) * 4u);
+    gfx_dirty(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+}
+
+/* Copy the target's pixels in (x,y,w,h) into dst (w*h, row-major);
+ * pixels outside the target come back as 0. */
+void gfx_snapshot_rect(i32 x, i32 y, i32 w, i32 h, u32 *dst) {
+    if (!dst || w <= 0 || h <= 0) return;
+    kmemset(dst, 0, (size_t)w * (size_t)h * 4u);
+    if (!g_target || !g_target->pixels) return;
+    blit_box_t b;
+    if (!blit_clip(x, y, w, h, x, y, w, h, (i32)g_target->w, (i32)g_target->h, &b)) return;
+    u32 st = g_target->pitch / 4u;
+    for (i32 r = b.y0; r < b.y1; r++)
+        kmemcpy(&dst[(u64)(u32)(r - y) * (u32)w + (u32)(b.x0 - x)],
+                &g_target->pixels[(u64)(u32)r * st + (u32)b.x0],
+                (size_t)(b.x1 - b.x0) * 4u);
 }
 
 /* -- Wallpaper cache ------------------------------------------------------

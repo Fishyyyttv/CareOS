@@ -143,6 +143,7 @@ C_SRC     := kernel/kernel.c       \
              net/tls.c             \
              shell/shell.c         \
              gui/gfx.c             \
+             gui/blit.c            \
              gui/perf_stats.c      \
              gui/perf.c            \
              gui/image.c           \
@@ -406,7 +407,8 @@ HT_SRC_qoi    := gui/image_qoi.c
 HT_SRC_perf_stats := gui/perf_stats.c
 HT_SRC_calc_engine := apps/calc_engine.c
 HT_SRC_keychord :=
-HOST_TESTS    := qoi perf_stats calc_engine keychord
+HT_SRC_blit := gui/blit.c
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h

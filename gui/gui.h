@@ -684,6 +684,11 @@ void layout_hbox(widget_t *parent, i32 padding, i32 gap);
 void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gfx_set_target(gfx_buffer_t *target);
 void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy);
+/* Row-copy an ARGB image into the target, clipped to (clip_*) and the gfx clip. */
+void gfx_blit_argb(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh,
+                   i32 clip_x, i32 clip_y, i32 clip_w, i32 clip_h);
+/* Copy target pixels (x,y,w,h) into dst; off-target pixels become 0. */
+void gfx_snapshot_rect(i32 x, i32 y, i32 w, i32 h, u32 *dst);
 void gui_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gui_run(void);
 
