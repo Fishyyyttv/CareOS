@@ -389,6 +389,7 @@ pde_t *paging_create_dir(void);
 int    paging_map(pde_t *dir, u64 virt, u64 phys, u32 flags);
 void   paging_map_mmio(u32 phys_start, u32 size);
 void   paging_map_framebuffer(u32 phys_start, u32 size);
+void   pmm_apply_map(u64 mbi_addr);   /* after paging_init: honour the MB2 memory map */
 void   paging_switch_dir(pde_t *dir);
 void   paging_switch_kernel(void);
 void   paging_free_dir(pde_t *dir);

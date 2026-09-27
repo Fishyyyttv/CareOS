@@ -3,6 +3,7 @@
  * x86_64 four-level paging: PML4, PDPT, PD, PT
  * ============================================================================= */
 #include "kernel.h"
+#include "mb2mmap.h"
 
 /* ── Physical frame allocator ──────────────────────────────────────────────── */
 #define PHYS_MEM_BYTES  (4096UL * 1024 * 1024)
@@ -18,6 +19,47 @@ static void frame_set(u32 frame) {
 
 static void frame_clear(u32 frame) {
     phys_bitmap[frame / 32] &= ~(1u << (frame % 32));
+}
+
+/* Withdraw every free frame the firmware memory map says is not RAM, plus the
+ * multiboot info block itself. paging_init() assumes a 4 GiB machine; on a
+ * 1 GiB VM it used to hand out ~3.5 GiB of frames that do not exist or that
+ * sit on the PCI hole (framebuffer, NIC registers). Call once, right after
+ * paging_init() and before anything allocates a frame. */
+void pmm_apply_map(u64 mbi_addr) {
+    static mb2_range_t usable[32];
+    mb2_range_t resv[1];
+    u32 nu = 0, nr = 0;
+    if (mbi_addr) {
+        const u8 *mbi = (const u8 *)(uintptr_t)mbi_addr;
+        u32 total = *(const u32 *)mbi;
+        if (total >= 16 && total <= 0x10000u) {           /* sane MBI sizes only */
+            nu = mb2_usable_ranges(mbi, total, usable, 32);
+            resv[0].base = mbi_addr; resv[0].end = mbi_addr + total; nr = 1;
+        }
+    }
+    if (nu == 0) {
+        /* No usable map (GRUB always provides one): keep the old assumption
+         * but never hand out the conventional PCI hole, where device BARs
+         * and the framebuffer live. */
+        usable[0].base = 0; usable[0].end = 0xC0000000ULL; nu = 1;
+        serial_write("[pmm] WARN: no valid memory map; excluding 3-4 GiB PCI hole\n");
+    }
+    u32 withdrawn = 0, usable_mib = 0;
+    for (u32 i = 0; i < nu; i++) usable_mib += (u32)((usable[i].end - usable[i].base) >> 20);
+    for (u32 f = 0; f < FRAME_COUNT; f++) {
+        if (phys_bitmap[f / 32] & (1u << (f % 32))) continue;          /* already used */
+        if (pmm_frame_ok(usable, nu, resv, nr, (u64)f * PAGE_SIZE, PAGE_SIZE)) continue;
+        frame_set(f); phys_free_frames--; withdrawn++;
+    }
+    char b[16];
+    serial_write("[pmm] memory map: ");
+    kutoa(usable_mib, b, 10); serial_write(b);
+    serial_write(" MiB RAM, withdrew ");
+    kutoa(withdrawn / 256u, b, 10); serial_write(b);
+    serial_write(" MiB, ");
+    kutoa(phys_free_frames / 256u, b, 10); serial_write(b);
+    serial_write(" MiB free\n");
 }
 
 /* phys_bitmap/phys_free_frames are shared, unlocked global state. This

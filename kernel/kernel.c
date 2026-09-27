@@ -226,6 +226,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
         }
     }
     paging_init();       slog_ok("Paging");
+    pmm_apply_map(mbi_addr);
     syscall_init();      slog_ok("Syscalls");
 
     /* Stage 3: devices, persistence, userland services */

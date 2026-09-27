@@ -115,6 +115,7 @@ C_SRC     := kernel/kernel.c       \
              kernel/memory.c       \
              kernel/heap.c         \
              kernel/paging.c       \
+             kernel/mb2mmap.c      \
              kernel/vfs.c          \
              kernel/scheduler.c    \
              kernel/syscall.c      \
@@ -404,7 +405,7 @@ test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_
 # adding HT_SRC_<name> := <sources under test> and appending <name> to
 # HOST_TESTS; the test file is tests/host/test_<name>.c.
 HOST_TEST_DIR := build/host
-HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -DHOST_TEST \
+HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -Ikernel -DHOST_TEST \
                  -fsanitize=address,undefined -fno-sanitize-recover=undefined \
                  -fno-omit-frame-pointer
 HT_SRC_qoi    := gui/image_qoi.c
@@ -416,7 +417,8 @@ HT_SRC_wcache := gui/wcache.c
 HT_SRC_shadow := gui/shadow.c
 HT_SRC_heap := kernel/heap.c
 HT_SRC_textbuf := gui/textbuf.c
-HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf
+HT_SRC_mb2mmap := kernel/mb2mmap.c
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
