@@ -336,6 +336,8 @@ static void wm_finish_close(window_t *w) {
         browser_fetch_cancel(w->instance_id);
         if (w->bview_px) { kfree(w->bview_px); w->bview_px = NULL; }
         if (w->browser_links) { kfree(w->browser_links); w->browser_links = NULL; }
+        for (int t = 0; t < 4; t++)
+            if (w->browser_tab_content[t]) { kfree(w->browser_tab_content[t]); w->browser_tab_content[t] = NULL; }
     }
     if (w->text_buf) { kfree(w->text_buf); w->text_buf = NULL; w->text_cap = 0; }
     w->wcache.valid = false;

@@ -319,6 +319,10 @@ typedef struct window {
     i32   bview_w, bview_h, bview_scroll;
     u32   bview_ver, bview_theme, bview_font;
     bool  bview_valid;
+    /* Each tab keeps its loaded page, so switching tabs does not re-fetch. */
+    char *browser_tab_content[4];
+    u32   browser_tab_len[4];
+    bool  browser_tab_loaded[4];
     bool  browser_url_active;
     i32   browser_scroll;
     u32   browser_history_pos;

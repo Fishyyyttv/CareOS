@@ -636,63 +636,98 @@ static void smart_navigate(window_t *w, const char *input) {
 }
 
 /* ── Tab helpers ─────────────────────────────────────────────────── */
+/* Keep a copy of the current page with tab ts (nothing while it is still
+ * loading or for about: pages). If the copy cannot be allocated the tab is
+ * simply marked unloaded and will fetch again -- pages are never mixed. */
+static void tab_store_content(window_t *w, u32 ts) {
+    if (w->browser_tab_content[ts]) { kfree(w->browser_tab_content[ts]); w->browser_tab_content[ts] = NULL; }
+    w->browser_tab_loaded[ts] = false;
+    w->browser_tab_len[ts] = 0;
+    if (w->browser_loading || !kstrncmp(w->browser_url, "about:", 6) || !w->browser_url[0]) return;
+    u32 len = (u32)kstrlen(w->browser_content);
+    char *c = (char *)kmalloc(len + 1);
+    if (!c) return;
+    kmemcpy(c, w->browser_content, len + 1);
+    w->browser_tab_content[ts] = c;
+    w->browser_tab_len[ts] = len;
+    w->browser_tab_loaded[ts] = true;          /* an empty page is still a loaded page */
+}
+
+/* Show tab ts: its kept page if it has one, otherwise load it. */
+static void tab_show(window_t *w, u32 ts) {
+    kstrncpy(w->browser_url,   w->browser_tab_url[ts],   255);
+    kstrncpy(w->browser_title, w->browser_tab_title[ts], 127);
+    w->browser_scroll = w->browser_tab_scroll[ts];
+    w->browser_content_ver++;
+    if (w->browser_tab_loaded[ts] && w->browser_tab_content[ts]) {
+        kmemcpy(w->browser_content, w->browser_tab_content[ts], w->browser_tab_len[ts] + 1);
+        w->browser_loading = false;
+    } else if (kstrncmp(w->browser_url, "about:", 6) != 0 && w->browser_url[0]) {
+        i32 keep_scroll = w->browser_scroll;
+        app_browser_navigate(w, w->browser_url);
+        w->browser_scroll = keep_scroll;
+    } else {
+        w->browser_content[0] = '\0';
+        w->browser_loading = false;
+    }
+}
+
 static void browser_save_tab(window_t *w) {
     u32 ts = w->browser_tab_sel;
     kstrncpy(w->browser_tab_url[ts],   w->browser_url,   255);
     kstrncpy(w->browser_tab_title[ts], w->browser_title,  47);
     w->browser_tab_scroll[ts] = w->browser_scroll;
+    tab_store_content(w, ts);
 }
 
 static void browser_switch_tab(window_t *w, u32 idx) {
-    w->browser_content_ver++;
+    if (idx >= w->browser_tab_count || idx == w->browser_tab_sel) return;
     if (w->browser_loading) { browser_fetch_cancel(w->instance_id); w->browser_loading = false; }
-    if (idx >= w->browser_tab_count) return;
     browser_save_tab(w);
     w->browser_tab_sel = idx;
-    kstrncpy(w->browser_url,   w->browser_tab_url[idx],   255);
-    kstrncpy(w->browser_title, w->browser_tab_title[idx],  127);
-    w->browser_scroll  = w->browser_tab_scroll[idx];
-    /* Re-navigate so content is fresh */
-    if (kstrncmp(w->browser_url, "about:", 6) != 0 && w->browser_url[0])
-        app_browser_navigate(w, w->browser_url);
-    else
-        w->browser_content[0] = '\0';
+    tab_show(w, idx);
 }
 
 static void browser_open_tab(window_t *w) {
     if (w->browser_tab_count >= 4) return;
+    if (w->browser_loading) { browser_fetch_cancel(w->instance_id); w->browser_loading = false; }
     browser_save_tab(w);
     u32 ni = w->browser_tab_count++;
     kstrcpy(w->browser_tab_url[ni],   "about:home");
     kstrcpy(w->browser_tab_title[ni], "New Tab");
     w->browser_tab_scroll[ni] = 0;
+    w->browser_tab_loaded[ni] = false;
     w->browser_tab_sel  = ni;
     kstrcpy(w->browser_url,   "about:home");
     kstrcpy(w->browser_title, "New Tab");
     w->browser_content[0]    = '\0';
+    w->browser_content_ver++;
     w->browser_scroll        = 0;
     w->browser_url_active    = true;
 }
 
 static void browser_close_tab(window_t *w, u32 idx) {
-    if (w->browser_tab_count <= 1) return;
+    if (w->browser_tab_count <= 1 || idx >= w->browser_tab_count) return;
+    if (idx == w->browser_tab_sel && w->browser_loading) {
+        browser_fetch_cancel(w->instance_id); w->browser_loading = false;
+    }
+    if (idx != w->browser_tab_sel) browser_save_tab(w);   /* keep the page we stay on */
+    if (w->browser_tab_content[idx]) { kfree(w->browser_tab_content[idx]); w->browser_tab_content[idx] = NULL; }
     for (u32 k = idx; k < w->browser_tab_count - 1; k++) {
         kstrncpy(w->browser_tab_url[k],   w->browser_tab_url[k+1],   255);
         kstrncpy(w->browser_tab_title[k], w->browser_tab_title[k+1],  47);
-        w->browser_tab_scroll[k] = w->browser_tab_scroll[k+1];
+        w->browser_tab_scroll[k]  = w->browser_tab_scroll[k+1];
+        w->browser_tab_content[k] = w->browser_tab_content[k+1];
+        w->browser_tab_len[k]     = w->browser_tab_len[k+1];
+        w->browser_tab_loaded[k]  = w->browser_tab_loaded[k+1];
     }
+    u32 last = w->browser_tab_count - 1;
+    w->browser_tab_content[last] = NULL; w->browser_tab_loaded[last] = false; w->browser_tab_len[last] = 0;
     w->browser_tab_count--;
-    if (w->browser_tab_sel >= w->browser_tab_count)
-        w->browser_tab_sel = w->browser_tab_count - 1;
-    /* Load the now-active tab */
-    u32 ts = w->browser_tab_sel;
-    kstrncpy(w->browser_url,   w->browser_tab_url[ts],   255);
-    kstrncpy(w->browser_title, w->browser_tab_title[ts], 127);
-    w->browser_scroll = w->browser_tab_scroll[ts];
-    if (kstrncmp(w->browser_url, "about:", 6) != 0 && w->browser_url[0])
-        app_browser_navigate(w, w->browser_url);
-    else
-        w->browser_content[0] = '\0';
+    if (w->browser_tab_sel > idx || w->browser_tab_sel >= w->browser_tab_count)
+        w->browser_tab_sel = (w->browser_tab_sel > 0) ? w->browser_tab_sel - 1 : 0;
+    if (w->browser_tab_sel >= w->browser_tab_count) w->browser_tab_sel = w->browser_tab_count - 1;
+    tab_show(w, w->browser_tab_sel);
 }
 
 static void bookmarks_save(window_t *w) {
@@ -1120,6 +1155,13 @@ void app_browser_key(window_t *w, char c) {
                     w->browser_find_count++;
             }
         }
+        return;
+    }
+
+    /* Ctrl+Tab: next tab (kept pages make this instant). */
+    if (c == '\t' && keyboard_ctrl_held() && !w->browser_url_active) {
+        if (w->browser_tab_count > 1)
+            browser_switch_tab(w, (w->browser_tab_sel + 1) % w->browser_tab_count);
         return;
     }
 
