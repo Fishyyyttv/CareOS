@@ -66,7 +66,6 @@ static void generate_maze(void) {
 
 void app_maze_init(window_t *w) {
     w->app = APP_MAZE;
-    w->win_buffer.pixels = NULL; 
     rand_state = timer_ms();
     level = 1;
     generate_maze();

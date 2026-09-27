@@ -396,18 +396,9 @@ window_t *wm_open(app_id_t app, const char *title,
         }
         win->root->bg_color = COL_SURFACE;
         
-        /* Allocate offscreen buffer */
-        win->win_buffer.w = (u32)w;
-        win->win_buffer.h = (u32)h;
-        win->win_buffer.pitch = (u32)w * 4;
-        win->win_buffer.pixels = (u32 *)kmalloc((size_t)w * (size_t)h * 4);
-        if (!win->win_buffer.pixels) {
-            widget_destroy(win->root);
-            win->root = NULL;
-            win->active = false;
-            return NULL;
-        }
-        kmemset(win->win_buffer.pixels, 0, (size_t)w * (size_t)h * 4);
+        /* No per-window offscreen buffer: only DOOM needs one, and it
+         * allocates its own fixed-size frame in app_doom_init. This used to
+         * cost w*h*4 bytes (several MB) for every window of every app. */
 
         open_count++;
 

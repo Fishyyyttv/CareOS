@@ -117,6 +117,16 @@ void app_doom_init(window_t *w) {
        Previously this was forced to APP_NONE, which left the window undispatched
        and blank. */
     doom_win = w;
+
+    /* DOOM's private frame: the Doom task publishes into it and
+     * app_doom_draw composites it. Fixed size regardless of window size.
+     * (wm_open no longer gives every window a screen-sized buffer.) */
+    w->win_buffer.w = DOOMGENERIC_RESX;
+    w->win_buffer.h = DOOMGENERIC_RESY;
+    w->win_buffer.pitch = DOOMGENERIC_RESX * 4;
+    w->win_buffer.pixels = (u32 *)kmalloc((size_t)DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4);
+    if (w->win_buffer.pixels)
+        kmemset(w->win_buffer.pixels, 0, (size_t)DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4);
     
     kprintf("[doom] Checking for /home/user/DOOM1.WAD...\n");
     fs_node_t *wad = vfs_resolve_path("/home/user/DOOM1.WAD");
