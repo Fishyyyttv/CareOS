@@ -150,12 +150,12 @@ void app_notes_key(window_t *w,char c){
         notify_push("Clipboard", "Copied notes text", COL_ACCENT);
     } else if(c==0x16){ /* Ctrl+V */
         u32 l = g_clipboard_len;
-        if (w->text_len + l < WIN_TEXT_BUF-1) {
+        if (win_reserve(w, w->text_len + l + 1)) {
             kstrcpy(w->text_buf + w->text_len, g_clipboard);
             w->text_len += l;
         }
     } else if((c>=32&&c<127)||c=='\n'){
-        if(w->text_len<WIN_TEXT_BUF-1){ w->text_buf[w->text_len++]=c; w->text_buf[w->text_len]='\0'; }
+        if(win_reserve(w, w->text_len + 2)){ w->text_buf[w->text_len++]=c; w->text_buf[w->text_len]='\0'; }
     }
     w->cursor_pos = w->text_len;
 }

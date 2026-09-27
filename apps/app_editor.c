@@ -80,6 +80,24 @@ void app_editor_init(window_t *w){
     if (!w->fm_dir) w->fm_dir = vfs_root();
 }
 
+/* Load a whole file into the editor. Files too big to hold entirely are
+ * refused and the current document is kept: opening a truncated copy used to
+ * let Save silently write the cut-down text back over the file. */
+static bool editor_load(window_t *w, fs_node_t *f) {
+    u32 len = (f->data) ? f->size : 0;
+    if (len + 1 > WIN_TEXT_MAX || !win_reserve(w, len + 1)) {
+        notify_push("Editor", "File too large to edit (limit 1 MB)", g_theme->warning);
+        return false;
+    }
+    if (len) kmemcpy(w->text_buf, f->data, len);
+    w->text_len = len;
+    w->text_buf[len] = '\0';
+    w->scroll = 0;
+    w->cursor_pos = 0;
+    w->editor_modified = false;
+    return true;
+}
+
 static void editor_find(window_t *w) {
     if (!w->input_buf[0]) return;
     u32 nlen = (u32)kstrlen(w->input_buf);
@@ -115,7 +133,7 @@ static void editor_replace_first(window_t *w) {
     if (found_at == w->text_len) { notify_push("Editor", "Not found", g_theme->warning); return; }
 
     u32 new_len = w->text_len - flen + rlen;
-    if (new_len >= WIN_TEXT_BUF - 1) return;
+    if (!win_reserve(w, new_len + 1)) return;
 
     u32 tail_start = found_at + flen;
     u32 tail_len   = w->text_len - tail_start;
@@ -419,17 +437,11 @@ void app_editor_key(window_t *w, char c){
                 /* Open mode */
                 fs_node_t *f = vfs_resolve_path(w->input_buf);
                 if (f && f->type == FS_FILE) {
-                    kstrncpy(w->editor_path, w->input_buf, FS_PATH_MAX - 1);
-                    win_clear(w);
-                    if (f->size > 0 && f->data) {
-                        u32 load_len = f->size < WIN_TEXT_BUF - 1 ? f->size : WIN_TEXT_BUF - 1;
-                        kmemcpy(w->text_buf, f->data, load_len);
-                        w->text_len = load_len;
-                        w->text_buf[load_len] = '\0';
+                    if (editor_load(w, f)) {
+                        kstrncpy(w->editor_path, w->input_buf, FS_PATH_MAX - 1);
+                        w->tab = 0;
+                        notify_push("Editor", "File opened", g_theme->success);
                     }
-                    w->editor_modified = false;
-                    w->tab = 0;
-                    notify_push("Editor", "File opened", g_theme->success);
                 } else {
                     notify_push("Editor", "File not found", g_theme->error);
                 }
@@ -471,7 +483,7 @@ void app_editor_key(window_t *w, char c){
         notify_push("Clipboard", "Copied editor text", COL_ACCENT);
     } else if (c == 0x16) { /* Ctrl+V: Paste */
         u32 l = g_clipboard_len;
-        if (w->text_len + l < WIN_TEXT_BUF - 1) {
+        if (win_reserve(w, w->text_len + l + 1)) {
             kstrcpy(w->text_buf + w->text_len, g_clipboard);
             w->text_len += l;
             w->editor_modified = true;
@@ -520,7 +532,7 @@ void app_editor_key(window_t *w, char c){
         }
         
         u32 l = (u32)kstrlen(ins);
-        if (w->text_len + l < WIN_TEXT_BUF - 1) {
+        if (win_reserve(w, w->text_len + l + 1)) {
             kstrcpy(w->text_buf + w->text_len, ins);
             w->text_len += l;
             w->editor_modified = true;
@@ -563,14 +575,10 @@ void app_editor_click(window_t *w, i32 x, i32 y, mouse_t *m) {
                         w->fm_sel = 0;
                     } else if (ch->type == FS_FILE) {
                         /* Open file */
-                        vfs_get_path(ch, w->editor_path, FS_PATH_MAX);
-                        u32 load_len = ch->size < WIN_TEXT_BUF - 1 ? ch->size : WIN_TEXT_BUF - 1;
-                        if (!ch->data) load_len = 0;
-                        if (load_len) kmemcpy(w->text_buf, ch->data, load_len);
-                        w->text_len = load_len;
-                        w->text_buf[load_len] = '\0';
-                        w->editor_modified = false;
-                        notify_push("Editor", "Opened file", g_theme->success);
+                        if (editor_load(w, ch)) {
+                            vfs_get_path(ch, w->editor_path, FS_PATH_MAX);
+                            notify_push("Editor", "Opened file", g_theme->success);
+                        }
                     }
                 } else {
                     w->fm_sel = (u32)idx;

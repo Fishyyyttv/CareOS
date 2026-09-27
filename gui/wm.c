@@ -302,6 +302,7 @@ static void wm_refocus_after(window_t *skip) {
 static void wm_finish_close(window_t *w) {
     if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
     if (w->wcache_px) { kfree(w->wcache_px); w->wcache_px = NULL; }
+    if (w->text_buf) { kfree(w->text_buf); w->text_buf = NULL; w->text_cap = 0; }
     w->wcache.valid = false;
     if (w->root) { widget_destroy(w->root); w->root = NULL; }
     w->active    = false;
@@ -345,6 +346,13 @@ window_t *wm_open(app_id_t app, const char *title,
 
         window_t *win = &windows[i];
         kmemset(win, 0, sizeof(window_t));
+        /* Every app's text/state buffer. Zero-filled: Paint uses it as a 64x64
+         * canvas and NetMon as history bytes. If it cannot be allocated the
+         * window is not created at all (the slot stays free). */
+        win->text_buf = (char *)kmalloc(WIN_TEXT_BUF);
+        if (!win->text_buf) return NULL;
+        kmemset(win->text_buf, 0, WIN_TEXT_BUF);
+        win->text_cap = WIN_TEXT_BUF;
         win->active   = true;
         win->instance_id = ++next_window_instance_id;
         if (!win->instance_id) win->instance_id = ++next_window_instance_id;
@@ -391,6 +399,7 @@ window_t *wm_open(app_id_t app, const char *title,
         rect_t cr = wm_client_rect(win);
         win->root = widget_create(WIDGET_PANEL, 0, 0, cr.w, cr.h);
         if (!win->root) {
+            kfree(win->text_buf); win->text_buf = NULL; win->text_cap = 0;
             win->active = false;
             return NULL;
         }

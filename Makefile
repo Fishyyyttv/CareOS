@@ -147,6 +147,7 @@ C_SRC     := kernel/kernel.c       \
              gui/blit.c            \
              gui/shadow.c          \
              gui/wcache.c          \
+             gui/textbuf.c         \
              gui/perf_stats.c      \
              gui/perf.c            \
              gui/image.c           \
@@ -414,7 +415,8 @@ HT_SRC_blit := gui/blit.c
 HT_SRC_wcache := gui/wcache.c
 HT_SRC_shadow := gui/shadow.c
 HT_SRC_heap := kernel/heap.c
-HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap
+HT_SRC_textbuf := gui/textbuf.c
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h

@@ -252,6 +252,7 @@ void gfx_draw_icon(app_id_t app, i32 x, i32 y, i32 size, u32 color);
 #define MIN_WIN_H   220
 
 #include "wcache.h"
+#include "textbuf.h"
 
 /* -- Window --------------------------------------------------------------- */
 #define MAX_WINDOWS  24
@@ -267,7 +268,8 @@ typedef struct window {
     rect_t    rect;
     i32       drag_ox, drag_oy;
 
-    char      text_buf[4096];
+    char     *text_buf;        /* heap; grows via win_reserve() up to WIN_TEXT_MAX */
+    u32       text_cap;
     u32       text_len;
     char      input_buf[256];
     u32       input_len;
@@ -403,7 +405,8 @@ typedef struct window {
 #define SNAP_FULL       9
 
 /* Window text buffer size */
-#define WIN_TEXT_BUF  4096
+#define WIN_TEXT_BUF  4096                 /* initial text_buf capacity */
+#define WIN_TEXT_MAX  (1024u * 1024u)      /* hard ceiling per window */
 
 /* -- Desktop icon --------------------------------------------------------- */
 typedef struct {
