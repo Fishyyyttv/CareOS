@@ -62,8 +62,11 @@ static u32 s_bench_worst;
 typedef struct {
     window_t *window;
     u32 instance_id;
-    bool owned, was_minimized;
-    rect_t rect;
+    bool owned, was_minimized, was_maximized;
+    /* Full geometry of a borrowed (pre-existing) window, so cleanup puts it
+     * back exactly -- including a maximized window's pre-maximize size. */
+    rect_t rect, target_rect, restore_rect;
+    u32 z_order;
 } bench_window_t;
 static bench_window_t s_bench_windows[4];
 static i32 s_bench_x, s_bench_y;
@@ -80,8 +83,10 @@ static void bench_restore_borrowed(void) {
         window_t *w = bench_valid_window(i);
         if (!w || entry->owned) continue;
         w->rect = entry->rect;
-        w->target_rect = entry->rect;
-        w->restore_rect = entry->rect;
+        w->target_rect = entry->target_rect;
+        w->restore_rect = entry->restore_rect;
+        w->maximized = entry->was_maximized;
+        w->z_order = entry->z_order;
         w->minimized = entry->was_minimized;
         w->animating = false;
         w->anim_kind = WM_ANIM_NONE;
@@ -184,6 +189,10 @@ void perf_bench_start(const char *url) {
             entry->instance_id = prior->instance_id;
             entry->owned = false;
             entry->rect = prior->rect;
+            entry->target_rect = prior->target_rect;
+            entry->restore_rect = prior->restore_rect;
+            entry->was_maximized = prior->maximized;
+            entry->z_order = prior->z_order;
             entry->was_minimized = prior->minimized;
         }
     }
