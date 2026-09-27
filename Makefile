@@ -260,7 +260,8 @@ kernel/kernel.elf: $(ALL_OBJ)
 careos.iso: kernel/kernel.elf iso/boot/grub/grub.cfg
 	@echo "  ISO   building..."
 	@mkdir -p iso/boot/grub
-	@cp kernel/kernel.elf iso/boot/kernel.elf
+	@objcopy --strip-debug kernel/kernel.elf iso/boot/kernel.elf
+	@echo "  ELF   $$(du -h kernel/kernel.elf | cut -f1) -> $$(du -h iso/boot/kernel.elf | cut -f1) on the ISO (debug info kept in kernel/kernel.elf for gdb)"
 	@grub-mkrescue -o careos.iso iso/ 2>&1 | grep -v "^$$" || \
 	 grub2-mkrescue -o careos.iso iso/ 2>&1 | grep -v "^$$"
 	@echo "  ISO: $$(du -h careos.iso | cut -f1)"
