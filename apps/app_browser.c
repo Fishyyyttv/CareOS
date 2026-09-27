@@ -1,5 +1,6 @@
 /* CareOS v9 -- apps/app_browser.c -- Web Browser */
 #include "apps_common.h"
+#include "http_parse.h"
 
 /* ── Layout ──────────────────────────────────────────────────────── */
 #define BROW_BAR_H    48
@@ -537,46 +538,39 @@ static i32 render_html(rctx_t *c, const char *html) {
     return c->cy;
 }
 
-/* Resolve href against the page's base URL into an absolute http(s) URL.
- * Handles absolute, protocol-relative (//host), absolute-path (/p),
- * query-only (?q=), and simple relative paths -- enough for real links and the
- * 30x Location headers DuckDuckGo's result redirects use. */
-static void bs_url_resolve(const char *base, const char *href, char *out, u32 max) {
-    if (!href || !*href) { kstrncpy(out, base, max - 1); out[max - 1] = '\0'; return; }
-    if (kstrncmp(href, "http://", 7) == 0 || kstrncmp(href, "https://", 8) == 0) {
-        kstrncpy(out, href, max - 1); out[max - 1] = '\0'; return;
+/* ── Navigation ──────────────────────────────────────────────────── */
+/* Apply a raw HTTP(S) response to the window: redirects, chunked bodies (for
+ * HTTPS too -- it was never de-chunked, so pages showed hex chunk sizes),
+ * case-insensitive headers, title, content, status and history. */
+static void browser_apply_response(window_t *w, const char *url, const char *host, int n) {
+    g_resp[n] = '\0';
+    int code = http_status_code(g_resp, (u32)n);
+    if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) &&
+        g_redirect_depth < 6) {
+        char loc[512];
+        if (http_header(g_resp, (u32)n, "Location", loc, sizeof loc)) {
+            char next[512]; http_url_resolve(url, loc, next, sizeof next);
+            w->browser_loading = false;
+            g_redirect_depth++; app_browser_navigate(w, next); g_redirect_depth--;
+            return;
+        }
     }
-    const char *scheme = (kstrncmp(base, "https://", 8) == 0) ? "https" : "http";
-    const char *bh = base;
-    if (kstrncmp(base, "https://", 8) == 0) bh = base + 8;
-    else if (kstrncmp(base, "http://", 7) == 0) bh = base + 7;
-
-    char host[160]; u32 hl = 0;
-    while (bh[hl] && bh[hl] != '/' && hl < 159) { host[hl] = bh[hl]; hl++; }
-    host[hl] = '\0';
-    const char *bpath = bh + hl;
-    if (!*bpath) bpath = "/";
-
-    if (href[0] == '/' && href[1] == '/') {            /* protocol-relative */
-        ksprintf(out, "%s:%s", scheme, href);
-    } else if (href[0] == '/') {                        /* absolute path */
-        ksprintf(out, "%s://%s%s", scheme, host, href);
-    } else if (href[0] == '?') {                        /* query on current path */
-        char pnoq[256]; u32 pi = 0;
-        for (const char *q = bpath; *q && *q != '?' && pi < 255; q++) pnoq[pi++] = *q;
-        pnoq[pi] = '\0';
-        ksprintf(out, "%s://%s%s%s", scheme, host, pnoq, href);
-    } else {                                            /* relative to base dir */
-        char dir[256]; const char *last = bpath;
-        for (const char *q = bpath; *q; q++) if (*q == '/') last = q;
-        u32 dl = (u32)(last - bpath) + 1; if (dl > 255) dl = 255;
-        kmemcpy(dir, bpath, dl); dir[dl] = '\0';
-        ksprintf(out, "%s://%s%s%s", scheme, host, dir, href);
-    }
-    out[max - 1] = '\0';
+    u32 off = http_body_offset(g_resp, (u32)n);
+    char *body = g_resp + off;
+    u32 blen = (u32)n - off;
+    if (http_is_chunked(g_resp, (u32)n)) blen = http_dechunk(body, blen);
+    if (blen >= BROW_CONT_MAX) blen = BROW_CONT_MAX - 1;
+    extract_title(body, w->browser_title, 127);
+    if (!w->browser_title[0]) kstrncpy(w->browser_title, host, 127);
+    kmemcpy(w->browser_content, body, blen);
+    w->browser_content[blen] = '\0';
+    browser_save_tab(w);
+    ksprintf(g_status, "%s  %d bytes%s", host, (int)blen,
+             kstrncmp(url, "https://", 8) == 0 ? " (HTTPS)" : "");
+    if (g_redirect_depth == 0) history_push(w, url);
+    w->browser_loading = false;
 }
 
-/* ── Navigation ──────────────────────────────────────────────────── */
 static void app_browser_navigate(window_t *w, const char *url) {
     kstrncpy(w->browser_url, url, 255);
     w->browser_loading = true;
@@ -611,39 +605,8 @@ static void app_browser_navigate(window_t *w, const char *url) {
             ksprintf(g_status,"Failed: %s", g_net_diag[0]?g_net_diag:"unknown");
             w->browser_loading=false; return;
         }
-        g_resp[n]='\0';
-        const char *body=bs_mfind(g_resp,(u32)n,"\r\n\r\n",4);
-        if(body) body+=4; else body=g_resp;
-
-        /* Follow 30x redirects (DuckDuckGo result links 302 through /l/?uddg=). */
-        if (kstrncmp(g_resp,"HTTP/",5)==0 && g_redirect_depth<6) {
-            int code=0; const char *sp=g_resp+5;
-            while(*sp&&*sp!=' ')sp++; while(*sp==' ')sp++;
-            for(int i=0;i<3&&sp[i]>='0'&&sp[i]<='9';i++) code=code*10+(sp[i]-'0');
-            if(code==301||code==302||code==303||code==307||code==308){
-                const char *loc=bs_strstr(g_resp,"Location: ");
-                if(!loc) loc=bs_strstr(g_resp,"location: ");
-                if(loc){
-                    loc+=10; char rawloc[512]={0}; u32 ui=0;
-                    while(loc[ui]&&loc[ui]!='\r'&&loc[ui]!='\n'&&ui<511){ rawloc[ui]=loc[ui]; ui++; }
-                    rawloc[ui]='\0';
-                    char new_url[512]; bs_url_resolve(url,rawloc,new_url,sizeof(new_url));
-                    w->browser_loading=false;
-                    g_redirect_depth++; app_browser_navigate(w,new_url); g_redirect_depth--;
-                    return;
-                }
-            }
-        }
-
-        extract_title(body,w->browser_title,127);
-        if(!w->browser_title[0]) kstrncpy(w->browser_title,hbuf,127);
-        u32 blen=(u32)(n-(int)(body-g_resp));
-        if(blen>=BROW_CONT_MAX) blen=BROW_CONT_MAX-1;
-        kmemcpy(w->browser_content,body,blen); w->browser_content[blen]='\0';
-        browser_save_tab(w);
-        ksprintf(g_status,"%s  %d bytes (HTTPS)",hbuf,(int)blen);
-        if(g_redirect_depth==0) history_push(w,url);
-        w->browser_loading=false; return;
+        browser_apply_response(w, url, hbuf, n);
+        return;
     }
 
     /* parse http:// URL */
@@ -690,68 +653,7 @@ static void app_browser_navigate(window_t *w, const char *url) {
         w->browser_loading = false;
         return;
     }
-    g_resp[n] = '\0';
-
-    /* find header/body split (\r\n\r\n or \n\n) */
-    const char *body = bs_mfind(g_resp, (u32)n, "\r\n\r\n", 4);
-    if (body) body += 4;
-    else {
-        body = bs_mfind(g_resp, (u32)n, "\n\n", 2);
-        if (body) body += 2;
-        else body = g_resp;
-    }
-
-    /* follow redirects (max 4) */
-    if (kstrncmp(g_resp, "HTTP/", 5) == 0 && g_redirect_depth < 4) {
-        int code = 0;
-        const char *sp = g_resp + 5;
-        while (*sp && *sp != ' ') sp++;
-        while (*sp == ' ') sp++;
-        for (int i = 0; i < 3 && sp[i]>='0' && sp[i]<='9'; i++)
-            code = code*10 + (sp[i]-'0');
-
-        if (code==301||code==302||code==303||code==307||code==308) {
-            const char *loc = bs_strstr(g_resp, "Location: ");
-            if (!loc) loc = bs_strstr(g_resp, "location: ");
-            if (loc) {
-                loc += 10;
-                char rawloc[512]={0}; u32 ui=0;
-                while (loc[ui]&&loc[ui]!='\r'&&loc[ui]!='\n'&&ui<511) { rawloc[ui]=loc[ui]; ui++; }
-                rawloc[ui]='\0';
-                char new_url[512]; bs_url_resolve(url, rawloc, new_url, sizeof(new_url));
-                w->browser_loading = false;
-                g_redirect_depth++;
-                app_browser_navigate(w, new_url);
-                g_redirect_depth--;
-                return;
-            }
-        }
-    }
-
-    /* extract title */
-    extract_title(body, w->browser_title, 127);
-    if (!w->browser_title[0]) kstrncpy(w->browser_title, host_buf, 127);
-
-    /* copy body */
-    u32 body_off = (u32)(body - g_resp);
-    u32 body_len = (u32)n > body_off ? (u32)n - body_off : 0;
-    if (body_len >= BROW_CONT_MAX) body_len = BROW_CONT_MAX-1;
-    kmemcpy(w->browser_content, body, body_len);
-    w->browser_content[body_len] = '\0';
-
-    /* Decode chunked transfer encoding */
-    if (bs_strstr(g_resp, "Transfer-Encoding: chunked") ||
-        bs_strstr(g_resp, "transfer-encoding: chunked")) {
-        u32 decoded_len = 0;
-        http_decode_chunked(w->browser_content, body_len, &decoded_len);
-        body_len = decoded_len;
-    }
-
-    /* Sync active tab arrays */
-    browser_save_tab(w);
-
-    ksprintf(g_status, "%s  %d bytes", host_buf, (int)body_len);
-    w->browser_loading = false;
+    browser_apply_response(w, url, host_buf, n);
 }
 
 /* smart dispatch: detect domain vs search query */
@@ -1204,8 +1106,11 @@ void app_browser_key(window_t *w, char c) {
         return;
     }
 
-    /* Ctrl shortcuts */
-    if (keyboard_ctrl_held()) {
+    /* Ctrl shortcuts. The control code itself (Ctrl+L = 12, ...) is the
+     * evidence of Ctrl: keys are queued, and by the time this runs the user
+     * may already have released Ctrl, which made keyboard_ctrl_held() drop
+     * shortcuts. None of these codes can be typed any other way. */
+    if (c == 4 || c == 6 || c == 12 || c == 18 || c == 20 || c == 21 || c == 23) {
         if (c == 6) { /* Ctrl+F */
             w->browser_find_active = true;
             w->browser_find_buf[0] = '\0'; w->browser_find_len = 0;
@@ -1425,7 +1330,7 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
             blink_t *l = &g_links[i];
             if (x>=l->x&&x<l->x+l->w&&y>=l->y&&y<l->y+l->h) {
                 /* Resolve relative / protocol-relative hrefs against this page. */
-                char abs[512]; bs_url_resolve(w->browser_url, l->url, abs, sizeof(abs));
+                char abs[512]; http_url_resolve(w->browser_url, l->url, abs, sizeof(abs));
                 app_browser_navigate(w, abs);
                 return;
             }

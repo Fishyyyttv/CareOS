@@ -185,6 +185,7 @@ C_SRC     := kernel/kernel.c       \
              apps/app_about.c      \
              apps/app_settings.c   \
              apps/app_browser.c    \
+             apps/http_parse.c     \
              apps/app_pkgmgr.c     \
              apps/app_editor.c     \
              apps/app_paint.c      \
@@ -421,7 +422,8 @@ HT_SRC_heap := kernel/heap.c
 HT_SRC_textbuf := gui/textbuf.c
 HT_SRC_mb2mmap := kernel/mb2mmap.c
 HT_SRC_term_layout := apps/term_layout.c
-HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout
+HT_SRC_http_parse := apps/http_parse.c
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
