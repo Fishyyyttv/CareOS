@@ -251,6 +251,8 @@ void gfx_draw_icon(app_id_t app, i32 x, i32 y, i32 size, u32 color);
 #define MIN_WIN_W   280
 #define MIN_WIN_H   220
 
+#include "wcache.h"
+
 /* -- Window --------------------------------------------------------------- */
 #define MAX_WINDOWS  24
 
@@ -375,6 +377,10 @@ typedef struct window {
 
     widget_t *root;
     gfx_buffer_t win_buffer;
+
+    /* Pixel cache for unfocused, settled windows (gui/wcache.h). */
+    wcache_state_t wcache;
+    u32           *wcache_px;
 } window_t;
 
 /* Window transition kinds (window_t.anim_kind) */
@@ -692,6 +698,8 @@ void gfx_snapshot_rect(i32 x, i32 y, i32 w, i32 h, u32 *dst);
 /* gfx_shadow_soft_ex look, minus the pixels an opaque rounded body at
  * (x,y,w,h,r) covers -- use only when that body is drawn right after. */
 void gfx_shadow_soft_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy);
+/* Blit an ARGB image, skipping its rounded corners (radius r). */
+void gfx_blit_argb_rounded(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh, i32 r);
 void gui_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gui_run(void);
 

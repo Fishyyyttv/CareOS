@@ -21,6 +21,7 @@
 #include "gui.h"
 #include "image.h"
 #include "icon.h"
+#include "font.h"
 
 static window_t windows[MAX_WINDOWS];
 static u32 next_window_instance_id;
@@ -36,6 +37,69 @@ bool g_clipboard_is_cut = false;
 
 /* -- Multi-desktop -------------------------------------------------------- */
 u32  g_current_desktop = 0;
+
+/* Last pointer position seen by wm_handle_mouse: an unfocused window with the
+ * pointer near it may show hover effects, so it is drawn live, not cached. */
+static i32 s_wm_mouse_x = -10000, s_wm_mouse_y = -10000;
+/* The topmost window within 16 px of the pointer this frame (set by
+ * wm_draw_all). Only it can show hover effects; windows below it cannot. */
+static const window_t *s_wm_hover_top;
+
+static u32 wm_theme_id(void) {
+    /* Accent changes mutate the theme struct in place, so fold them in. */
+    return (u32)(uintptr_t)g_theme ^ g_theme->primary ^ (g_theme->accent << 1) ^
+           (g_theme->selection << 2) ^ g_theme->surface;
+}
+
+/* Apps whose pixels change on their own every frame or two. */
+static bool wm_app_always_live(const window_t *w) {
+    switch (w->app) {
+    case APP_CLOCK: case APP_SYSMON: case APP_NETMON:
+    case APP_DOOM: case APP_MAZE: case APP_3D:
+        return true;
+    case APP_BROWSER:
+        return w->browser_loading;
+    default:
+        return false;
+    }
+}
+
+static wcache_action_t wm_cache_action(window_t *w, i32 wx, i32 wy, i32 wd, i32 ht, bool transition) {
+    wcache_query_t q;
+    kmemset(&q, 0, sizeof q);
+    q.focused    = w->focused;
+    q.animating  = transition || w->animating || w->opacity != 255;
+    (void)wx; (void)wy;
+    q.hover_near = (w == s_wm_hover_top);
+    q.busy       = wm_app_always_live(w) || w->showing_snap_layouts ||
+                   w->hover_edge != RESIZE_NONE || w->resizing || w->dragging;
+    q.x = wx; q.y = wy; q.w = wd; q.h = ht;
+    q.screen_w = (i32)SCREEN_W; q.screen_h = (i32)SCREEN_H;
+    q.now_ms   = timer_ms();
+    q.theme_id = wm_theme_id();
+    q.font_id  = font_active_index();
+    q.stagger_ms = (u32)((w - windows) * 97 % 400);
+    wcache_action_t a = wcache_decide(&w->wcache, &q);
+    if (a == WC_DRAW && w->focused && w->wcache_px) {       /* free RAM while focused */
+        kfree(w->wcache_px); w->wcache_px = NULL;
+    }
+    if (a == WC_BLIT && !w->wcache_px) a = WC_DRAW;
+    return a;
+}
+
+static void wm_cache_capture(window_t *w, i32 wx, i32 wy, i32 wd, i32 ht) {
+    if (w->wcache_px && (w->wcache.w != wd || w->wcache.h != ht)) {
+        kfree(w->wcache_px); w->wcache_px = NULL;
+    }
+    if (!w->wcache_px) w->wcache_px = (u32 *)kmalloc((size_t)wd * (size_t)ht * 4u);
+    if (!w->wcache_px) { w->wcache.valid = false; return; }
+    gfx_snapshot_rect(wx, wy, wd, ht, w->wcache_px);
+    wcache_query_t q;
+    kmemset(&q, 0, sizeof q);
+    q.w = wd; q.h = ht; q.now_ms = timer_ms();
+    q.theme_id = wm_theme_id(); q.font_id = font_active_index();
+    wcache_captured(&w->wcache, &q);
+}
 
 /* -- Idle tracking (for screensaver / auto-lock) -------------------------- */
 u32  g_last_activity_tick = 0;
@@ -237,6 +301,8 @@ static void wm_refocus_after(window_t *skip) {
  * original wm_close side effects (slot freed, cascade count decremented, buffer freed). */
 static void wm_finish_close(window_t *w) {
     if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
+    if (w->wcache_px) { kfree(w->wcache_px); w->wcache_px = NULL; }
+    w->wcache.valid = false;
     if (w->root) { widget_destroy(w->root); w->root = NULL; }
     w->active    = false;
     w->focused   = false;
@@ -713,6 +779,13 @@ static void draw_window(window_t *w) {
                                        CDL_SHADOW_DY / 2);
     }
 
+    /* Unfocused, settled windows are blitted from their cached pixels. */
+    wcache_action_t wc = wm_cache_action(w, wx, wy, wd, ht, transition);
+    if (wc == WC_BLIT) {
+        gfx_blit_argb_rounded(wx, wy, w->wcache_px, wd, ht, CDL_R_WINDOW);
+        return;
+    }
+
     /* Window body */
     gfx_rect_rounded(wx, wy, wd, ht, CDL_R_WINDOW, COL_SURFACE);
 
@@ -782,6 +855,8 @@ static void draw_window(window_t *w) {
     if (w->showing_snap_layouts) wm_draw_snap_layouts(w);
     }
 
+    if (wc == WC_DRAW_AND_CAPTURE) wm_cache_capture(w, wx, wy, wd, ht);
+
     /* Fade: overlay the background colour at (255-opacity) inside the rounded
      * window shape so open/restore read as a fade-in and close/minimise as a
      * fade-out. Opacity is 255 for settled windows, so this is a no-op then. */
@@ -805,6 +880,14 @@ void wm_draw_all(void) {
             if (windows[order[a]].z_order > windows[order[b]].z_order) {
                 int tmp = order[a]; order[a] = order[b]; order[b] = tmp;
             }
+    s_wm_hover_top = NULL;
+    for (int i = cnt - 1; i >= 0; i--) {
+        const window_t *w = &windows[order[i]];
+        if (s_wm_mouse_x >= w->rect.x - 16 && s_wm_mouse_x < w->rect.x + w->rect.w + 16 &&
+            s_wm_mouse_y >= w->rect.y - 16 && s_wm_mouse_y < w->rect.y + w->rect.h + 16) {
+            s_wm_hover_top = w; break;
+        }
+    }
     for (int i = 0; i < cnt; i++)
         draw_window(&windows[order[i]]);
     notify_draw();
@@ -819,6 +902,7 @@ static bool hit_btn(i32 mx, i32 my, i32 bx, i32 bmy) {
 }
 
 void wm_handle_mouse(mouse_t *m) {
+    s_wm_mouse_x = m->x; s_wm_mouse_y = m->y;
     /* launcher input is now pre-routed in gui.c */
 
     /* -- 0. Pointer feedback: pick the cursor shape and the hovered edge for
