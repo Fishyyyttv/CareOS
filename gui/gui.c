@@ -1783,6 +1783,35 @@ void gui_run(void) {
                 if (ck && !ck->minimized && now - last_clock >= 40) { last_clock = now; activity = true; }
             }
 
+            #ifdef CAREOS_QA_LAYOUT
+            {   /* QA build only (make QA_LAYOUT=1): every app at its minimum
+                 * size, four at a time, 6 s per group, with a serial marker so
+                 * a harness can screenshot each group. */
+                static const app_id_t qa_apps[] = { APP_TERMINAL, APP_FILES, APP_SETTINGS, APP_BROWSER,
+                    APP_EDITOR, APP_NOTES, APP_CALC, APP_PAINT, APP_USERS, APP_PKGMGR, APP_CLOCK,
+                    APP_SYSMON, APP_NETMON, APP_HELP, APP_ABOUT, APP_MAZE };
+                static const u32 qa_n = sizeof(qa_apps) / sizeof(qa_apps[0]);
+                static u32 grp = 0, t0 = 0;
+                static window_t *open_w[4];
+                if (!t0) t0 = timer_ms();
+                if ((u32)(timer_ms() - t0) > 6000u && grp * 4 < qa_n) {
+                    for (int k = 0; k < 4; k++) if (open_w[k] && open_w[k]->active) wm_close(open_w[k]);
+                    i32 cw = ((i32)SCREEN_W - (i32)SIDEBAR_W - 30) / 2;
+                    i32 ch = ((i32)SCREEN_H - (i32)TOPBAR_H - (i32)TASKBAR_H - 30) / 2;
+                    for (int k = 0; k < 4; k++) {
+                        u32 ai = grp * 4 + (u32)k; open_w[k] = NULL;
+                        if (ai >= qa_n) break;
+                        i32 mw, mh; app_min_size(qa_apps[ai], &mw, &mh);
+                        i32 x = (i32)SIDEBAR_W + 10 + (k % 2) * (cw + 10);
+                        i32 y = (i32)TOPBAR_H + 10 + (k / 2) * (ch + 10);
+                        open_w[k] = wm_open(qa_apps[ai], "QA", x, y, mw, mh);
+                    }
+                    char b[40]; ksprintf(b, "[qa-layout] group %d\n", (int)grp); serial_write(b);
+                    grp++; t0 = timer_ms();
+                }
+                activity = true;
+            }
+            #endif
             #ifdef CAREOS_PERF_BENCH_AT_BOOT
             {
                 static bool started = false;

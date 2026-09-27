@@ -268,6 +268,35 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     }
 }
 
+/* Smallest window each app still lays out correctly in, derived from the
+ * app's own fixed columns (keep in sync with them), scaled with the font and
+ * capped to the screen. Applied on open, resize and snap. */
+void app_min_size(app_id_t app, i32 *w, i32 *h) {
+    i32 sc = (i32)GFX_FONT_SCALE;
+    i32 mw = MIN_WIN_W, mh = MIN_WIN_H;
+    switch (app) {
+    case APP_SETTINGS: mw = (120 + 64 * sc) + 52 + 320 * sc; mh = 420 * sc; break; /* sidebar sb, app_settings.c */
+    case APP_FILES:    mw = (88 + 52 * sc) + 420 * sc;       mh = 320 * sc; break; /* FM_SB + toolbar, app_files.c */
+    case APP_BROWSER:  mw = 460 * sc;                         mh = 320 * sc; break;
+    case APP_EDITOR:   mw = 380 * sc;                         mh = 280 * sc; break;
+    case APP_PAINT:    mw = 500 * sc;                         mh = 340 * sc; break;
+    case APP_USERS:    mw = 460 * sc;                         mh = 380 * sc; break;
+    case APP_PKGMGR:   mw = 440 * sc;                         mh = 320 * sc; break;
+    case APP_CALC:     mw = 260 * sc;                         mh = 380 * sc; break;
+    case APP_DOOM:     mw = 640;                              mh = 400 + TITLEBAR_H; break;
+    case APP_ABOUT:    mw = 460 * sc;                         mh = 420 * sc; break;
+    case APP_NETMON:   mw = 360 * sc;                         mh = 280 * sc; break;
+    case APP_SYSMON:   mw = 360 * sc;                         mh = 300 * sc; break;
+    case APP_CLOCK:    mw = 280 * sc;                         mh = 320 * sc; break;
+    default: break;
+    }
+    if (mw < MIN_WIN_W) mw = MIN_WIN_W;
+    if (mh < MIN_WIN_H) mh = MIN_WIN_H;
+    if (mw > (i32)SCREEN_W) mw = (i32)SCREEN_W;
+    if (mh > (i32)SCREEN_H - (i32)TOPBAR_H) mh = (i32)SCREEN_H - (i32)TOPBAR_H;
+    *w = mw; *h = mh;
+}
+
 /* -- Animation helpers (macOS-style open/close/minimise transitions) ------ */
 
 /* Shrink/grow a rect by `pct` percent about its own centre (integer math). */
@@ -330,6 +359,11 @@ static void wm_start_restore(window_t *w) {
 /* -- Open window -- SINGLE init path -------------------------------------- */
 window_t *wm_open(app_id_t app, const char *title,
                   i32 x, i32 y, i32 w, i32 h) {
+    {   /* Never open an app smaller than it can lay out. */
+        i32 mnw, mnh; app_min_size(app, &mnw, &mnh);
+        if (w < mnw) w = mnw;
+        if (h < mnh) h = mnh;
+    }
 
     /* If app already open -- restore + focus, no re-init */
     for (int i = 0; i < MAX_WINDOWS; i++) {
@@ -602,6 +636,13 @@ void wm_snap_focused(int mode) {
     case SNAP_BR:
         w->target_rect = rect_make(sw/2, top + sh/2, sw-sw/2, sh-sh/2); break;
     }
+    {   /* A snap zone smaller than the app's minimum grows to the minimum,
+         * staying on screen. */
+        i32 mnw, mnh; app_min_size(w->app, &mnw, &mnh);
+        rect_t *t = &w->target_rect;
+        if (t->w < mnw) { if (t->x + mnw > (i32)SCREEN_W) t->x = (i32)SCREEN_W - mnw; t->w = mnw; }
+        if (t->h < mnh) { if (t->y + mnh > (i32)SCREEN_H) t->y = (i32)SCREEN_H - mnh; t->h = mnh; }
+    }
 }
 
 /* -- Detect resize edge under cursor. A wider zone is much easier to grab, and
@@ -829,7 +870,7 @@ static void draw_window(window_t *w) {
 
     /* App content, clipped to client area (skipped mid-transition). */
     if (!transition) {
-    gfx_set_clip(wx + 1, wy + TITLEBAR_H, wd - 2, ht - TITLEBAR_H - 1);
+    gfx_set_clip_base(wx + 1, wy + TITLEBAR_H, wd - 2, ht - TITLEBAR_H - 1);
     switch (w->app) {
     case APP_TERMINAL: app_terminal_draw(w); break;
     case APP_NOTES:    app_notes_draw(w);    break;
@@ -851,7 +892,7 @@ static void draw_window(window_t *w) {
     case APP_HELP:     app_help_draw(w);     break;
     default: break;
     }
-    gfx_clear_clip();
+    gfx_clear_clip_base();
 
     if (w->showing_snap_layouts) wm_draw_snap_layouts(w);
     }
@@ -970,8 +1011,9 @@ void wm_handle_mouse(mouse_t *m) {
                 break;
             }
             /* Enforce minimum size */
-            if (r.w < MIN_WIN_W) { r.w = MIN_WIN_W; if (w->resize_edge == RESIZE_LEFT || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_BL) r.x = w->restore_rect.x + w->restore_rect.w - MIN_WIN_W; }
-            if (r.h < MIN_WIN_H) { r.h = MIN_WIN_H; if (w->resize_edge == RESIZE_TOP || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_TR) r.y = w->restore_rect.y + w->restore_rect.h - MIN_WIN_H; }
+            i32 mnw, mnh; app_min_size(w->app, &mnw, &mnh);
+            if (r.w < mnw) { r.w = mnw; if (w->resize_edge == RESIZE_LEFT || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_BL) r.x = w->restore_rect.x + w->restore_rect.w - mnw; }
+            if (r.h < mnh) { r.h = mnh; if (w->resize_edge == RESIZE_TOP || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_TR) r.y = w->restore_rect.y + w->restore_rect.h - mnh; }
             w->rect = r;
         } else {
             w->resizing = false;

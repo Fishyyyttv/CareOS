@@ -17,6 +17,10 @@
 #define FM_HDR (FONT_H * (i32)GFX_FONT_SCALE + 6)
 #define FM_STA (FONT_H * (i32)GFX_FONT_SCALE + 7)
 
+/* File list width: the whole pane when narrow, 62% (preview pane beside it)
+ * when wide. Keep in sync with app_min_size() in gui/wm.c. */
+static i32 fm_list_width(i32 avail) { return avail < 560 ? avail : avail * 62 / 100; }
+
 static const char *FM_PLACES[FM_SB_ITEMS] = {"/","~","/home","/etc","/usr/bin","/var/log"};
 
 /* Static state for view mode & mouse position & breadcrumbs */
@@ -158,7 +162,7 @@ void app_files_draw(window_t *w){
 
     /* -- Toolbar -- */
     i32 tx = cr.x+FM_SB;
-    i32 list_rw = (cr.w - FM_SB) * 62 / 100;   /* file list width; rest is preview pane */
+    i32 list_rw = fm_list_width(cr.w - FM_SB);  /* file list; the rest is the preview pane */
     gfx_rect(tx,cr.y,cr.w-FM_SB,FM_TB,COL_SURFACE3);
     gfx_hline(tx,cr.y+FM_TB,cr.w-FM_SB,COL_BORDER);
 
@@ -388,8 +392,8 @@ void app_files_draw(window_t *w){
         }
     }
 
-    /* -- Preview pane -- */
-    {
+    /* -- Preview pane (hidden when the window is too narrow for it) -- */
+    if (cr.w - FM_SB - list_rw >= 160) {
         i32 px = tx + list_rw;
         i32 pw = cr.w - FM_SB - list_rw;
         i32 pane_y = cr.y + FM_TB + FM_HDR;
@@ -725,7 +729,7 @@ void app_files_click(window_t *w, i32 x, i32 y, mouse_t *m){
     }
 
     /* -- File list / Grid view click -- */
-    i32 list_rw_c = (cr.w - FM_SB) * 62 / 100;
+    i32 list_rw_c = fm_list_width(cr.w - FM_SB);
     i32 list_top = cr.y + FM_TB + FM_HDR;
     i32 list_bottom_c = cr.y + cr.h - (w->tab != FM_MODE_BROWSE ? 24 : 0) - FM_STA;
 

@@ -83,6 +83,14 @@ void app_editor_init(window_t *w){
 /* Load a whole file into the editor. Files too big to hold entirely are
  * refused and the current document is kept: opening a truncated copy used to
  * let Save silently write the cut-down text back over the file. */
+/* Sidebar width, or 0 when hidden or when the window is too narrow to fit it
+ * beside a usable text area. */
+static i32 editor_sidebar_w(window_t *w, rect_t cr) {
+    i32 sc = (i32)GFX_FONT_SCALE;
+    if (!w->editor_show_sidebar || cr.w < 200 * sc + 360 * sc) return 0;
+    return 200 * sc;
+}
+
 static bool editor_load(window_t *w, fs_node_t *f) {
     u32 len = (f->data) ? f->size : 0;
     if (len + 1 > WIN_TEXT_MAX || !win_reserve(w, len + 1)) {
@@ -160,9 +168,8 @@ void app_editor_draw(window_t *w){
     i32 sb_h  = 20 + 4 * sc;
     i32 bar_h = (w->tab != 0) ? 32 : 0;
     
-    i32 sidebar_w = 0;
-    if (w->editor_show_sidebar) {
-        sidebar_w = 200 * sc;
+    i32 sidebar_w = editor_sidebar_w(w, cr);
+    if (sidebar_w) {
         gfx_rect(cr.x, cr.y, sidebar_w, cr.h, g_theme->surface2);
         gfx_vline(cr.x + sidebar_w, cr.y, cr.h, COL_BORDER);
         
@@ -544,9 +551,9 @@ void app_editor_click(window_t *w, i32 x, i32 y, mouse_t *m) {
     (void)m;
     rect_t cr = wm_client_rect(w);
     i32 sc = (i32)GFX_FONT_SCALE;
-    i32 sidebar_w = 200 * sc;
-    
-    if (w->editor_show_sidebar && x >= cr.x && x < cr.x + sidebar_w) {
+    i32 sidebar_w = editor_sidebar_w(w, cr);
+
+    if (sidebar_w && x >= cr.x && x < cr.x + sidebar_w) {
         if (y < cr.y + 24 * sc) {
             /* Clicked tabs */
             if (x < cr.x + 80 * sc) w->editor_sidebar_tab = 0;

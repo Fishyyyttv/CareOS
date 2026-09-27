@@ -665,6 +665,10 @@ void gfx_gradient_rect(i32 x, i32 y, i32 w, i32 h, u32 c1, u32 c2);
 void gfx_str_clipped(i32 x, i32 y, i32 max_w, const char *s, u32 fg, u32 bg);
 void gfx_set_clip(i32 x, i32 y, i32 w, i32 h);
 void gfx_clear_clip(void);
+/* Window-level clip: app gfx_set_clip() calls intersect with it, and
+ * gfx_clear_clip() restores it rather than disabling clipping. */
+void gfx_set_clip_base(i32 x, i32 y, i32 w, i32 h);
+void gfx_clear_clip_base(void);
 bool gfx_get_clip(rect_t *out);   /* false when unclipped; see gfx.c */
 i32  gfx_str_width(const char *s);
 void gfx_str_right(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg);
@@ -750,6 +754,7 @@ void app_browser_click(window_t *w, i32 x, i32 y);
 void app_browser_scroll(window_t *w, i32 delta);
 void app_terminal_scroll(window_t *w, i32 delta);   /* + = back in history */
 void app_terminal_close(window_t *w);
+void app_min_size(app_id_t app, i32 *w, i32 *h);   /* smallest usable window */
 void app_pkgmgr_click(window_t *w, i32 x, i32 y);
 void app_paint_click(window_t *w, i32 x, i32 y, mouse_t *m);
 void app_users_click(window_t *w, i32 x, i32 y);

@@ -802,8 +802,37 @@ void gfx_str_bg_none(i32 x, i32 y, const char *s, u32 fg) {
     gfx_str_ex(x, y, s, fg, COL_TRANSPARENT, FONT_BODY);
 }
 
-void gfx_set_clip(i32 x,i32 y,i32 w,i32 h){ clip_x=x;clip_y=y;clip_w=w;clip_h=h;clip_active=true; }
-void gfx_clear_clip(void){ clip_active=false; }
+/* Two-level clipping. The window manager sets a BASE clip (a window's client
+ * area) around each app's draw. App clips intersect with it, and clearing an
+ * app clip restores the base instead of disabling clipping -- apps used to
+ * gfx_set_clip/gfx_clear_clip for inner regions, which dropped the window
+ * clip and let later text spill outside their window. */
+static bool clip_base_active = false;
+static i32  cb_x, cb_y, cb_w, cb_h;
+
+void gfx_set_clip(i32 x,i32 y,i32 w,i32 h){
+    if (clip_base_active) {
+        blit_box_t b;
+        if (blit_clip(x, y, w, h, cb_x, cb_y, cb_w, cb_h, 0x7FFFFFFF, 0x7FFFFFFF, &b)) {
+            clip_x = b.x0; clip_y = b.y0; clip_w = b.x1 - b.x0; clip_h = b.y1 - b.y0;
+        } else {
+            clip_x = cb_x; clip_y = cb_y; clip_w = 0; clip_h = 0;     /* empty: draw nothing */
+        }
+    } else {
+        clip_x = x; clip_y = y; clip_w = w; clip_h = h;
+    }
+    clip_active = true;
+}
+void gfx_clear_clip(void){
+    if (clip_base_active) { clip_x = cb_x; clip_y = cb_y; clip_w = cb_w; clip_h = cb_h; clip_active = true; }
+    else clip_active = false;
+}
+void gfx_set_clip_base(i32 x, i32 y, i32 w, i32 h){
+    cb_x = x; cb_y = y; cb_w = w > 0 ? w : 0; cb_h = h > 0 ? h : 0;
+    clip_base_active = true;
+    gfx_clear_clip();
+}
+void gfx_clear_clip_base(void){ clip_base_active = false; clip_active = false; }
 
 /* Read back the active clip rect. The image blitter resolves the clip once per
  * draw into a bounds box instead of testing it per pixel, which is the whole
