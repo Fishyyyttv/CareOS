@@ -8,4 +8,7 @@
  * out_cap is the buffer size in BYTES. Returns 0 on success, -1 on error. */
 int qoi_decode(const u8 *in, u32 in_len, u32 *out_px, u32 out_cap,
                u32 *out_w, u32 *out_h);
+/* Same, but keeps alpha: 0xAARRGGBB per pixel. */
+int qoi_decode_argb(const u8 *in, u32 in_len, u32 *out_px, u32 out_cap,
+                    u32 *out_w, u32 *out_h);
 #endif

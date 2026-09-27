@@ -15,6 +15,7 @@
 #include "kernel.h"
 #include "gui.h"
 #include "image.h"
+#include "image_qoi.h"
 
 /* -- Destination binding ---------------------------------------------------
  * cx0/cy0/cx1/cy1 is the half-open intersection of the target surface and the
@@ -226,6 +227,24 @@ image_t *image_decode_cri(const u8 *data, u32 len, bool borrow) {
         /* A truncated stream yields a partially decoded image rather than a
          * failure: a half-drawn icon is a better desktop than a missing one. */
         while (out < npx) img->pixels[out++] = 0;
+        return img;
+    }
+
+    if (enc == CRI_ENC_QOI) {
+        /* QOI-compressed entry (about half the size of RLE/raw for this
+         * archive). Decoded into owned pixels; alpha is kept. */
+        image_t *img = image_alloc_header(w, h, fmt);
+        if (!img) return NULL;
+        if (fl & CRI_FLAG_HAS_ALPHA) img->flags |= IMG_HAS_ALPHA;
+        img->pixels = (u32 *)kmalloc((size_t)npx * 4u);
+        if (!img->pixels) { kfree(img); return NULL; }
+        img->flags |= IMG_OWNS_PIXELS;
+        u32 qw = 0, qh = 0;
+        if (qoi_decode_argb(payload, plen, img->pixels, npx * 4u, &qw, &qh) != 0 ||
+            qw != w || qh != h) {
+            kfree(img->pixels); kfree(img);
+            return NULL;
+        }
         return img;
     }
 
