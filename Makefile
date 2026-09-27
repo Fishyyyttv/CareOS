@@ -405,7 +405,8 @@ HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -DHOST_TEST \
 HT_SRC_qoi    := gui/image_qoi.c
 HT_SRC_perf_stats := gui/perf_stats.c
 HT_SRC_calc_engine := apps/calc_engine.c
-HOST_TESTS    := qoi perf_stats calc_engine
+HT_SRC_keychord :=
+HOST_TESTS    := qoi perf_stats calc_engine keychord
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h

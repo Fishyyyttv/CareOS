@@ -7,6 +7,7 @@
 #include "resource_cache.h"
 #include "icon.h"
 #include "perf.h"
+#include "keychord.h"
 
 static void draw_glass_panel(rect_t r, i32 radius);
 
@@ -1680,18 +1681,21 @@ void gui_run(void) {
                     continue;
                 }
 
-                if (keyboard_alt_held() && keyboard_ctrl_held() && (kl == 'p' || c == 0x10)) {
+                /* Ctrl+<letter> arrives as a control code (Ctrl+M = 0x0D), so
+                 * chords compare the normalised letter, not kl -- with kl
+                 * none of these shortcuts could ever fire. */
+                char ck = key_chord_letter(c);                if (keyboard_alt_held() && keyboard_ctrl_held() && ck == 'p') {
                     perf_hud_set(!perf_hud_enabled());
                     activity = true;
                     continue;
                 }
 
                 if (keyboard_alt_held() && keyboard_ctrl_held()) {
-                    if (kl == 'h' || kl == 'a') { wm_snap_focused(SNAP_LEFT); continue; }
-                    if (kl == 'l' || kl == 'd') { wm_snap_focused(SNAP_RIGHT); continue; }
-                    if (kl == 'k' || kl == 'w') { wm_snap_focused(SNAP_TOP); continue; }
-                    if (kl == 'j' || kl == 's') { wm_snap_focused(SNAP_BOTTOM); continue; }
-                    if (kl == 'm' || kl == 'f') { wm_snap_focused(SNAP_FULL); continue; }
+                    if (ck == 'h' || ck == 'a') { wm_snap_focused(SNAP_LEFT); continue; }
+                    if (ck == 'l' || ck == 'd') { wm_snap_focused(SNAP_RIGHT); continue; }
+                    if (ck == 'k' || ck == 'w') { wm_snap_focused(SNAP_TOP); continue; }
+                    if (ck == 'j' || ck == 's') { wm_snap_focused(SNAP_BOTTOM); continue; }
+                    if (ck == 'm' || ck == 'f') { wm_snap_focused(SNAP_FULL); continue; }
                 }
                 if (launcher_open) launcher_handle_key(c);
                 else { window_t *fw = wm_focused(); if (fw) wm_handle_key(c, fw); }
