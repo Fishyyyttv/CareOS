@@ -6,6 +6,7 @@
 #include "gui.h"
 #include "font.h"
 #include "blit.h"
+#include "span.h"
 #define GFX_TRANSPARENT 0xFFFFFFFF  /* internal skip-pixel sentinel */
 
 u32  SCREEN_W     = 1920;
@@ -491,6 +492,48 @@ void gfx_shadow_soft_ex(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i
         if (a == 0) a = 1;
         gfx_rect_rounded_blend(x - s, y - s + dy, w + 2 * s, h + 2 * s, r + s,
                                COL_SHADOW, (u8)a);
+    }
+}
+
+/* Rounded blend that skips the pixels an opaque rounded body (bx,by,bw,bh,br)
+ * will paint over anyway. Rows inside the body's straight section skip its
+ * full width; rows in its corner bands skip only the part between the
+ * corners, so the shadow still shows through the transparent rounded corners.
+ * A window shadow used to blend six full window-sized rects per frame, almost
+ * all of it hidden under the window. */
+static void rounded_blend_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, u32 color, u8 alpha,
+                                 i32 bx, i32 by, i32 bw, i32 bh, i32 br) {
+    if (w <= 0 || h <= 0 || alpha == 0) return;
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    if (br * 2 > bw) br = bw / 2;
+    if (br * 2 > bh) br = bh / 2;
+    for (i32 row = 0; row < h; row++) {
+        i32 dy = -1;
+        if (row < r) dy = (r - 1) - row;
+        else if (row >= h - r) dy = row - (h - r);
+        i32 inset = 0;
+        if (r > 0 && dy >= 0) inset = r - (i32)gfx_isqrt((u32)(r * r - dy * dy));
+        i32 yy = y + row, hx0 = 0, hx1 = 0;
+        if (yy >= by + br && yy < by + bh - br) { hx0 = bx; hx1 = bx + bw; }
+        else if (yy >= by && yy < by + bh)     { hx0 = bx + br; hx1 = bx + bw - br; }
+        i32 ox[2], ol[2];
+        u32 n = span_minus(x + inset, w - 2 * inset, hx0, hx1, ox, ol);
+        for (u32 k = 0; k < n; k++) blend_span(ox[k], yy, ol[k], color, alpha);
+    }
+    gfx_dirty(x, y, w, h);
+}
+
+void gfx_shadow_soft_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy) {
+    if (w <= 0 || h <= 0 || blur <= 0) return;
+    const i32 L = 6;
+    u32 denom = (u32)(L * (L + 1) / 2);
+    for (i32 i = L; i >= 1; i--) {
+        i32 s = blur * i / L;
+        u32 a = (u32)alpha * (u32)(L - i + 1) / denom;
+        if (a == 0) a = 1;
+        rounded_blend_hollow(x - s, y - s + dy, w + 2 * s, h + 2 * s, r + s,
+                             COL_SHADOW, (u8)a, x, y, w, h, r);
     }
 }
 

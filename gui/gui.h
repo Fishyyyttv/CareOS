@@ -689,6 +689,9 @@ void gfx_blit_argb(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh,
                    i32 clip_x, i32 clip_y, i32 clip_w, i32 clip_h);
 /* Copy target pixels (x,y,w,h) into dst; off-target pixels become 0. */
 void gfx_snapshot_rect(i32 x, i32 y, i32 w, i32 h, u32 *dst);
+/* gfx_shadow_soft_ex look, minus the pixels an opaque rounded body at
+ * (x,y,w,h,r) covers -- use only when that body is drawn right after. */
+void gfx_shadow_soft_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy);
 void gui_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gui_run(void);
 

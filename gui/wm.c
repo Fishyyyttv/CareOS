@@ -696,12 +696,22 @@ static void draw_window(window_t *w) {
     /* Soft floating drop shadow (CDL). Focused windows float higher (full CDL
      * defaults); unfocused ones sit lower with a fainter, tighter halo. Drawn
      * before the surface. */
-    if (w->focused)
-        gfx_shadow_soft(wx, wy, wd, ht, CDL_R_WINDOW);
-    else
-        gfx_shadow_soft_ex(wx, wy, wd, ht, CDL_R_WINDOW,
-                           CDL_SHADOW_BLUR * 3 / 4, CDL_SHADOW_ALPHA / 2,
-                           CDL_SHADOW_DY / 2);
+    /* Settled windows use the hollow variant: the opaque body drawn next hides
+     * everything under it, so blending there was wasted work. Transitions keep
+     * the full shadow (their body is faded over the backdrop). */
+    bool hollow = (w->opacity == 255 && !transition);
+    if (w->focused) {
+        if (hollow) gfx_shadow_soft_hollow(wx, wy, wd, ht, CDL_R_WINDOW,
+                                           CDL_SHADOW_BLUR, CDL_SHADOW_ALPHA, CDL_SHADOW_DY);
+        else        gfx_shadow_soft(wx, wy, wd, ht, CDL_R_WINDOW);
+    } else {
+        if (hollow) gfx_shadow_soft_hollow(wx, wy, wd, ht, CDL_R_WINDOW,
+                                           CDL_SHADOW_BLUR * 3 / 4, CDL_SHADOW_ALPHA / 2,
+                                           CDL_SHADOW_DY / 2);
+        else        gfx_shadow_soft_ex(wx, wy, wd, ht, CDL_R_WINDOW,
+                                       CDL_SHADOW_BLUR * 3 / 4, CDL_SHADOW_ALPHA / 2,
+                                       CDL_SHADOW_DY / 2);
+    }
 
     /* Window body */
     gfx_rect_rounded(wx, wy, wd, ht, CDL_R_WINDOW, COL_SURFACE);
