@@ -2,6 +2,7 @@
 #include "apps_common.h"
 #include "http_parse.h"
 #include "browser_fetch.h"
+#include "font.h"
 
 /* ── Layout ──────────────────────────────────────────────────────── */
 #define BROW_BAR_H    48
@@ -566,6 +567,7 @@ static void browser_apply_response(window_t *w, const char *url, const char *hos
     if (!w->browser_title[0]) kstrncpy(w->browser_title, host, 127);
     kmemcpy(w->browser_content, body, blen);
     w->browser_content[blen] = '\0';
+    w->browser_content_ver++;
     browser_save_tab(w);
     ksprintf(g_status, "%s  %d bytes%s", host, (int)blen,
              kstrncmp(url, "https://", 8) == 0 ? " (HTTPS)" : "");
@@ -582,6 +584,7 @@ static void app_browser_navigate(window_t *w, const char *url) {
     if (kstrncmp(url, "about:", 6) == 0) {
         browser_fetch_cancel(w->instance_id);
         w->browser_content[0] = '\0';
+        w->browser_content_ver++;
         kstrcpy(w->browser_title, "New Tab");
         kstrcpy(g_status, "about:home");
         w->browser_loading = false;
@@ -641,6 +644,7 @@ static void browser_save_tab(window_t *w) {
 }
 
 static void browser_switch_tab(window_t *w, u32 idx) {
+    w->browser_content_ver++;
     if (w->browser_loading) { browser_fetch_cancel(w->instance_id); w->browser_loading = false; }
     if (idx >= w->browser_tab_count) return;
     browser_save_tab(w);
@@ -818,7 +822,28 @@ static const char *browser_loading_text(void) {
     return lb;
 }
 
+static bool s_draw_cached;
+
+/* Keep this window's link boxes (with the window position they were drawn
+ * at). g_links is shared by every browser window, so clicks used to follow
+ * whichever browser window drew last. */
+static void browser_save_links(window_t *w) {
+    if (!w->browser_links) w->browser_links = kmalloc(sizeof(blink_t) * BROW_LINK_MAX);
+    if (!w->browser_links) { w->browser_nlinks = 0; return; }
+    kmemcpy(w->browser_links, g_links, sizeof(blink_t) * g_nlinks);
+    w->browser_nlinks = g_nlinks;
+    w->browser_links_wx = w->rect.x; w->browser_links_wy = w->rect.y;
+}
+
+static void browser_draw_impl(window_t *w);
+
 void app_browser_draw(window_t *w) {
+    s_draw_cached = false;
+    browser_draw_impl(w);
+    if (!s_draw_cached) browser_save_links(w);
+}
+
+static void browser_draw_impl(window_t *w) {
     rect_t cr = wm_client_rect(w);
     g_nlinks = 0;
 
@@ -998,6 +1023,21 @@ void app_browser_draw(window_t *w) {
         return;
     }
 
+    /* Page-area cache: re-laying out up to 64 KB of HTML every frame was the
+     * browser's main cost. Reuse the last render while nothing changed. */
+    u32 theme_id = (u32)(uintptr_t)g_theme ^ g_theme->text ^ (g_theme->primary << 1);
+    u32 font_id  = font_active_index() ^ (GFX_FONT_SCALE << 8);
+    bool cacheable = !w->browser_find_active && !w->browser_bm_open;
+    if (cacheable && w->bview_valid && w->bview_px && w->bview_w == cr.w &&
+        w->bview_h == cont_h && w->bview_scroll == w->browser_scroll &&
+        w->bview_ver == w->browser_content_ver && w->bview_theme == theme_id &&
+        w->bview_font == font_id) {
+        gfx_blit_argb(cr.x, cont_y, w->bview_px, cr.w, cont_h, cr.x, cont_y, cr.w, cont_h);
+        s_draw_cached = true;                /* keep this window's saved links */
+        gfx_clear_clip();
+        return;
+    }
+
     rctx_t ctx = {0};
     ctx.cx      = cr.x + 16;
     ctx.cy      = cont_y + 12 - w->browser_scroll;
@@ -1023,6 +1063,23 @@ void app_browser_draw(window_t *w) {
             ? (i32)((i64)w->browser_scroll * rng / max_sc) : 0);
         gfx_rect(sb_x, cont_y, 7, cont_h, COL_SURFACE2);
         gfx_rect_rounded(sb_x + 1, sb_y, 5, sb_h, 3, COL_DIM);
+    }
+
+    /* Capture the page area for reuse -- only when it is wholly on screen,
+     * or the missing part would be wrong once the window moves. */
+    w->bview_valid = false;
+    if (cacheable && cr.x >= 0 && cont_y >= 0 && cr.w > 0 && cont_h > 0 &&
+        cr.x + cr.w <= (i32)SCREEN_W && cont_y + cont_h <= (i32)SCREEN_H) {
+        if (w->bview_px && (w->bview_w != cr.w || w->bview_h != cont_h)) {
+            kfree(w->bview_px); w->bview_px = NULL;
+        }
+        if (!w->bview_px) w->bview_px = (u32 *)kmalloc((size_t)cr.w * (size_t)cont_h * 4u);
+        if (w->bview_px) {
+            gfx_snapshot_rect(cr.x, cont_y, cr.w, cont_h, w->bview_px);
+            w->bview_w = cr.w; w->bview_h = cont_h; w->bview_scroll = w->browser_scroll;
+            w->bview_ver = w->browser_content_ver; w->bview_theme = theme_id; w->bview_font = font_id;
+            w->bview_valid = true;
+        }
     }
 
     gfx_clear_clip();
@@ -1148,6 +1205,9 @@ void app_browser_key(window_t *w, char c) {
     else if ((u8)c == KEY_NAV_DOWN) w->browser_scroll += FH * 3;
     else if ((u8)c == KEY_NAV_UP)   w->browser_scroll -= FH * 3;
     else if ((u8)c == KEY_NAV_HOME) w->browser_scroll = 0;
+    else if ((u8)c == KEY_NAV_PGDN) w->browser_scroll += FH * 20;
+    else if ((u8)c == KEY_NAV_PGUP) w->browser_scroll -= FH * 20;
+    else if ((u8)c == KEY_NAV_END)  w->browser_scroll = 0x3FFFFFFF;   /* clamped by the next render */
     if (w->browser_scroll < 0) w->browser_scroll = 0;
 }
 
@@ -1286,9 +1346,11 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
         w->browser_bm_open    = false;
 
         /* check link clicks */
-        for (u32 i = 0; i < g_nlinks; i++) {
-            blink_t *l = &g_links[i];
-            if (x>=l->x&&x<l->x+l->w&&y>=l->y&&y<l->y+l->h) {
+        const blink_t *links = (const blink_t *)w->browser_links;
+        i32 lx = x - (w->rect.x - w->browser_links_wx), ly = y - (w->rect.y - w->browser_links_wy);
+        for (u32 i = 0; links && i < w->browser_nlinks; i++) {
+            const blink_t *l = &links[i];
+            if (lx>=l->x&&lx<l->x+l->w&&ly>=l->y&&ly<l->y+l->h) {
                 /* Resolve relative / protocol-relative hrefs against this page. */
                 char abs[512]; http_url_resolve(w->browser_url, l->url, abs, sizeof(abs));
                 w->browser_push_history = true;
@@ -1341,6 +1403,7 @@ void app_browser_tick(window_t *w) {
         ksprintf(w->browser_content, "<h1>Connection Failed</h1><p>Could not load %s.</p><p>%s</p>",
                  host, why);
         kstrcpy(w->browser_title, "Error");
+        w->browser_content_ver++;
         ksprintf(g_status, "Failed: %s", host);
         w->browser_loading = false;
         w->browser_push_history = false;

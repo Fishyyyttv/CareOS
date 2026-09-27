@@ -308,6 +308,17 @@ typedef struct window {
     u8    browser_redirects;     /* redirect hops in the current load */
     bool  browser_push_history;  /* record the URL once this load finishes */
     bool  browser_autohttps;     /* https:// was assumed; retry http:// on failure */
+    u32   browser_content_ver;   /* bumped whenever the shown page changes */
+    /* This window's link hit-boxes (blink_t[], apps/app_browser.c) as drawn,
+     * plus the window position they were drawn at. */
+    void *browser_links;
+    u32   browser_nlinks;
+    i32   browser_links_wx, browser_links_wy;
+    /* Rendered page-area cache: skip HTML re-layout while nothing changed. */
+    u32  *bview_px;
+    i32   bview_w, bview_h, bview_scroll;
+    u32   bview_ver, bview_theme, bview_font;
+    bool  bview_valid;
     bool  browser_url_active;
     i32   browser_scroll;
     u32   browser_history_pos;
