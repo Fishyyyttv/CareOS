@@ -41,6 +41,15 @@ APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-p
                -mno-red-zone
 
 CFLAGS      := $(KERN_CFLAGS)
+
+# Floating point for applications (apps/). SSE is enabled at boot (CR4.OSFXSR)
+# and the scheduler fxsave/fxrstor's every task on every switch, so FP state
+# survives preemption. Kernel, driver and GUI code keep -mno-sse, so interrupt
+# handlers never touch XMM registers and never need to save them.
+# -mincoming-stack-boundary=3: kernel stacks are only guaranteed 8-byte
+# aligned, so let gcc realign wherever SSE spills need 16.
+FP_CFLAGS   := $(filter-out -mno-mmx -mno-sse -mno-sse2,$(KERN_CFLAGS)) \
+               -msse2 -mfpmath=sse -mincoming-stack-boundary=3
 DOOM_CFLAGS := $(APP_CFLAGS) -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400
 
 DOOM_EXCLUDE := doomgeneric/doomgeneric/doomgeneric_allegro.c \
@@ -165,6 +174,7 @@ C_SRC     := kernel/kernel.c       \
              apps/app_files.c      \
              apps/app_sysmon.c     \
              apps/app_calc.c       \
+             apps/calc_engine.c    \
              apps/app_about.c      \
              apps/app_settings.c   \
              apps/app_browser.c    \
@@ -189,6 +199,11 @@ DOOM_OBJ  := $(DOOM_SRC:.c=.o)
 # /system is an in-memory VFS rebuilt every boot, so system artwork cannot live
 # on disk. gui/resource_boot.c publishes it into the VFS at gui_init().
 ICON_ARCHIVE := assets/careos-icons.cra
+
+# apps/ objects are built with FP_CFLAGS (see above). Changing this set
+# requires rebuilding those objects: make clean, or rm apps/*.o.
+FP_OBJ    := $(patsubst %.c,%.o,$(filter apps/%.c,$(C_SRC)))
+$(FP_OBJ): CFLAGS := $(FP_CFLAGS)
 
 ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o $(ICON_ARCHIVE).o
 
@@ -389,7 +404,8 @@ HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -DHOST_TEST \
                  -fno-omit-frame-pointer
 HT_SRC_qoi    := gui/image_qoi.c
 HT_SRC_perf_stats := gui/perf_stats.c
-HOST_TESTS    := qoi perf_stats
+HT_SRC_calc_engine := apps/calc_engine.c
+HOST_TESTS    := qoi perf_stats calc_engine
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h

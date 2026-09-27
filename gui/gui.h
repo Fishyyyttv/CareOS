@@ -275,12 +275,10 @@ typedef struct window {
     struct fs_node *fm_dir;
     u32             fm_sel;
 
-    char  calc_display[32];
-    char  calc_expr[128];
-    i32   calc_val, calc_prev;
-    char  calc_op;
-    bool  calc_new_num;
-    bool  calc_error;
+    /* Calculator: opaque storage for a calc_t (apps/calc_engine.h). It holds
+     * doubles, which kernel-flag (-mno-sse) code must never touch, so only
+     * FP-built apps/ code interprets it. */
+    u64   calc_state[16];
 
     u32   sysmon_tick;
     u32   z_order;
