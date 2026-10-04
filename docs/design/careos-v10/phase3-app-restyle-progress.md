@@ -18,8 +18,8 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 | 1 | Terminal | **done** |
 | 2 | Settings | **done** |
 | 3 | Files | **done** |
-| 4 | Notes | next |
-| 5 | Editor | |
+| 4 | Notes | **done** |
+| 5 | Editor | next |
 | 6 | Browser | |
 | 7 | Packages (Store) | |
 
@@ -147,3 +147,37 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 - "Projects is user-addable" isn't done: there is no favorites store yet.
 - Images open nowhere (there's no viewer), so they show Preview only and
   Open says so.
+
+## 4. Notes
+
+- Rebuilt around `~/Notes/` (created on the first note; an old
+  `~/notes.txt` is copied in as `Notes.md` then). Notes are plain `.md`
+  files, and subfolders of `~/Notes` are the folders.
+- **Folders pane**: All notes, each folder and Pinned, with real counts, plus
+  a dashed **New folder** that becomes a name field.
+- **List pane**: search (title and first line), the honey **+** button, and
+  cards with the title and first line. Pinned cards show a heart.
+  Empty / no-match / nothing-pinned states say what to do.
+- **Editor**: a live preview. Every line is drawn styled (Display 28 title,
+  `##` headings, **checkboxes** that toggle on click and strike through
+  when done, quote callouts, bullets, **bold**; italic shows in ink-2),
+  except the caret line, which shows its Markdown source. The toolbar has
+  B / I / H / checklist (B / I insert the markers; H and the checklist
+  toggle the line prefix), Pin and Delete (a second click within 3 s
+  confirms). Enter continues a checklist, bullet or quote, and ends it on an
+  empty item. Arrows, Home / End and PgUp / PgDn work. Ctrl+N new, Ctrl+F
+  search, Ctrl+S save, Ctrl+B bold.
+- Saving is automatic: 2 s after the last edit, on switching notes, and on
+  close. The file is renamed after the title when that name is free.
+  Pinned notes are listed in `~/Notes/.pinned`.
+- `apps/notes_md.c` (host-tested, including the spec's checklist
+  round-trip): line kinds, checklist toggle, prefix toggle, title /
+  snippet, file names, inline spans.
+
+### Deviations
+- No dates (the canvas "Today", "Saturday, October 3 · 9:28 AM"): the VFS
+  keeps no timestamps.
+- No insert-image button: there is no picker, and no image blocks in notes.
+- Italic is drawn in ink-2, because there is no italic font face.
+- Clicking puts the caret at the start or end of a line, not at the exact
+  character.

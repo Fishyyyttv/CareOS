@@ -201,6 +201,7 @@ C_SRC     := kernel/kernel.c       \
              apps/term_cmds.c      \
              apps/settings_index.c \
              apps/care_syntax.c    \
+             apps/notes_md.c       \
              apps/app_notes.c      \
              apps/app_files.c      \
              apps/app_sysmon.c     \
@@ -453,7 +454,9 @@ HT_SRC_fetch_token := apps/fetch_token.c
 HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
 HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring account_rules
-HOST_TESTS    += term_cmds settings_index care_syntax
+HOST_TESTS    += term_cmds settings_index care_syntax notes_md
+HT_SRC_notes_md := apps/notes_md.c
+$(HOST_TEST_DIR)/test_notes_md: apps/notes_md.h
 HT_SRC_care_syntax := apps/care_syntax.c
 $(HOST_TEST_DIR)/test_care_syntax: apps/care_syntax.h
 HT_SRC_settings_index := apps/settings_index.c

@@ -337,6 +337,7 @@ static void wm_finish_close(window_t *w) {
     if (w->wcache_px) { kfree(w->wcache_px); w->wcache_px = NULL; }
     if (w->app == APP_TERMINAL) app_terminal_close(w);
     if (w->app == APP_FILES) app_files_close(w);
+    if (w->app == APP_NOTES) app_notes_close(w);   /* saves before the state goes */
     if (w->app_state) { kfree(w->app_state); w->app_state = NULL; }
     if (w->app == APP_BROWSER) {
         browser_fetch_cancel(w->instance_id);
