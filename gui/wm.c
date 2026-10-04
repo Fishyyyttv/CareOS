@@ -280,7 +280,7 @@ void app_min_size(app_id_t app, i32 *w, i32 *h) {
     i32 mw = MIN_WIN_W, mh = MIN_WIN_H;
     switch (app) {
     case APP_SETTINGS: mw = (120 + 64 * sc) + 52 + 320 * sc; mh = 420 * sc; break; /* sidebar sb, app_settings.c */
-    case APP_FILES:    mw = (88 + 52 * sc) + 420 * sc;       mh = 320 * sc; break; /* FM_SB + toolbar, app_files.c */
+    case APP_FILES:    mw = 180 + 420 * sc;                  mh = 360 * sc; break; /* sidebar + grid, app_files.c */
     case APP_BROWSER:  mw = 460 * sc;                         mh = 320 * sc; break;
     case APP_EDITOR:   mw = 380 * sc;                         mh = 280 * sc; break;
     case APP_PAINT:    mw = 500 * sc;                         mh = 340 * sc; break;
@@ -336,6 +336,8 @@ static void wm_finish_close(window_t *w) {
     if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
     if (w->wcache_px) { kfree(w->wcache_px); w->wcache_px = NULL; }
     if (w->app == APP_TERMINAL) app_terminal_close(w);
+    if (w->app == APP_FILES) app_files_close(w);
+    if (w->app_state) { kfree(w->app_state); w->app_state = NULL; }
     if (w->app == APP_BROWSER) {
         browser_fetch_cancel(w->instance_id);
         if (w->bview_px) { kfree(w->bview_px); w->bview_px = NULL; }

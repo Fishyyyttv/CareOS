@@ -17,8 +17,8 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 |---|---|---|
 | 1 | Terminal | **done** |
 | 2 | Settings | **done** |
-| 3 | Files | next |
-| 4 | Notes | |
+| 3 | Files | **done** |
+| 4 | Notes | next |
 | 5 | Editor | |
 | 6 | Browser | |
 | 7 | Packages (Store) | |
@@ -111,3 +111,39 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 - The title bar is the normal window chrome; the canvas puts the traffic
   lights inside the sidebar.
 - No "Your photo" wallpaper tile: there is no file picker yet.
+
+## 3. Files
+
+- Per-window state (new generic `window_t.app_state`, freed on close).
+  The hit list per window means two Files windows never cross clicks.
+- **Sidebar**: Favorites (Home, Desktop, Documents, Downloads, Pictures,
+  Projects), shown only when the folder exists, with coloured glyphs; the
+  heading hides when there are none. Locations: CareOS disk with a real
+  "X free of Y" bar (ext2), or "In memory (no disk mounted)".
+- **Toolbar in the title bar**: back / forward (8-deep path history), a
+  breadcrumb (home shows as your name, last segment in Bricolage, trailing
+  segments when it doesn't fit), "Search <folder>" (filters this folder;
+  Ctrl+F, Esc clears), grid / list toggle, **New** menu (folder / file).
+- **Grid**: 132 px tiles; folders in a coloured shape (favorite colour or
+  a name hash), files as paper tiles tinted by type with the extension
+  label. Selected tiles get a care-soft fill and a 2 px care border.
+  **List**: name, kind, size (item count for folders).
+- **Preview pane** (300 px, hidden below ~1000 px window width): the first
+  lines of text files in Mono with Care / C syntax colours
+  (`apps/care_syntax.c`, host-tested, shared with the Editor next); an
+  image thumbnail via `image_load` (cached per selection); a big folder for
+  folders. Then name, kind - size, Location, Opens with, **Open**, and
+  **Run in Terminal** for `.cl` (types `care <path>` into a terminal
+  through the new `app_terminal_run`).
+- Rename / New use a small modal sheet (Enter / Esc / buttons) instead of
+  the old input strip. Empty and no-match states say what to do.
+- Keyboard: arrows move in the grid, Enter opens, Backspace goes up,
+  Del / d deletes, r renames, n / m new file / folder, g toggles view,
+  Ctrl+C / X / V as before.
+
+### Deviations
+- No "Modified" date: the VFS keeps no timestamps.
+- No Trash location: there is no trash; delete is immediate, as before.
+- "Projects is user-addable" isn't done: there is no favorites store yet.
+- Images open nowhere (there's no viewer), so they show Preview only and
+  Open says so.

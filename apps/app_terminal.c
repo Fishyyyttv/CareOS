@@ -891,6 +891,9 @@ static void term_submit(window_t *w, const char *line_in) {
     if (st) st->follow = true;
 }
 
+/* Run a command in this terminal as if it was typed (Files: Run in Terminal). */
+void app_terminal_run(window_t *w, const char *cmd) { term_submit(w, cmd); }
+
 /* Field idx (0-based) of a rich line's TERM_SEP-separated payload. */
 static void term_field(const char *s, u32 len, u32 idx, char *out, u32 cap) {
     u32 f = 0, n = 0;

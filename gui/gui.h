@@ -433,6 +433,7 @@ typedef struct window {
 
     /* Pixel cache for unfocused, settled windows (gui/wcache.h). */
     void          *term_state;   /* Terminal wrap/scroll state (apps/app_terminal.c) */
+    void          *app_state;    /* per-app state (Files, ...); kfree'd when the window closes */
     wcache_state_t wcache;
     u32           *wcache_px;
 } window_t;
@@ -669,6 +670,10 @@ void app_notes_click(window_t *w, i32 x, i32 y);
 void app_files_init(window_t *w);
 void app_files_draw(window_t *w);
 void app_files_key(window_t *w, char c);
+void app_files_close(window_t *w);
+bool app_files_toolbar(window_t *w, rect_t bar);
+bool app_files_toolbar_click(window_t *w, i32 x, i32 y);
+void app_terminal_run(window_t *w, const char *cmd);   /* type + run a command */
 
 void app_sysmon_draw(window_t *w);
 void app_sysmon_tick(window_t *w);
