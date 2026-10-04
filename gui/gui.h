@@ -672,6 +672,9 @@ void app_files_draw(window_t *w);
 void app_files_key(window_t *w, char c);
 void app_files_close(window_t *w);
 void app_notes_close(window_t *w);
+void app_editor_close(window_t *w);
+bool app_editor_toolbar(window_t *w, rect_t bar);
+bool app_editor_toolbar_click(window_t *w, i32 x, i32 y);
 bool app_files_toolbar(window_t *w, rect_t bar);
 bool app_files_toolbar_click(window_t *w, i32 x, i32 y);
 void app_terminal_run(window_t *w, const char *cmd);   /* type + run a command */

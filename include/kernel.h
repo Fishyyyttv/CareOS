@@ -378,6 +378,10 @@ void sysinfo_print(void);
 /* -- Care Language interpreter -------------------------------------------- */
 int care_lang_exec(const char *src, u32 len);
 int care_lang_exec_buf(const char *src, u32 len, char *out, u32 out_max);
+u32 care_lang_builtin_count(void);
+const char *care_lang_builtin_name(u32 i);
+const char *care_lang_builtin_sig(u32 i);      /* e.g. "sys_alert(text)" */
+u32 care_lang_last_error_line(void);           /* 0 = last run was clean */
 
 /* -- Startup scripts (rc.care) --------------------------------------------- */
 void rc_care_run_startup(void);

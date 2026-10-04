@@ -19,8 +19,8 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 | 2 | Settings | **done** |
 | 3 | Files | **done** |
 | 4 | Notes | **done** |
-| 5 | Editor | next |
-| 6 | Browser | |
+| 5 | Editor | **done** |
+| 6 | Browser | next |
 | 7 | Packages (Store) | |
 
 ## 1. Terminal
@@ -181,3 +181,41 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 - Italic is drawn in ink-2, because there is no italic font face.
 - Clicking puts the caret at the start or end of a line, not at the exact
   character.
+
+## 5. Editor
+
+- Rewritten around a **real caret**: arrows, smart Home / End,
+  PgUp / PgDn, click-to-place (monospace column), Backspace that removes a
+  whole indent step, auto-indent after `{`, and `}` dedent. The old editor
+  could only append and delete at the end.
+- **Title-bar toolbar**: "<folder> - Editor" centered, with **Run**
+  (Care files only) on the right. Run (or Ctrl+E) executes the buffer
+  through `care_lang_exec_buf` and opens the **Output** panel with
+  "Finished in X s" or "Stopped at line N". The failing line is tinted.
+- **Explorer**: the open file's folder (the header goes up a level,
+  subfolders open), coloured dots by type, and the active file
+  highlighted. **Problems**: the real result of the last Run of this file
+  ("Not checked yet -- press Run" before that). New
+  `care_lang_last_error_line()` reports where the interpreter stopped.
+- **Tabs**: up to 4 files with a modified dot and close (×; a second
+  click within 3 s discards unsaved changes). Ctrl+W closes. Files
+  opened from Files land in the editor as before.
+- Code view: Mono 14, muted gutter, current-line highlight, Care / C
+  colours from `care_syntax.c`, plus calls (`name(`) in the built-in blue.
+- **Docs panel** (Ctrl+B toggles; hidden below ~1180 px): Basics,
+  Functions, Control flow, and **Built-ins** listed from care_lang's own
+  native table (`care_lang_builtin_sig`). The natives are now registered
+  from that same table, so the two can't drift.
+- Status bar (care): language ("Care 9.0" / "C" / "Plain text"), Edited,
+  "Ln X, Col Y", "Spaces: 4". Find / Replace / Open / Save-as bars kept
+  and restyled.
+
+### Deviations
+- No branch name ("main") or "UTF-8": there is no git, and the fonts are
+  ASCII only.
+- No "Terminal" tab in the Output panel; Run in Terminal lives in Files.
+- No "Talk to Pip" docs card (phase 4).
+- Problems shows only the line where the run stopped, not a message:
+  care_lang reports no error text.
+- Keywords use the canvas purple, not the spec's care_soft, to match the
+  artboard and the Files preview.
