@@ -20,8 +20,8 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 | 3 | Files | **done** |
 | 4 | Notes | **done** |
 | 5 | Editor | **done** |
-| 6 | Browser | next |
-| 7 | Packages (Store) | |
+| 6 | Browser | **done** |
+| 7 | Packages (Store) | next |
 
 ## 1. Terminal
 
@@ -219,3 +219,40 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
   care_lang reports no error text.
 - Keywords use the canvas purple, not the spec's care_soft, to match the
   artboard and the Files preview.
+
+## 6. Browser
+
+- **Tabs in the title bar** (toolbar hook): rounded-top tabs up to 220
+  px with favicon letters (coloured by host; the care heart for New
+  Tab), "Loading..." while fetching, close × when there is more than one
+  tab, and "+" (4 tabs max, as before).
+- **Toolbar row**: back / forward / reload glyph buttons, an **address
+  pill** (search glyph, or a green lock for https; the host in bold and
+  the path dimmed; the full URL while editing; typing replaces
+  `about:home`), a **bookmark ribbon** that toggles the real bookmark
+  (Ctrl+D does the same), and a **"..." menu** (Find in page, View
+  source, New Tab page, and the bookmarks list with remove). The old Go
+  and "*" buttons are gone; Enter navigates.
+- **New Tab page**: "Where to?" (Display), a big search field that is
+  the address input (Search submits through the existing smart navigate:
+  address or DuckDuckGo Lite), a speed dial of the **real bookmarks**
+  plus "Add site", "Pick up where you left off" (the 2 newest history
+  entries, shown only when there are any), and a Privacy card that's true:
+  history stays in the window and is cleared on close; bookmarks are
+  saved on this computer. The old hard-coded Quick Links are gone.
+- Loading shows the host, elapsed time and a progress strip. The status
+  line appears only while loading or after a failure or stop.
+- The page renderer and its cache are unchanged; clicks use a hit list
+  (`window_t.app_state`).
+
+### Deviations
+- No Downloads button: there are no downloads.
+- No tracker-blocking line: there's no blocker (per spec).
+- The "search URL" setting doesn't exist, so search always uses
+  DuckDuckGo Lite (unchanged behaviour).
+
+### Observed, not caused here
+- In a few QA runs the menu-bar or widget clock showed one hour ahead for
+  a moment (e.g. 13:50 vs 12:50). It happened before these changes too
+  (Settings run). It looks like an RTC read race under QEMU TCG; worth a
+  look later.

@@ -3,9 +3,10 @@
 #include "http_parse.h"
 #include "browser_fetch.h"
 #include "font.h"
+#include "ui.h"
 
 /* ── Layout ──────────────────────────────────────────────────────── */
-#define BROW_BAR_H    48
+#define BROW_BAR_H    56
 #define BROW_STAT_H   24
 #define BROW_CONT_MAX 65536      /* must match window_t.browser_content[] */
 #define BROW_RESP_SZ  131072     /* raw HTTP response incl. headers */
@@ -804,56 +805,262 @@ void app_browser_init(window_t *w) {
     kstrcpy(g_status, "Ready");
 }
 
-/* ── Home page ───────────────────────────────────────────────────── */
-static void draw_home(window_t *w, rect_t cr) {
-    i32 cy = cr.y + 32;
+/* ── v10 chrome state (w->app_state) ─────────────────────────────── */
+enum { BA_NONE = 0, BA_TAB, BA_TAB_CLOSE, BA_NEW_TAB, BA_BACK, BA_FWD, BA_RELOAD, BA_URL,
+       BA_BOOKMARK, BA_MENU, BA_M_FIND, BA_M_SOURCE, BA_M_HOME, BA_M_BM, BA_M_BM_DEL,
+       BA_HOME_SEARCH, BA_ADD_SITE };
+typedef struct { rect_t r; u8 act; i32 arg; } bhit_t;
+typedef struct {
+    bhit_t tb[12];   u32 ntb;      /* title-bar tabs */
+    bhit_t hits[40]; u32 nhits;    /* toolbar, menu, home page */
+    bool   menu_open;
+} bstate_t;
 
-    gfx_str_centered(cr.x, cy, cr.w, "CareOS Browser", COL_TEXT, COL_TRANSPARENT);
-    cy += FH + 6;
-    gfx_str_centered(cr.x, cy, cr.w,
-        "Type a URL or search in the bar above", COL_DIM, COL_TRANSPARENT);
-    cy += FH + 20;
-
-    gfx_hline(cr.x + cr.w/5, cy, cr.w*3/5, COL_BORDER);
-    cy += 16;
-
-    gfx_str(cr.x+20, cy, "Quick Links", COL_ACCENT, COL_TRANSPARENT);
-    cy += FH + 10;
-
-    const char *labels[] = {
-        "DuckDuckGo Search", "example.com (HTTPS test)", "Wikipedia: CareOS", "info.cern.ch (first website)"
-    };
-    const char *urls[] = {
-        "https://lite.duckduckgo.com/lite/?q=CareOS", "https://example.com",
-        "https://en.wikipedia.org/wiki/CareOS", "http://info.cern.ch"
-    };
-    for (int i = 0; i < 4; i++) {
-        i32 rh = FH + 12;
-        gfx_rect_rounded(cr.x+16, cy, cr.w-32, rh, 6, COL_SURFACE2);
-        gfx_rect_rounded_outline(cr.x+16, cy, cr.w-32, rh, 6, COL_BORDER);
-        gfx_str(cr.x+28, cy+6, labels[i], COL_PRIMARY, COL_TRANSPARENT);
-        if (g_nlinks < BROW_LINK_MAX) {
-            g_links[g_nlinks].x = cr.x+16; g_links[g_nlinks].y = cy;
-            g_links[g_nlinks].w = cr.w-32; g_links[g_nlinks].h = rh;
-            kstrncpy(g_links[g_nlinks].url, urls[i], 191);
-            g_nlinks++;
-        }
-        cy += rh + 6;
+static bstate_t *bst(window_t *w) {
+    if (!w->app_state) {
+        bstate_t *s = (bstate_t *)kmalloc(sizeof(bstate_t));
+        if (!s) return NULL;
+        kmemset(s, 0, sizeof *s);
+        w->app_state = s;
     }
+    return (bstate_t *)w->app_state;
+}
+static void bhit(bstate_t *s, rect_t r, u8 act, i32 arg) {
+    if (s && s->nhits < 40) { s->hits[s->nhits].r = r; s->hits[s->nhits].act = act; s->hits[s->nhits].arg = arg; s->nhits++; }
+}
+static i32 ulh(u32 slot) { return gfx_role_line_h(FONT_ROLE_UI, slot); }
 
-    cy += 12;
-    gfx_str_centered(cr.x, cy, cr.w,
-        "HTTP ready. HTTPS is experimental.", COL_DIM, COL_TRANSPARENT);
-    (void)w;
+/* Chrome colours (the page itself keeps the renderer's colours). */
+typedef struct { u32 page, strip, field, line, ink, ink2, muted; bool dark; } bpal_t;
+static bpal_t bpal(void) {
+    bpal_t p;
+    p.dark = g_theme->is_dark;
+    p.page  = p.dark ? rgb(0x12, 0x17, 0x29) : rgb(0xff, 0xff, 0xff);
+    p.strip = p.dark ? rgb(0x0c, 0x10, 0x20) : rgb(0xee, 0xf0, 0xf6);
+    p.field = p.dark ? rgb(0x1a, 0x20, 0x38) : rgb(0xf1, 0xf3, 0xf8);
+    p.line  = p.dark ? rgb(0x1f, 0x25, 0x3d) : rgb(0xe1, 0xe4, 0xee);
+    p.ink = g_theme->ink; p.ink2 = g_theme->ink2; p.muted = g_theme->muted;
+    return p;
+}
+
+/* Host part of a URL ("" for about: pages). */
+static void url_host(const char *url, char *out, u32 cap) {
+    const char *h = url;
+    out[0] = '\0';
+    if (!kstrncmp(url, "https://", 8)) h = url + 8;
+    else if (!kstrncmp(url, "http://", 7)) h = url + 7;
+    else return;
+    u32 i = 0;
+    while (h[i] && h[i] != '/' && i + 1 < cap) { out[i] = h[i]; i++; }
+    out[i] = '\0';
+}
+
+static const u32 FAV_COLS[6] = {
+    rgb(0x8e,0x4d,0xf0), rgb(0x1f,0xa5,0x62), rgb(0x12,0x90,0xc2),
+    rgb(0xe2,0x50,0x8f), rgb(0xf2,0x78,0x2e), rgb(0x4f,0x5e,0xf2)
+};
+static u32 fav_col(const char *s) { u32 h = 0; for (; *s; s++) h = h * 31u + (u8)*s; return FAV_COLS[h % 6u]; }
+
+/* A lettered square for a site (the care heart for New Tab). */
+static void favicon(i32 x, i32 y, i32 sz, const char *url, const char *title) {
+    char host[96]; url_host(url, host, sizeof host);
+    if (!host[0]) { ui_care_logo(x, y, sz); return; }
+    const char *src = host;
+    if (!kstrncmp(src, "www.", 4)) src += 4;
+    char l[2] = { src[0] ? src[0] : (title[0] ? title[0] : '?'), '\0' };
+    if (l[0] >= 'a' && l[0] <= 'z') l[0] = (char)(l[0] - 32);
+    gfx_rect_rounded(x, y, sz, sz, sz / 4, fav_col(src));
+    u32 slot = sz >= 40 ? 1 : 0;
+    i32 tw = gfx_str_role_width(l, FONT_ROLE_DISPLAY, slot, FONT_W_BOLD);
+    i32 th = gfx_role_line_h(FONT_ROLE_DISPLAY, slot);
+    gfx_str_role(x + (sz - tw) / 2, y + (sz - th) / 2, l, rgb(0xff, 0xff, 0xff), FONT_ROLE_DISPLAY, slot, FONT_W_BOLD);
+}
+
+static bool is_bookmarked(window_t *w, i32 *idx) {
+    for (u32 i = 0; i < w->browser_bm_count; i++)
+        if (!kstrcmp(w->browser_bm_url[i], w->browser_url)) { if (idx) *idx = (i32)i; return true; }
+    return false;
+}
+static void bookmark_remove(window_t *w, u32 bi) {
+    if (bi >= w->browser_bm_count) return;
+    for (u32 k = bi; k + 1 < w->browser_bm_count; k++) {
+        kstrncpy(w->browser_bm_url[k],   w->browser_bm_url[k+1],   127);
+        kstrncpy(w->browser_bm_title[k], w->browser_bm_title[k+1],  31);
+    }
+    w->browser_bm_count--;
+    bookmarks_save(w);
+}
+static void bookmark_toggle(window_t *w) {
+    i32 i;
+    if (!kstrncmp(w->browser_url, "about:", 6) || !w->browser_url[0]) return;
+    if (is_bookmarked(w, &i)) { bookmark_remove(w, (u32)i); notify_push("Browser", "Bookmark removed", COL_ACCENT); return; }
+    if (w->browser_bm_count >= 8) { notify_push("Browser", "8 bookmarks max -- remove one from the menu first", g_theme->warning); return; }
+    kstrncpy(w->browser_bm_title[w->browser_bm_count], w->browser_title[0] ? w->browser_title : w->browser_url, 31);
+    w->browser_bm_title[w->browser_bm_count][31] = '\0';
+    kstrncpy(w->browser_bm_url[w->browser_bm_count], w->browser_url, 127);
+    w->browser_bm_url[w->browser_bm_count][127] = '\0';
+    w->browser_bm_count++;
+    bookmarks_save(w);
+    notify_push("Browser", "Bookmarked -- it's on the New Tab page", g_theme->success);
+}
+
+static void begin_url_edit(window_t *w, bool clear) {
+    if (!w->browser_url_active) { kstrncpy(s_url_before_edit, w->browser_url, 255); s_url_before_edit[255] = '\0'; }
+    w->browser_url_active = true;
+    w->browser_find_active = false;
+    if (clear || !kstrncmp(w->browser_url, "about:", 6)) w->browser_url[0] = '\0';
+}
+
+/* ── Title-bar tabs ──────────────────────────────────────────────── */
+bool app_browser_toolbar(window_t *w, rect_t bar) {
+    bstate_t *s = bst(w);
+    if (!s) return false;
+    bpal_t p = bpal();
+    s->ntb = 0;
+    u32 n = w->browser_tab_count < 1 ? 1 : w->browser_tab_count;
+    i32 plus = w->browser_tab_count < 4 ? 40 : 0;
+    i32 tw = (bar.w - plus) / (i32)n;
+    if (tw > 220) tw = 220;
+    if (tw < 90) tw = 90;
+    i32 x = bar.x, ty = bar.y + 10, th = bar.h - 10;
+    for (u32 i = 0; i < w->browser_tab_count && x + tw <= bar.x + bar.w - plus; i++) {
+        bool on = i == w->browser_tab_sel;
+        const char *url = on ? w->browser_url : w->browser_tab_url[i];
+        const char *title = on ? w->browser_title : w->browser_tab_title[i];
+        if (on && w->browser_url_active) url = s_url_before_edit[0] ? s_url_before_edit : "about:home";
+        if (on) gfx_rect_rounded(x, ty, tw, th + 14, 12, p.page);
+        favicon(x + 12, ty + (th - 16) / 2, 16, url, title);
+        bool can_close = w->browser_tab_count > 1;
+        i32 lw = tw - 12 - 16 - 8 - (can_close ? 30 : 10);
+        const char *label = (on && w->browser_loading) ? "Loading..." : (title[0] ? title : "New Tab");
+        gfx_str_role_fit(x + 36, ty + (th - ulh(1)) / 2, lw, label, on ? p.ink : p.ink2, FONT_ROLE_UI, 1, on ? FONT_W_BOLD : FONT_W_REGULAR);
+        if (can_close) {
+            ui_glyph(UI_GLYPH_CLOSE, x + tw - 26, ty + (th - 12) / 2, 12, p.muted);
+            s->tb[s->ntb].r = rect_make(x + tw - 32, ty, 28, th); s->tb[s->ntb].act = BA_TAB_CLOSE; s->tb[s->ntb].arg = (i32)i; s->ntb++;
+        }
+        s->tb[s->ntb].r = rect_make(x, ty, tw, th); s->tb[s->ntb].act = BA_TAB; s->tb[s->ntb].arg = (i32)i; s->ntb++;
+        x += tw + 4;
+    }
+    if (plus) {
+        ui_glyph(UI_GLYPH_PLUS, x + 8, ty + (th - 16) / 2, 16, p.ink2);
+        s->tb[s->ntb].r = rect_make(x, ty, 32, th); s->tb[s->ntb].act = BA_NEW_TAB; s->tb[s->ntb].arg = 0; s->ntb++;
+    }
+    return true;
+}
+
+bool app_browser_toolbar_click(window_t *w, i32 x, i32 y) {
+    bstate_t *s = bst(w);
+    if (!s) return false;
+    for (u32 i = 0; i < s->ntb; i++) {
+        const bhit_t *h = &s->tb[i];
+        if (!rect_contains(h->r, x, y)) continue;
+        s->menu_open = false;
+        if (h->act == BA_TAB_CLOSE) browser_close_tab(w, (u32)h->arg);
+        else if (h->act == BA_TAB) browser_switch_tab(w, (u32)h->arg);
+        else if (h->act == BA_NEW_TAB) browser_open_tab(w);
+        return true;
+    }
+    return false;
+}
+
+/* ── New Tab page ────────────────────────────────────────────────── */
+static void draw_home(window_t *w, rect_t cr) {
+    bstate_t *s = bst(w);
+    bpal_t p = bpal();
+    gfx_rect(cr.x, cr.y, cr.w, cr.h, p.page);
+    i32 cy = cr.y + (cr.h > 640 ? 64 : 28);
+    const char *title = "Where to?";
+    i32 tw = gfx_str_role_width(title, FONT_ROLE_DISPLAY, 3, FONT_W_BOLD);
+    gfx_str_role(cr.x + (cr.w - tw) / 2, cy, title, p.ink, FONT_ROLE_DISPLAY, 3, FONT_W_BOLD);
+    cy += gfx_role_line_h(FONT_ROLE_DISPLAY, 3) + 24;
+
+    /* big search field: the same input as the address bar */
+    i32 sw = cr.w - 80 < 640 ? cr.w - 80 : 640, sh = 58;
+    i32 sx = cr.x + (cr.w - sw) / 2;
+    gfx_shadow_soft(sx, cy, sw, sh, 20);
+    gfx_rect_rounded(sx, cy, sw, sh, 20, p.field);
+    gfx_rect_rounded_outline(sx, cy, sw, sh, 20, w->browser_url_active ? g_theme->care : p.line);
+    ui_glyph(UI_GLYPH_SEARCH, sx + 20, cy + 19, 20, p.ink2);
+    const char *q = (w->browser_url_active && kstrncmp(w->browser_url, "about:", 6)) ? w->browser_url : "";
+    i32 qy = cy + (sh - ulh(3)) / 2;
+    i32 bw = gfx_str_role_width("Search", FONT_ROLE_UI, 2, FONT_W_BOLD) + 36;
+    if (q[0]) gfx_str_role_fit(sx + 52, qy, sw - 52 - bw - 20, q, p.ink, FONT_ROLE_UI, 3, FONT_W_REGULAR);
+    else gfx_str_role_fit(sx + 52, qy, sw - 52 - bw - 20, "Search the web or type an address", p.muted, FONT_ROLE_UI, 3, FONT_W_REGULAR);
+    if (w->browser_url_active && ((timer_ms() / 500) & 1) == 0) {
+        i32 cx = sx + 52 + (q[0] ? gfx_str_role_width(q, FONT_ROLE_UI, 3, FONT_W_REGULAR) : 0);
+        if (cx < sx + sw - bw - 16) gfx_rect(cx, qy, 2, ulh(3), g_theme->care);
+    }
+    gfx_rect_rounded(sx + sw - 8 - bw, cy + 8, bw, sh - 16, 14, g_theme->care);
+    gfx_str_role(sx + sw - 8 - bw + 18, cy + (sh - ulh(2)) / 2, "Search", g_theme->on_care, FONT_ROLE_UI, 2, FONT_W_BOLD);
+    bhit(s, rect_make(sx, cy, sw - bw - 16, sh), BA_HOME_SEARCH, 0);
+    bhit(s, rect_make(sx + sw - 8 - bw, cy + 8, bw, sh - 16), BA_HOME_SEARCH, 1);
+    cy += sh + 30;
+
+    /* speed dial: real bookmarks, then Add site */
+    u32 nt = w->browser_bm_count + 1;
+    i32 tile = 108, gap = 14;
+    i32 cols = (cr.w - 40 + gap) / (tile + gap); if (cols > 6) cols = 6; if (cols < 1) cols = 1;
+    if ((u32)cols > nt) cols = (i32)nt;
+    i32 gx = cr.x + (cr.w - (cols * tile + (cols - 1) * gap)) / 2;
+    for (u32 i = 0; i < nt; i++) {
+        i32 tx = gx + (i32)(i % (u32)cols) * (tile + gap), ty = cy + (i32)(i / (u32)cols) * (tile + gap);
+        gfx_rect_rounded(tx, ty, tile, tile, 20, p.field);
+        if (!p.dark) gfx_rect_rounded_outline(tx, ty, tile, tile, 20, p.line);
+        if (i < w->browser_bm_count) {
+            favicon(tx + (tile - 44) / 2, ty + 18, 44, w->browser_bm_url[i], w->browser_bm_title[i]);
+            gfx_str_role_fit(tx + 10, ty + 18 + 44 + 10, tile - 20, w->browser_bm_title[i], p.ink, FONT_ROLE_UI, 1, FONT_W_BOLD);
+            if (g_nlinks < BROW_LINK_MAX) {
+                g_links[g_nlinks].x = tx; g_links[g_nlinks].y = ty; g_links[g_nlinks].w = tile; g_links[g_nlinks].h = tile;
+                kstrncpy(g_links[g_nlinks].url, w->browser_bm_url[i], 191); g_nlinks++;
+            }
+        } else {
+            for (i32 d = 0; d < tile - 24; d += 8) {                  /* dashed ring */
+                gfx_hline(tx + 12 + d, ty + 1, 4, p.muted); gfx_hline(tx + 12 + d, ty + tile - 2, 4, p.muted);
+                gfx_vline(tx + 1, ty + 12 + d, 4, p.muted); gfx_vline(tx + tile - 2, ty + 12 + d, 4, p.muted);
+            }
+            ui_glyph(UI_GLYPH_PLUS, tx + (tile - 24) / 2, ty + 28, 24, p.ink2);
+            i32 aw = gfx_str_role_width("Add site", FONT_ROLE_UI, 1, FONT_W_BOLD);
+            gfx_str_role(tx + (tile - aw) / 2, ty + 18 + 44 + 10, "Add site", p.ink2, FONT_ROLE_UI, 1, FONT_W_BOLD);
+            bhit(s, rect_make(tx, ty, tile, tile), BA_ADD_SITE, 0);
+        }
+    }
+    cy += (i32)((nt + (u32)cols - 1) / (u32)cols) * (tile + gap) + 16;
+
+    /* recent pages + privacy */
+    i32 cw = cr.w - 80 < 720 ? cr.w - 80 : 720;
+    i32 cx0 = cr.x + (cr.w - cw) / 2;
+    bool recent = w->browser_history_count > 0;
+    i32 colw = recent ? (cw - 14) / 2 : cw, ch = 120;
+    if (recent) {
+        gfx_rect_rounded(cx0, cy, colw, ch, 20, p.field);
+        gfx_str_role(cx0 + 18, cy + 18, "PICK UP WHERE YOU LEFT OFF", p.muted, FONT_ROLE_UI, 0, FONT_W_BOLD);
+        i32 ry = cy + 18 + ulh(0) + 12;
+        for (u32 k = 0; k < 2 && k < w->browser_history_count; k++) {
+            const char *u = w->browser_history[w->browser_history_count - 1 - k];
+            char host[96]; url_host(u, host, sizeof host);
+            const char *path = u; if (!kstrncmp(u, "https://", 8)) path = u + 8; else if (!kstrncmp(u, "http://", 7)) path = u + 7;
+            gfx_circle_fill(cx0 + 22, ry + ulh(2) / 2, 4, fav_col(host[0] ? host : u));
+            gfx_str_role_fit(cx0 + 34, ry, colw - 52, path, p.ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
+            if (g_nlinks < BROW_LINK_MAX) {
+                g_links[g_nlinks].x = cx0 + 12; g_links[g_nlinks].y = ry - 4; g_links[g_nlinks].w = colw - 24; g_links[g_nlinks].h = ulh(2) + 8;
+                kstrncpy(g_links[g_nlinks].url, u, 191); g_nlinks++;
+            }
+            ry += ulh(2) + 12;
+        }
+    }
+    i32 px = recent ? cx0 + colw + 14 : cx0;
+    gfx_rect_rounded(px, cy, colw, ch, 20, p.field);
+    gfx_str_role(px + 18, cy + 18, "PRIVACY", p.muted, FONT_ROLE_UI, 0, FONT_W_BOLD);
+    gfx_str_role_wrap(px + 18, cy + 18 + ulh(0) + 10, colw - 36,
+                      "History stays in this window and is cleared when you close it. Bookmarks are saved on this computer.",
+                      p.ink2, FONT_ROLE_UI, 1, FONT_W_REGULAR, 3);
 }
 
 /* ── Draw ────────────────────────────────────────────────────────── */
 static const char *browser_loading_text(void) {
     static char lb[64];
-    static const char spin[] = "|/-\\";
     u32 el = browser_fetch_elapsed_ms();
-    ksprintf(lb, "%c  Loading... %d.%d s   (Esc to stop)",
-             spin[(timer_ms() / 120) % 4], (int)(el / 1000), (int)(el / 100 % 10));
+    ksprintf(lb, "Loading... %d.%d s  -  Esc stops", (int)(el / 1000), (int)(el / 100 % 10));
     return lb;
 }
 
@@ -878,172 +1085,124 @@ void app_browser_draw(window_t *w) {
     if (!s_draw_cached) browser_save_links(w);
 }
 
+/* A round toolbar button with a glyph. */
+static void tb_button(bstate_t *s, const bpal_t *p, i32 x, i32 y, ui_glyph_t g, bool enabled, u8 act) {
+    ui_glyph(g, x + 10, y + 10, 18, enabled ? p->ink : p->muted);
+    if (enabled) bhit(s, rect_make(x, y, 38, 38), act, 0);
+}
+
 static void browser_draw_impl(window_t *w) {
     rect_t cr = wm_client_rect(w);
+    bstate_t *s = bst(w);
+    bpal_t p = bpal();
     g_nlinks = 0;
+    if (s) s->nhits = 0;
 
-    gfx_rect(cr.x, cr.y, cr.w, cr.h, COL_SURFACE);
+    gfx_rect(cr.x, cr.y, cr.w, cr.h, p.page);
 
-    /* ── Tab strip ───────────────────────────────────────────────── */
-    {
-        gfx_rect(cr.x, cr.y, cr.w, BROW_TAB_H, COL_SURFACE3);
-        gfx_hline(cr.x, cr.y + BROW_TAB_H - 1, cr.w, COL_BORDER);
-        u32 ntabs = w->browser_tab_count < 1 ? 1 : w->browser_tab_count;
-        i32 tab_w = (cr.w - 34) / (i32)ntabs;
-        if (tab_w > 180) tab_w = 180;
-        for (u32 ti = 0; ti < w->browser_tab_count; ti++) {
-            i32 tx = cr.x + (i32)ti * (tab_w + 2);
-            bool active = (ti == w->browser_tab_sel);
-            gfx_rect(tx, cr.y, tab_w, BROW_TAB_H, active ? COL_SURFACE : COL_SURFACE2);
-            if (active) gfx_hline(tx, cr.y + BROW_TAB_H - 2, tab_w, COL_PRIMARY);
-            gfx_str_clipped(tx + 6, cr.y + (BROW_TAB_H - FH)/2, tab_w - 22,
-                            w->browser_tab_title[ti], COL_TEXT, COL_TRANSPARENT);
-            if (w->browser_tab_count > 1)
-                gfx_str(tx + tab_w - 16, cr.y + (BROW_TAB_H - FH)/2,
-                        "x", COL_MUTED, COL_TRANSPARENT);
-        }
-        i32 new_tab_x = cr.x + (i32)w->browser_tab_count * (tab_w + 2);
-        if (w->browser_tab_count < 4)
-            gfx_str(new_tab_x + 4, cr.y + (BROW_TAB_H - FH)/2, "+", COL_DIM, COL_TRANSPARENT);
-        cr.y += BROW_TAB_H; cr.h -= BROW_TAB_H;
-    }
-
-    /* ── Toolbar ─────────────────────────────────────────────────── */
-    i32 bar_h  = BROW_BAR_H;
-    i32 btn_sz = bar_h - 12;   /* square button size */
-    i32 btn_y  = cr.y + (bar_h - btn_sz) / 2;
-
-    gfx_rect(cr.x, cr.y, cr.w, bar_h, COL_SURFACE2);
-    gfx_hline(cr.x, cr.y + bar_h - 1, cr.w, COL_BORDER);
-
-    /* Helper for a nav button */
-#define NAV_BTN(bx, label, can) do { \
-    bool hover_ = false; \
-    gfx_rect_rounded((bx), btn_y, btn_sz, btn_sz, 6, (can) ? COL_SURFACE3 : COL_SURFACE2); \
-    if (can) gfx_rect_rounded_outline((bx), btn_y, btn_sz, btn_sz, 6, COL_BORDER); \
-    gfx_str_centered((bx), btn_y + (btn_sz - FH) / 2, btn_sz, (label), \
-                     (can) ? COL_TEXT : COL_MUTED, COL_TRANSPARENT); \
-    (void)hover_; } while(0)
-
+    /* ── Toolbar: back, forward, reload, address pill, menu ──────── */
+    i32 bar_h = BROW_BAR_H;
+    i32 by = cr.y + (bar_h - 38) / 2;
     bool can_back = w->browser_history_pos > 0;
-    bool can_fwd  = (w->browser_history_count > 0 &&
-                     w->browser_history_pos+1 < w->browser_history_count);
+    bool can_fwd  = (w->browser_history_count > 0 && w->browser_history_pos + 1 < w->browser_history_count);
+    i32 bx = cr.x + 12;
+    tb_button(s, &p, bx, by, UI_GLYPH_CHEVRON_L, can_back, BA_BACK); bx += 40;
+    tb_button(s, &p, bx, by, UI_GLYPH_CHEVRON_R, can_fwd, BA_FWD);   bx += 40;
+    tb_button(s, &p, bx, by, UI_GLYPH_RESTART, kstrncmp(w->browser_url, "about:", 6) != 0, BA_RELOAD); bx += 46;
+    i32 menu_x = cr.x + cr.w - 12 - 38;
+    /* menu "..." */
+    for (i32 d = 0; d < 3; d++) gfx_circle_fill(menu_x + 12 + d * 7, by + 19, 2, p.ink);
+    bhit(s, rect_make(menu_x, by, 38, 38), BA_MENU, 0);
 
-    i32 bx = cr.x + 6;
-    NAV_BTN(bx, "<", can_back);  bx += btn_sz + 4;
-    NAV_BTN(bx, ">", can_fwd);   bx += btn_sz + 4;
-    NAV_BTN(bx, "R", true);      bx += btn_sz + 4;
-    NAV_BTN(bx, "H", true);      bx += btn_sz + 8;
-#undef NAV_BTN
-
-    /* URL bar (leave room for BM button + Go button) */
-    i32 go_w  = 42;
-    i32 bm_w  = BROW_BM_BTN;
-    i32 url_x = bx;
-    i32 url_w = cr.w - (bx - cr.x) - bm_w - 6 - go_w - 8;
-    bool is_https = kstrncmp(w->browser_url, "https://", 8) == 0;
-    bool is_http  = kstrncmp(w->browser_url, "http://",  7) == 0;
-
-    gfx_rect_rounded(url_x, btn_y, url_w, btn_sz, 8, COL_INPUT_BG);
-    gfx_rect_rounded_outline(url_x, btn_y, url_w, btn_sz, 8,
-                             w->browser_url_active ? COL_PRIMARY : COL_BORDER);
-
-    i32 txt_y  = btn_y + (btn_sz - FH) / 2;
-    i32 icon_r = 7;
-    /* Security indicator */
-    if (is_https) {
-        gfx_circle_fill(url_x + 12, btn_y + btn_sz/2, icon_r - 2, g_theme->success);
-        gfx_str_clipped(url_x + 24, txt_y, url_w - 34, w->browser_url, g_theme->success, COL_TRANSPARENT);
-    } else if (is_http) {
-        gfx_circle_fill(url_x + 12, btn_y + btn_sz/2, icon_r - 2, COL_DIM);
-        gfx_str_clipped(url_x + 24, txt_y, url_w - 34, w->browser_url, COL_ACCENT, COL_TRANSPARENT);
-    } else {
-        gfx_str_clipped(url_x + 10, txt_y, url_w - 20, w->browser_url, COL_ACCENT, COL_TRANSPARENT);
-    }
-    /* Text cursor */
+    i32 ux = bx, uw = menu_x - 8 - bx, uh = 40, uy = cr.y + (bar_h - uh) / 2;
+    gfx_rect_rounded(ux, uy, uw, uh, 14, p.field);
+    if (w->browser_url_active) gfx_rect_rounded_outline(ux, uy, uw, uh, 14, g_theme->care);
+    bool https = !kstrncmp(w->browser_url, "https://", 8);
+    bool http  = !kstrncmp(w->browser_url, "http://", 7);
+    bool about = !kstrncmp(w->browser_url, "about:", 6);
+    ui_glyph(w->browser_url_active || about ? UI_GLYPH_SEARCH : https ? UI_GLYPH_LOCK : UI_GLYPH_WIFI,
+             ux + 12, uy + 11, 18, https && !w->browser_url_active ? g_theme->success : p.ink2);
+    i32 tx = ux + 40, tmax = uw - 40 - 40;
+    i32 ty = uy + (uh - ulh(2)) / 2;
     if (w->browser_url_active) {
-        i32 cx_off = (is_https || is_http) ? 24 : 10;
-        i32 cur_x  = url_x + cx_off + gfx_str_width(w->browser_url);
-        if (cur_x < url_x + url_w - 4)
-            gfx_rect(cur_x, btn_y + 4, 2, btn_sz - 8, COL_PRIMARY);
+        /* full URL while editing, scrolled to keep the end in view */
+        const char *u = kstrncmp(w->browser_url, "about:", 6) ? w->browser_url : "";
+        while (*u && gfx_str_role_width(u, FONT_ROLE_UI, 2, FONT_W_REGULAR) > tmax - 6) u++;
+        gfx_str_role(tx, ty, u, p.ink, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+        if (((timer_ms() / 500) & 1) == 0) gfx_rect(tx + gfx_str_role_width(u, FONT_ROLE_UI, 2, FONT_W_REGULAR) + 1, ty, 2, ulh(2), g_theme->care);
+        if (!u[0]) gfx_str_role(tx + 6, ty, "Search or type an address", p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+    } else if (about) {
+        gfx_str_role(tx, ty, "Search or type an address", p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+    } else {
+        /* host in ink, the rest dimmed */
+        char host[128]; url_host(w->browser_url, host, sizeof host);
+        const char *rest = w->browser_url + (https ? 8 : http ? 7 : 0) + kstrlen(host);
+        i32 hw = gfx_str_role_width(host, FONT_ROLE_UI, 2, FONT_W_BOLD);
+        gfx_str_role_fit(tx, ty, tmax, host, p.ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
+        if (hw < tmax - 20 && rest[0] && kstrcmp(rest, "/")) gfx_str_role_fit(tx + hw, ty, tmax - hw, rest, p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR);
     }
+    bhit(s, rect_make(ux, uy, uw - 36, uh), BA_URL, 0);
+    if (!about && !w->browser_url_active) {
+        bool marked = is_bookmarked(w, NULL);
+        i32 bkx = ux + uw - 34, bky = uy + 8;
+        /* bookmark ribbon */
+        u32 c = marked ? g_theme->care : p.ink2;
+        if (marked) gfx_rect_rounded(bkx + 6, bky + 2, 12, 16, 2, c);
+        else gfx_rect_rounded_outline(bkx + 6, bky + 2, 12, 16, 2, c);
+        for (i32 i = 0; i < 5; i++) gfx_hline(bkx + 12 - i, bky + 18 - i, 2 * i + 1, marked ? p.field : p.field);
+        bhit(s, rect_make(bkx, uy, 32, uh), BA_BOOKMARK, 0);
+    }
+    gfx_hline(cr.x, cr.y + bar_h - 1, cr.w, p.line);
 
-    /* ★ Bookmarks button */
-    i32 bm_x = url_x + url_w + 6;
-    gfx_rect_rounded(bm_x, btn_y, bm_w, btn_sz, 6, COL_SURFACE3);
-    gfx_rect_rounded_outline(bm_x, btn_y, bm_w, btn_sz, 6, COL_BORDER);
-    gfx_str_centered(bm_x, btn_y + (btn_sz - FH) / 2, bm_w, "*", COL_ACCENT, COL_TRANSPARENT);
-
-    /* Go button */
-    i32 go_x = cr.x + cr.w - go_w - 4;
-    gfx_rect_rounded(go_x, btn_y, go_w, btn_sz, 8, COL_PRIMARY);
-    gfx_str_centered(go_x, btn_y + (btn_sz - FH) / 2, go_w, "Go", COL_WHITE, COL_TRANSPARENT);
+    /* ── Status line (only while something is happening) ─────────── */
+    bool show_status = w->browser_loading || !kstrncmp(g_status, "Failed", 6) || !kstrncmp(g_status, "Stopped", 7);
+    i32 stat_h = show_status ? BROW_STAT_H : 0;
+    i32 stat_y = cr.y + cr.h - stat_h;
+    if (stat_h) {
+        gfx_rect(cr.x, stat_y, cr.w, stat_h, p.strip);
+        gfx_str_role_fit(cr.x + 14, stat_y + (stat_h - ulh(0)) / 2, cr.w - 28,
+                         w->browser_loading ? browser_loading_text() : g_status, p.muted, FONT_ROLE_UI, 0, FONT_W_REGULAR);
+    }
 
     /* ── Find bar ────────────────────────────────────────────────── */
-    i32 find_bar_h = w->browser_find_active ? BROW_FIND_H : 0;
-
-    /* ── Status bar ──────────────────────────────────────────────── */
-    i32 stat_y = cr.y + cr.h - BROW_STAT_H;
-    gfx_rect(cr.x, stat_y, cr.w, BROW_STAT_H, COL_SURFACE2);
-    gfx_hline(cr.x, stat_y, cr.w, COL_BORDER);
-    gfx_str_clipped(cr.x + 10, stat_y + (BROW_STAT_H - FH) / 2, cr.w - 20,
-                    g_status, COL_DIM, COL_TRANSPARENT);
-
-    /* Draw find bar above status */
-    if (w->browser_find_active) {
-        i32 fb_y = stat_y - BROW_FIND_H;
-        gfx_rect(cr.x, fb_y, cr.w, BROW_FIND_H, COL_SURFACE2);
-        gfx_hline(cr.x, fb_y, cr.w, COL_BORDER);
-        gfx_str(cr.x + 8, fb_y + (BROW_FIND_H - FH)/2, "Find:", COL_DIM, COL_TRANSPARENT);
-        i32 fi_x = cr.x + 50, fi_w = cr.w - 140;
-        gfx_rect_rounded(fi_x, fb_y + 4, fi_w, BROW_FIND_H - 8, 4, COL_INPUT_BG);
-        gfx_rect_rounded_outline(fi_x, fb_y + 4, fi_w, BROW_FIND_H - 8, 4, COL_PRIMARY);
-        gfx_str_clipped(fi_x + 4, fb_y + (BROW_FIND_H - FH)/2, fi_w - 8,
-                        w->browser_find_buf, COL_TEXT, COL_TRANSPARENT);
-        char cnt[24];
-        ksprintf(cnt, "%u/%u",
-                 w->browser_find_count ? w->browser_find_cur + 1 : 0,
-                 w->browser_find_count);
-        gfx_str(fi_x + fi_w + 6, fb_y + (BROW_FIND_H - FH)/2, cnt, COL_DIM, COL_TRANSPARENT);
-    }
-
-    /* ── Bookmark dropdown ───────────────────────────────────────── */
-    if (w->browser_bm_open) {
-        i32 bd_x = bm_x - 100;
-        i32 bd_y = cr.y + bar_h;
-        i32 bd_w = 150;
-        i32 row_h = FH + 10;
-        i32 bd_h  = (i32)w->browser_bm_count * row_h + 8;
-        if (bd_h < 28) bd_h = 28;
-        gfx_rect_rounded(bd_x, bd_y, bd_w, bd_h, 6, COL_SURFACE2);
-        gfx_rect_rounded_outline(bd_x, bd_y, bd_w, bd_h, 6, COL_BORDER);
-        if (w->browser_bm_count == 0) {
-            gfx_str(bd_x + 8, bd_y + 8, "No bookmarks", COL_MUTED, COL_TRANSPARENT);
-        }
-        for (u32 bi = 0; bi < w->browser_bm_count; bi++) {
-            i32 by = bd_y + 4 + (i32)bi * row_h;
-            gfx_str_clipped(bd_x + 6, by + 4, bd_w - 26,
-                            w->browser_bm_title[bi], COL_TEXT, COL_TRANSPARENT);
-            gfx_str(bd_x + bd_w - 18, by + 4, "x", COL_MUTED, COL_TRANSPARENT);
-        }
+    i32 find_bar_h = w->browser_find_active ? 44 : 0;
+    if (find_bar_h) {
+        i32 fb_y = stat_y - find_bar_h;
+        gfx_rect(cr.x, fb_y, cr.w, find_bar_h, p.strip);
+        gfx_hline(cr.x, fb_y, cr.w, p.line);
+        gfx_str_role(cr.x + 16, fb_y + (find_bar_h - ulh(1)) / 2, "Find", p.ink2, FONT_ROLE_UI, 1, FONT_W_BOLD);
+        i32 fi_x = cr.x + 64, fi_w = cr.w - 64 - 150;
+        gfx_rect_rounded(fi_x, fb_y + 6, fi_w, find_bar_h - 12, 10, p.field);
+        gfx_rect_rounded_outline(fi_x, fb_y + 6, fi_w, find_bar_h - 12, 10, g_theme->care);
+        gfx_str_role_fit(fi_x + 10, fb_y + (find_bar_h - ulh(1)) / 2, fi_w - 20, w->browser_find_buf, p.ink, FONT_ROLE_UI, 1, FONT_W_REGULAR);
+        char cnt[40];
+        if (!w->browser_find_count && w->browser_find_len) kstrcpy(cnt, "No matches");
+        else ksprintf(cnt, "%u of %u", w->browser_find_count ? w->browser_find_cur + 1 : 0, w->browser_find_count);
+        gfx_str_role(fi_x + fi_w + 12, fb_y + (find_bar_h - ulh(1)) / 2, cnt, p.muted, FONT_ROLE_UI, 1, FONT_W_REGULAR);
     }
 
     /* ── Content area ────────────────────────────────────────────── */
     i32 cont_y = cr.y + bar_h;
-    i32 cont_h = cr.h - bar_h - BROW_STAT_H - find_bar_h;
+    i32 cont_h = cr.h - bar_h - stat_h - find_bar_h;
     gfx_set_clip(cr.x, cont_y, cr.w, cont_h);
 
     if (w->browser_loading) {
-        gfx_str_centered(cr.x, cont_y + cont_h/2 - FH/2, cr.w,
-                         browser_loading_text(), COL_DIM, COL_TRANSPARENT);
+        const char *lt = browser_loading_text();
+        i32 lw = gfx_str_role_width(lt, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+        char host[128]; url_host(w->browser_url, host, sizeof host);
+        i32 hw = gfx_str_role_width(host, FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+        gfx_str_role(cr.x + (cr.w - hw) / 2, cont_y + cont_h / 2 - 40, host, p.ink, FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+        gfx_str_role(cr.x + (cr.w - lw) / 2, cont_y + cont_h / 2, lt, p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+        ui_progress(rect_make(cr.x + cr.w / 2 - 120, cont_y + cont_h / 2 + 34, 240, 4),
+                    (browser_fetch_elapsed_ms() / 40) % 100, g_theme->care);
         gfx_clear_clip();
-        return;
+        goto menu;
     }
 
     if (kstrncmp(w->browser_url, "about:", 6)==0 || w->browser_content[0]=='\0') {
         draw_home(w, rect_make(cr.x, cont_y, cr.w, cont_h));
         gfx_clear_clip();
-        return;
+        goto menu;
     }
 
     if (w->browser_source_view) {
@@ -1055,14 +1214,14 @@ static void browser_draw_impl(window_t *w) {
         ctx.fg = COL_DIM; ctx.pre = true;
         render_html(&ctx, w->browser_content);
         gfx_clear_clip();
-        return;
+        goto menu;
     }
 
     /* Page-area cache: re-laying out up to 64 KB of HTML every frame was the
      * browser's main cost. Reuse the last render while nothing changed. */
     u32 theme_id = (u32)(uintptr_t)g_theme ^ g_theme->text ^ (g_theme->primary << 1);
     u32 font_id  = font_active_index() ^ (GFX_FONT_SCALE << 8);
-    bool cacheable = !w->browser_find_active && !w->browser_bm_open;
+    bool cacheable = !w->browser_find_active;
     if (cacheable && w->bview_valid && w->bview_px && w->bview_w == cr.w &&
         w->bview_h == cont_h && w->bview_scroll == w->browser_scroll &&
         w->bview_ver == w->browser_content_ver && w->bview_theme == theme_id &&
@@ -1070,7 +1229,7 @@ static void browser_draw_impl(window_t *w) {
         gfx_blit_argb(cr.x, cont_y, w->bview_px, cr.w, cont_h, cr.x, cont_y, cr.w, cont_h);
         s_draw_cached = true;                /* keep this window's saved links */
         gfx_clear_clip();
-        return;
+        goto menu;
     }
 
     rctx_t ctx = {0};
@@ -1118,6 +1277,45 @@ static void browser_draw_impl(window_t *w) {
     }
 
     gfx_clear_clip();
+menu:
+    /* ── "..." menu: page tools and bookmarks ────────────────────── */
+    if (s && s->menu_open) {
+        i32 mw = 300, row = 40;
+        u32 nb = w->browser_bm_count;
+        i32 mh = 8 + 3 * row + 12 + ulh(0) + 8 + (nb ? (i32)nb * row : row) + 8;
+        i32 mx = cr.x + cr.w - 12 - mw, my = cr.y + BROW_BAR_H - 4;
+        gfx_shadow_soft(mx, my, mw, mh, 16);
+        gfx_rect_rounded(mx, my, mw, mh, 16, p.dark ? rgb(0x1c, 0x24, 0x40) : rgb(0xff, 0xff, 0xff));
+        gfx_rect_rounded_outline(mx, my, mw, mh, 16, p.line);
+        static const char *const items[3] = { "Find in page", "View source", "New Tab page" };
+        static const char *const keys[3]  = { "Ctrl+F", "Ctrl+U", "" };
+        static const u8 acts[3] = { BA_M_FIND, BA_M_SOURCE, BA_M_HOME };
+        i32 iy = my + 8;
+        for (u32 q = 0; q < 3; q++) {
+            gfx_str_role(mx + 18, iy + (row - ulh(2)) / 2, items[q], p.ink, FONT_ROLE_UI, 2,
+                         (q == 1 && w->browser_source_view) ? FONT_W_BOLD : FONT_W_REGULAR);
+            i32 kw = gfx_str_role_width(keys[q], FONT_ROLE_UI, 0, FONT_W_REGULAR);
+            gfx_str_role(mx + mw - 18 - kw, iy + (row - ulh(0)) / 2, keys[q], p.muted, FONT_ROLE_UI, 0, FONT_W_REGULAR);
+            bhit(s, rect_make(mx + 6, iy, mw - 12, row), acts[q], 0);
+            iy += row;
+        }
+        gfx_hline(mx + 12, iy + 4, mw - 24, p.line);
+        iy += 12;
+        gfx_str_role(mx + 18, iy, "BOOKMARKS", p.muted, FONT_ROLE_UI, 0, FONT_W_BOLD);
+        iy += ulh(0) + 8;
+        if (!nb) {
+            gfx_str_role_fit(mx + 18, iy + (row - ulh(1)) / 2, mw - 36, "None yet -- use the ribbon in the address bar",
+                             p.muted, FONT_ROLE_UI, 1, FONT_W_REGULAR);
+        }
+        for (u32 b = 0; b < nb; b++) {
+            favicon(mx + 18, iy + (row - 18) / 2, 18, w->browser_bm_url[b], w->browser_bm_title[b]);
+            gfx_str_role_fit(mx + 46, iy + (row - ulh(2)) / 2, mw - 46 - 44, w->browser_bm_title[b], p.ink, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+            ui_glyph(UI_GLYPH_CLOSE, mx + mw - 32, iy + (row - 14) / 2, 14, p.muted);
+            bhit(s, rect_make(mx + 6, iy, mw - 50, row), BA_M_BM, (i32)b);
+            bhit(s, rect_make(mx + mw - 40, iy, 34, row), BA_M_BM_DEL, (i32)b);
+            iy += row;
+        }
+    }
 }
 
 /* ── Input ───────────────────────────────────────────────────────── */
@@ -1176,14 +1374,8 @@ void app_browser_key(window_t *w, char c) {
             w->browser_find_count  = 0; w->browser_find_cur = 0;
             return;
         }
-        if (c == 4) { /* Ctrl+D — add bookmark */
-            if (w->browser_bm_count < 8) {
-                kstrncpy(w->browser_bm_title[w->browser_bm_count], w->browser_title, 31);
-                kstrncpy(w->browser_bm_url[w->browser_bm_count],   w->browser_url,   127);
-                w->browser_bm_count++;
-                bookmarks_save(w);
-                notify_push("Browser", "Bookmarked!", COL_GREEN);
-            }
+        if (c == 4) { /* Ctrl+D -- bookmark this page (again: remove) */
+            bookmark_toggle(w);
             return;
         }
         if (c == 20) { /* Ctrl+T — new tab */
@@ -1233,6 +1425,7 @@ void app_browser_key(window_t *w, char c) {
             return;
         }
         if (c >= 32 && c < 127) {
+            if (!kstrncmp(w->browser_url, "about:", 6)) w->browser_url[0] = ' ';   /* typing replaces about:home */
             u32 l = kstrlen(w->browser_url);
             if (l < 254) { w->browser_url[l]=c; w->browser_url[l+1]='\0'; }
         }
@@ -1259,154 +1452,81 @@ void app_browser_scroll(window_t *w, i32 delta) {
 }
 
 void app_browser_click(window_t *w, i32 x, i32 y) {
-    rect_t cr = wm_client_rect(w);
-
-    /* ── Tab strip ───────────────────────────────────────────────── */
-    if (y >= cr.y && y < cr.y + BROW_TAB_H) {
-        u32 ntabs = w->browser_tab_count < 1 ? 1 : w->browser_tab_count;
-        i32 tab_w = (cr.w - 34) / (i32)ntabs;
-        if (tab_w > 180) tab_w = 180;
-        /* New-tab button */
-        i32 new_tab_x = cr.x + (i32)w->browser_tab_count * (tab_w + 2);
-        if (x >= new_tab_x && x < new_tab_x + 24 && w->browser_tab_count < 4) {
-            browser_open_tab(w);
-            return;
+    bstate_t *s = bst(w);
+    if (!s) return;
+    bool was_menu = s->menu_open;
+    for (u32 i = s->nhits; i-- > 0;) {
+        const bhit_t *h = &s->hits[i];
+        if (!rect_contains(h->r, x, y)) continue;
+        bool menu_item = h->act >= BA_M_FIND && h->act <= BA_M_BM_DEL;
+        if (was_menu && !menu_item && h->act != BA_MENU) { s->menu_open = false; return; }
+        s->menu_open = false;
+        if (h->act != BA_URL && h->act != BA_HOME_SEARCH && h->act != BA_ADD_SITE && w->browser_url_active) {
+            w->browser_url_active = false;
+            if (s_url_before_edit[0]) kstrncpy(w->browser_url, s_url_before_edit, 255);
         }
-        /* Tab click / close */
-        for (u32 ti = 0; ti < w->browser_tab_count; ti++) {
-            i32 tx = cr.x + (i32)ti * (tab_w + 2);
-            if (x >= tx && x < tx + tab_w) {
-                if (x >= tx + tab_w - 16 && w->browser_tab_count > 1)
-                    browser_close_tab(w, ti);
-                else if (ti != w->browser_tab_sel)
-                    browser_switch_tab(w, ti);
-                return;
+        switch (h->act) {
+        case BA_BACK:
+            if (w->browser_history_pos > 0) {
+                w->browser_history_pos--;
+                app_browser_navigate(w, w->browser_history[w->browser_history_pos]);
             }
-        }
-        return;
-    }
-    cr.y += BROW_TAB_H; cr.h -= BROW_TAB_H;
-
-    i32 bar_h  = BROW_BAR_H;
-    i32 btn_sz = bar_h - 12;
-    i32 btn_y  = cr.y + (bar_h - btn_sz) / 2;
-    i32 cont_y = cr.y + bar_h;
-    i32 cont_h = cr.h - bar_h - BROW_STAT_H - (w->browser_find_active ? BROW_FIND_H : 0);
-
-    /* Close bookmarks dropdown on any click outside */
-    if (w->browser_bm_open) {
-        i32 bm_x2 = cr.x + cr.w - 42 - BROW_BM_BTN - 6;
-        i32 bd_x  = bm_x2 - 100, bd_y = cr.y + bar_h, bd_w = 150;
-        i32 bd_h  = (i32)w->browser_bm_count * (FH + 10) + 8;
-        if (bd_h < 28) bd_h = 28;
-        if (x >= bd_x && x < bd_x + bd_w && y >= bd_y && y < bd_y + bd_h) {
-            /* Inside dropdown */
-            i32 row_h = FH + 10;
-            for (u32 bi = 0; bi < w->browser_bm_count; bi++) {
-                i32 by = bd_y + 4 + (i32)bi * row_h;
-                if (y >= by && y < by + row_h) {
-                    if (x >= bd_x + bd_w - 18) {
-                        for (u32 k = bi; k < w->browser_bm_count - 1; k++) {
-                            kstrncpy(w->browser_bm_url[k],   w->browser_bm_url[k+1],   127);
-                            kstrncpy(w->browser_bm_title[k], w->browser_bm_title[k+1],  31);
-                        }
-                        w->browser_bm_count--;
-                        bookmarks_save(w);
-                    } else {
-                        smart_navigate(w, w->browser_bm_url[bi]);
-                        w->browser_bm_open = false;
-                    }
-                    return;
-                }
+            break;
+        case BA_FWD:
+            if (w->browser_history_pos + 1 < w->browser_history_count) {
+                w->browser_history_pos++;
+                app_browser_navigate(w, w->browser_history[w->browser_history_pos]);
             }
+            break;
+        case BA_RELOAD:   w->browser_scroll = 0; app_browser_navigate(w, w->browser_url); break;
+        case BA_URL:      begin_url_edit(w, false); break;
+        case BA_BOOKMARK: bookmark_toggle(w); break;
+        case BA_MENU:     s->menu_open = !was_menu; break;
+        case BA_M_FIND:
+            w->browser_find_active = true;
+            w->browser_find_buf[0] = '\0'; w->browser_find_len = 0;
+            w->browser_find_count  = 0; w->browser_find_cur = 0;
+            break;
+        case BA_M_SOURCE: w->browser_source_view = !w->browser_source_view; break;
+        case BA_M_HOME:   app_browser_navigate(w, "about:home"); break;
+        case BA_M_BM:     if ((u32)h->arg < w->browser_bm_count) smart_navigate(w, w->browser_bm_url[h->arg]); break;
+        case BA_M_BM_DEL: bookmark_remove(w, (u32)h->arg); break;
+        case BA_HOME_SEARCH:
+            if (h->arg == 1 && w->browser_url_active && w->browser_url[0]) {
+                w->browser_url_active = false;
+                smart_navigate(w, w->browser_url);
+            } else begin_url_edit(w, true);
+            break;
+        case BA_ADD_SITE:
+            begin_url_edit(w, true);
+            notify_push("Browser", "Open a site, then click the ribbon in the address bar to pin it here.", COL_ACCENT);
+            break;
+        default: break;
         }
-        w->browser_bm_open = false;
-    }
-
-    /* Toolbar buttons */
-    i32 bx = cr.x + 6;
-    /* back */
-    if (y>=btn_y&&y<btn_y+btn_sz&&x>=bx&&x<bx+btn_sz) {
-        if (w->browser_history_pos > 0) {
-            w->browser_history_pos--;
-            app_browser_navigate(w, w->browser_history[w->browser_history_pos]);
-        }
         return;
     }
-    bx += btn_sz + 4;
-    /* forward */
-    if (y>=btn_y&&y<btn_y+btn_sz&&x>=bx&&x<bx+btn_sz) {
-        if (w->browser_history_pos+1 < w->browser_history_count) {
-            w->browser_history_pos++;
-            app_browser_navigate(w, w->browser_history[w->browser_history_pos]);
-        }
-        return;
-    }
-    bx += btn_sz + 4;
-    /* refresh */
-    if (y>=btn_y&&y<btn_y+btn_sz&&x>=bx&&x<bx+btn_sz) {
-        w->browser_scroll = 0;
-        app_browser_navigate(w, w->browser_url);
-        return;
-    }
-    bx += btn_sz + 4;
-    /* home */
-    if (y>=btn_y&&y<btn_y+btn_sz&&x>=bx&&x<bx+btn_sz) {
-        app_browser_navigate(w, "about:home");
-        return;
-    }
-    bx += btn_sz + 8;
-
-    /* URL + BM button + Go layout must match draw */
-    i32 go_w  = 42;
-    i32 bm_w  = BROW_BM_BTN;
-    i32 url_x = bx;
-    i32 url_w = cr.w - (bx - cr.x) - bm_w - 6 - go_w - 8;
-    i32 bm_x  = url_x + url_w + 6;
-    i32 go_x  = cr.x + cr.w - go_w - 4;
-
-    /* ★ bookmark toggle */
-    if (y>=btn_y&&y<btn_y+btn_sz&&x>=bm_x&&x<bm_x+bm_w) {
-        w->browser_bm_open = !w->browser_bm_open;
-        return;
-    }
-    /* go */
-    if (y>=btn_y&&y<btn_y+btn_sz&&x>=go_x&&x<go_x+go_w) {
-        w->browser_url_active = false;
-        smart_navigate(w, w->browser_url);
-        return;
-    }
-    /* URL bar */
-    if (y>=btn_y&&y<btn_y+btn_sz&&x>=url_x&&x<url_x+url_w) {
-        w->browser_url_active = true;
-        return;
-    }
+    if (was_menu) { s->menu_open = false; return; }
 
     /* content area */
-    if (y >= cont_y && y < cont_y+cont_h) {
+    rect_t cr = wm_client_rect(w);
+    i32 cont_y = cr.y + BROW_BAR_H;
+    if (y < cont_y) return;
+    if (w->browser_url_active) {
         w->browser_url_active = false;
-        w->browser_bm_open    = false;
-
-        /* check link clicks */
-        const blink_t *links = (const blink_t *)w->browser_links;
-        i32 lx = x - (w->rect.x - w->browser_links_wx), ly = y - (w->rect.y - w->browser_links_wy);
-        for (u32 i = 0; links && i < w->browser_nlinks; i++) {
-            const blink_t *l = &links[i];
-            if (lx>=l->x&&lx<l->x+l->w&&ly>=l->y&&ly<l->y+l->h) {
-                /* Resolve relative / protocol-relative hrefs against this page. */
-                char abs[512]; http_url_resolve(w->browser_url, l->url, abs, sizeof(abs));
-                w->browser_push_history = true;
-                w->browser_autohttps = false;
-                app_browser_navigate(w, abs);
-                return;
-            }
+        if (s_url_before_edit[0]) kstrncpy(w->browser_url, s_url_before_edit, 255);
+    }
+    const blink_t *links = (const blink_t *)w->browser_links;
+    i32 lx = x - (w->rect.x - w->browser_links_wx), ly = y - (w->rect.y - w->browser_links_wy);
+    for (u32 i = 0; links && i < w->browser_nlinks; i++) {
+        const blink_t *l = &links[i];
+        if (lx>=l->x&&lx<l->x+l->w&&ly>=l->y&&ly<l->y+l->h) {
+            /* Resolve relative / protocol-relative hrefs against this page. */
+            char abs[512]; http_url_resolve(w->browser_url, l->url, abs, sizeof(abs));
+            w->browser_push_history = true;
+            w->browser_autohttps = false;
+            app_browser_navigate(w, abs);
+            return;
         }
-
-        /* scroll zones */
-        i32 zone = cont_h * 2 / 5;
-        if (y > cont_y + cont_h - zone)  w->browser_scroll += FH*4;
-        else if (y < cont_y + zone)      w->browser_scroll -= FH*4;
-        if (w->browser_scroll < 0) w->browser_scroll = 0;
     }
 }
 
