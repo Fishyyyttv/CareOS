@@ -648,6 +648,16 @@ void desktop_clear_hover(void);
 void app_terminal_init(window_t *w);
 void app_terminal_draw(window_t *w);
 void app_terminal_key(window_t *w, char c);
+void app_terminal_click(window_t *w, i32 x, i32 y);
+
+/* Title-bar toolbar hook (Phase 3): an app may draw controls in the title
+ * bar right of the traffic lights. app_toolbar_draw returns true when the app
+ * drew a toolbar (the title is then not drawn); app_toolbar_click returns
+ * true when the app consumed the click (no window drag starts). */
+bool app_toolbar_draw(window_t *w, rect_t bar);
+bool app_toolbar_click(window_t *w, i32 x, i32 y);
+bool app_terminal_toolbar(window_t *w, rect_t bar);
+bool app_terminal_toolbar_click(window_t *w, i32 x, i32 y);
 
 void app_notes_init(window_t *w);
 void app_notes_draw(window_t *w);

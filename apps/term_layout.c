@@ -3,10 +3,34 @@
 
 u32 term_wrap(const char *buf, u32 len, i32 max_w, term_char_w_fn cw,
               term_vline_t *out, u32 max_out) {
+    return term_wrap_rich(buf, len, max_w, cw, NULL, NULL, out, max_out);
+}
+
+u32 term_wrap_rich(const char *buf, u32 len, i32 max_w, term_char_w_fn cw,
+                   term_rows_fn rows, void *ctx, term_vline_t *out, u32 max_out) {
     u32 n = 0, i = 0;
     if (max_w < 1) max_w = 1;
     for (;;) {
         u32 start = i, last_space = 0xFFFFFFFFu;
+        if (rows && i < len && buf[i] == TERM_MARK && (i == 0 || buf[i - 1] == '\n')) {
+            while (i < len && buf[i] != '\n') i++;
+            u32 r = rows(buf + start, i - start, ctx);
+            if (r < 1) r = 1;
+            if (n < max_out) { out[n].off = start; out[n].len = i - start; }
+            n++;
+            for (u32 k = 1; k < r; k++) {
+                if (n < max_out) { out[n].off = start; out[n].len = TERM_VL_CONT; }
+                n++;
+            }
+            if (i >= len) break;
+            i++;                                          /* the '\n' */
+            if (i == len) {
+                if (n < max_out) { out[n].off = i; out[n].len = 0; }
+                n++;
+                break;
+            }
+            continue;
+        }
         i32 w = 0;
         while (i < len && buf[i] != '\n') {
             i32 c = cw(buf[i]);

@@ -928,10 +928,13 @@ static void draw_window(window_t *w) {
     /* Tiny transition frames have no room for controls or a title. */
     if (wd >= WM_TITLE_LEFT + 14 && ht >= TITLEBAR_H) {
         wm_draw_controls(w, chrome);
-        /* Title: UI 13 bold (spec §7). */
-        i32 title_y = wy + (TITLEBAR_H - gfx_role_line_h(FONT_ROLE_UI, 1)) / 2;
-        gfx_str_role_fit(wx + WM_TITLE_LEFT, title_y, wd - WM_TITLE_LEFT - 14, w->title,
-                         w->focused ? chrome->title : chrome->muted, FONT_ROLE_UI, 1, FONT_W_BOLD);
+        /* App toolbar if the app has one, else the title: UI 13 bold (spec §7). */
+        rect_t bar = rect_make(wx + WM_TITLE_LEFT, wy, wd - WM_TITLE_LEFT - 14, TITLEBAR_H);
+        if (transition || !app_toolbar_draw(w, bar)) {
+            i32 title_y = wy + (TITLEBAR_H - gfx_role_line_h(FONT_ROLE_UI, 1)) / 2;
+            gfx_str_role_fit(wx + WM_TITLE_LEFT, title_y, wd - WM_TITLE_LEFT - 14, w->title,
+                             w->focused ? chrome->title : chrome->muted, FONT_ROLE_UI, 1, FONT_W_BOLD);
+        }
     }
 
     /* App content, clipped to client area (skipped mid-transition). */
@@ -1244,7 +1247,10 @@ void wm_handle_mouse(mouse_t *m) {
         }
     }
 
-    /* -- 7. Titlebar drag ------------------------------------------------- */
+    /* -- 7. Title-bar toolbar, then titlebar drag --------------------------- */
+    if (m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H &&
+        app_toolbar_click(hit, m->x, m->y))
+        return;
     if (m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H && !hit->maximized) {
         hit->dragging = true;
         hit->drag_ox  = m->x - hit->rect.x;
@@ -1256,6 +1262,7 @@ void wm_handle_mouse(mouse_t *m) {
     rect_t cr = wm_client_rect(hit);
     if (rect_contains(cr, m->x, m->y)) {
         switch (hit->app) {
+        case APP_TERMINAL: app_terminal_click(hit, m->x, m->y);    break;
         case APP_FILES:    app_files_click(hit, m->x, m->y, m);    break;
         case APP_CALC:     app_calc_click(hit, m->x, m->y);        break;
         case APP_SYSMON:   app_sysmon_click(hit, m->x, m->y);      break;
