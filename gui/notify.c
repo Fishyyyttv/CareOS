@@ -299,3 +299,17 @@ bool notify_center_click(i32 x, mouse_t *m) {
     }
     return rect_contains(rect_make(x, TOPBAR_H + 12, CARD_W, HEADER_H), m->x, m->y);
 }
+
+/* Newest notifications for the lock screen: app, title and age only (the body
+ * stays private while locked). */
+u32 notify_previews(notify_preview_t *out, u32 max) {
+    note_t *list[NOTE_MAX];
+    u32 n = ordered(list, max < NOTE_MAX ? max : NOTE_MAX, false);
+    for (u32 i = 0; i < n; i++) {
+        out[i].app = list[i]->app;
+        copy(out[i].app_name, app_label(list[i]->app), sizeof(out[i].app_name));
+        copy(out[i].title, list[i]->title, sizeof(out[i].title));
+        when(list[i]->born_ms, out[i].when);
+    }
+    return n;
+}

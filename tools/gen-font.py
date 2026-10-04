@@ -58,7 +58,7 @@ def set_axes(face, axes, px: int, opsz_auto: bool) -> None:
 
 
 def build_face(ttf_path: str, px: int, axes=None, opsz_auto=False,
-               tracking=0) -> Face:
+               tracking=0, chars=None) -> Face:
     face = freetype.Face(ttf_path)
     face.set_pixel_sizes(0, px)
     set_axes(face, axes or {}, px, opsz_auto)
@@ -73,6 +73,11 @@ def build_face(ttf_path: str, px: int, axes=None, opsz_auto=False,
     adv_list: List[int] = []
 
     for code in range(FIRST_CH, LAST_CH + 1):
+        if chars is not None and chr(code) not in chars:
+            # Outside the subset: an empty glyph with no advance.
+            adv_list.append(0)
+            glyphs.append(Glyph(0, 0, 0, 0, len(coverage)))
+            continue
         face.load_char(chr(code), freetype.FT_LOAD_RENDER)
         slot = face.glyph
         bmp = slot.bitmap
@@ -221,6 +226,9 @@ def main() -> None:
                    help="set the opsz axis to each face's pixel size")
     p.add_argument("--tracking", type=int, default=0,
                    help="letter-spacing in 1/1000 em (design: -30 = -0.03em)")
+    p.add_argument("--chars",
+                   help="only rasterise these characters (others are empty);"
+                        " for large display faces such as clock digits")
     p.add_argument("--license",
                    help="licence line for the header comment")
     args = p.parse_args()
@@ -237,7 +245,7 @@ def main() -> None:
         sys.exit("error: --sizes must be strictly ascending, smallest (CAPTION) "
                  f"to largest (H1); got {args.sizes}")
 
-    faces = [build_face(args.ttf, px, axes, args.opsz_auto, args.tracking)
+    faces = [build_face(args.ttf, px, axes, args.opsz_auto, args.tracking, args.chars)
              for px in sizes]
     note = args.ttf
     if axes or args.opsz_auto:

@@ -30,6 +30,7 @@ u32 font_role_fallback_size(u32 role, u32 slot) { return nearest_legacy(font_rol
 extern const font_family_t font_figtree, font_figtree_bold;
 extern const font_family_t font_bricolage_bold, font_bricolage_xbold;
 extern const font_family_t font_jetbrains_mono, font_jetbrains_mono_bold;
+extern const font_family_t font_bricolage_clock;     /* digits, ':' and AM/PM only */
 
 static const font_face_t *font_role_face(font_role_t role, u32 slot, font_weight_t w) {
     if (slot > 4) slot = 4;
@@ -71,7 +72,44 @@ void gfx_str_role_fit(i32 x, i32 y, i32 maxw, const char *s, u32 fg,
     gfx_str_face(x, y, buf, fg, f);
 }
 
-/* Large clock digits. Display ExtraBold 64 until a dedicated 120 px face lands. */
-void gfx_str_huge(i32 x, i32 y, const char *s, u32 fg) { gfx_str_role(x, y, s, fg, FONT_ROLE_DISPLAY, 4, FONT_W_BOLD); }
-i32  gfx_str_huge_width(const char *s) { return gfx_str_role_width(s, FONT_ROLE_DISPLAY, 4, FONT_W_BOLD); }
+/* Clock digits (Bricolage Bold, -0.04 em): slots 0..4 = 72 96 120 144 168 px. */
+static const font_face_t *clock_face(u32 slot) { return &font_bricolage_clock.faces[slot > 4 ? 4 : slot]; }
+void gfx_str_clock(i32 x, i32 y, const char *s, u32 fg, u32 slot) { gfx_str_face(x, y, s, fg, clock_face(slot)); }
+i32  gfx_str_clock_width(const char *s, u32 slot) { return gfx_str_face_width_n(s, 0xFFFFFFFFu, clock_face(slot)); }
+/* Top of the digits below the line top, and their height, for tight layout. */
+i32  gfx_clock_cap_top(u32 slot) {
+    const font_face_t *f = clock_face(slot);
+    const glyph_t *g = &f->glyphs['0' - FONT_FIRST_CH];
+    return ((i32)f->baseline - (i32)g->bearing_y) * (i32)GFX_FONT_SCALE;
+}
+i32  gfx_clock_cap_h(u32 slot) { return (i32)clock_face(slot)->glyphs['0' - FONT_FIRST_CH].h * (i32)GFX_FONT_SCALE; }
+void gfx_str_huge(i32 x, i32 y, const char *s, u32 fg) { gfx_str_clock(x, y, s, fg, 2); }
+i32  gfx_str_huge_width(const char *s) { return gfx_str_clock_width(s, 2); }
+
+/* Word-wrap s into lines no wider than maxw (explicit '\n' breaks too) and
+ * draw them; returns the height used. fg == COL_TRANSPARENT only measures. */
+i32 gfx_str_role_wrap(i32 x, i32 y, i32 maxw, const char *s, u32 fg,
+                      font_role_t role, u32 slot, font_weight_t w, i32 gap) {
+    const font_face_t *f = font_role_face(role, slot, w);
+    i32 lh = (i32)f->line_h * (i32)GFX_FONT_SCALE + gap, yy = y;
+    char line[160];
+    while (s && *s) {
+        u32 n = 0, brk = 0;
+        while (s[n] && s[n] != '\n' && n < sizeof(line) - 1) {
+            if (gfx_str_face_width_n(s, n + 1, f) > maxw && n > 0) break;
+            if (s[n] == ' ') brk = n;
+            n++;
+        }
+        u32 take = n;
+        if (s[n] && s[n] != '\n' && brk > 0) take = brk;   /* break at the last space */
+        kmemcpy(line, s, take);
+        line[take] = '\0';
+        if (fg != COL_TRANSPARENT) gfx_str_face(x, yy, line, fg, f);
+        yy += lh;
+        s += take;
+        while (*s == ' ') s++;
+        if (*s == '\n') s++;
+    }
+    return yy - y;
+}
 #endif

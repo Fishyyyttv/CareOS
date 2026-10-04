@@ -57,27 +57,32 @@ static i32 day_of_week(i32 y, i32 m, i32 d) {
     return (y + y/4 - y/100 + y/400 + t[m - 1] + d) % 7;
 }
 
-/* Read the RTC and apply the same -7h "timezone" offset the top bar uses, so
- * the widgets always agree with the clock in the menu bar. Unlike the top bar's
- * naive day-- , we fully normalise the borrow across month and year boundaries
- * so the Calendar's "today" and month grid stay correct near midnight. */
+/* Local time: the RTC runs on UTC; settings hold the zone offset in minutes
+ * (onboarding's Region step, default UTC-7 -- what CareOS always showed).
+ * The date rolls forward or back across month and year ends. */
 static void read_local_time(rtc_time_t *out) {
     rtc_read(out);
-    i32 h = (i32)out->hour - 7;
-    if (h < 0) {
-        h += 24;
-        if (out->day > 1) {
-            out->day--;
-        } else {
-            i32 m = (i32)out->month - 1;
-            i32 y = (i32)out->year;
-            if (m < 1) { m = 12; y--; }
-            out->month = (u8)m;
-            out->year  = (u16)y;
-            out->day   = (u8)days_in_month(m, y);
+    const careos_settings_t *cfg = settings_get();
+    i32 off = cfg ? cfg->tz_offset_min : -420;
+    i32 mins = (i32)out->hour * 60 + (i32)out->minute + off;
+    i32 y = (i32)out->year, m = (i32)out->month, d = (i32)out->day;
+    if (m < 1 || m > 12) m = 1;
+    while (mins < 0) {
+        mins += 1440;
+        if (--d < 1) {
+            if (--m < 1) { m = 12; y--; }
+            d = days_in_month(m, y);
         }
     }
-    out->hour = (u8)h;
+    while (mins >= 1440) {
+        mins -= 1440;
+        if (++d > days_in_month(m, y)) {
+            d = 1;
+            if (++m > 12) { m = 1; y++; }
+        }
+    }
+    out->year = (u16)y; out->month = (u8)m; out->day = (u8)d;
+    out->hour = (u8)(mins / 60); out->minute = (u8)(mins % 60);
 }
 
 /* Public wrappers so apps (e.g. Clock) show exactly the widgets' local time. */

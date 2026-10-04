@@ -230,9 +230,16 @@ i32  gfx_str_role_width_n(const char *s, u32 n, font_role_t role, u32 slot, font
 i32  gfx_role_line_h(font_role_t role, u32 slot);
 void gfx_str_role_fit(i32 x, i32 y, i32 maxw, const char *s, u32 fg,
                       font_role_t role, u32 slot, font_weight_t w);
-/* Large clock digits; Display ExtraBold 64 until a dedicated face lands. */
-void gfx_str_huge(i32 x, i32 y, const char *s, u32 fg);
+/* Clock digits (Bricolage Bold, digits/':'/AM PM only): slots 0..4 = 72 96 120 144 168 px. */
+void gfx_str_clock(i32 x, i32 y, const char *s, u32 fg, u32 slot);
+i32  gfx_str_clock_width(const char *s, u32 slot);
+i32  gfx_clock_cap_top(u32 slot);       /* digit top below the line top */
+i32  gfx_clock_cap_h(u32 slot);         /* digit height */
+void gfx_str_huge(i32 x, i32 y, const char *s, u32 fg);   /* 120 px */
 i32  gfx_str_huge_width(const char *s);
+/* Word-wrapped role text; returns the height used (fg COL_TRANSPARENT = measure only). */
+i32  gfx_str_role_wrap(i32 x, i32 y, i32 maxw, const char *s, u32 fg,
+                       font_role_t role, u32 slot, font_weight_t w, i32 gap);
 
 /* Active font metrics. Variables, not constants -- font_set_family() updates
  * them. No call site uses these in a constant expression, so every existing
@@ -721,6 +728,8 @@ void notify_clear_all(void);
 void notify_center_set_visible(bool on);
 void notify_center_draw(i32 x, const mouse_t *m);   /* 360 px column at x */
 bool notify_center_click(i32 x, mouse_t *m);
+typedef struct { app_id_t app; char app_name[16]; char title[48]; char when[16]; } notify_preview_t;
+u32  notify_previews(notify_preview_t *out, u32 max);   /* newest first, no bodies */
 
 /* -- Additional GFX helpers ----------------------------------------------- */
 void gfx_gradient_rect(i32 x, i32 y, i32 w, i32 h, u32 c1, u32 c2);

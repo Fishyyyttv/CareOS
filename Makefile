@@ -121,6 +121,7 @@ C_SRC     := kernel/kernel.c       \
              kernel/syscall.c      \
              kernel/users.c        \
              kernel/settings.c     \
+             kernel/account_rules.c \
              kernel/power.c        \
              kernel/appdb.c        \
              kernel/carepkg.c      \
@@ -170,6 +171,7 @@ C_SRC     := kernel/kernel.c       \
              gui/fonts/font_figtree_bold.c \
              gui/fonts/font_bricolage_bold.c \
              gui/fonts/font_bricolage_xbold.c \
+             gui/fonts/font_bricolage_clock.c \
              gui/font_roles.c      \
              gui/ui.c              \
              gui/ui_glyph.c        \
@@ -178,6 +180,12 @@ C_SRC     := kernel/kernel.c       \
              gui/notify.c          \
              gui/glass.c           \
              gui/spring.c          \
+             gui/session/common.c \
+             gui/session/boot.c \
+             gui/session/login.c \
+             gui/session/signup.c \
+             gui/session/power.c \
+             gui/session/onboarding.c \
              gui/theme.c           \
             gui/care_wallpaper.c  \
              gui/launcher.c        \
@@ -441,7 +449,8 @@ HT_SRC_http_parse := apps/http_parse.c
 HT_SRC_fetch_token := apps/fetch_token.c
 HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
-HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring
+HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring account_rules
+HT_SRC_account_rules := kernel/account_rules.c
 HT_SRC_spring := gui/spring.c
 HT_SRC_glass := gui/glass.c
 HT_SRC_care_wallpaper := gui/care_wallpaper.c
@@ -455,6 +464,7 @@ $(HOST_TEST_DIR)/test_ui_icons: gui/ui_icons.h
 $(HOST_TEST_DIR)/test_ui_glyph: gui/ui_glyph_raster.h gui/ui_glyph_data.h
 $(HOST_TEST_DIR)/test_glass: gui/glass.h
 $(HOST_TEST_DIR)/test_spring: gui/spring.h
+$(HOST_TEST_DIR)/test_account_rules: kernel/account_rules.h
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
