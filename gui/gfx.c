@@ -706,10 +706,29 @@ static inline i32 glyph_adv(const font_face_t *f, u8 ch) {
     return f->advances ? (i32)f->advances[ch - FONT_FIRST_CH] : (i32)f->advance;
 }
 
+static void draw_text_face(i32 x, i32 y, const char *s, u32 fg, u32 bg,
+                           const font_face_t *f);
+
 static void draw_text(i32 x, i32 y, const char *s, u32 fg, u32 bg,
                       font_size_t size, bool bold) {
-    const font_face_t *f = bold ? font_bold_face_at((u32)size)
-                                : font_face_at((u32)size);
+    draw_text_face(x, y, s, fg, bg, bold ? font_bold_face_at((u32)size)
+                                         : font_face_at((u32)size));
+}
+
+/* Role text (gui/font_roles.c) names its face directly. */
+void gfx_str_face(i32 x, i32 y, const char *s, u32 fg, const font_face_t *f) {
+    if (s && f) draw_text_face(x, y, s, fg, COL_TRANSPARENT, f);
+}
+
+i32 gfx_str_face_width_n(const char *s, u32 n, const font_face_t *f) {
+    if (!s || !f) return 0;
+    i32 w = 0;
+    for (u32 i = 0; i < n && s[i]; i++) w += glyph_adv(f, (u8)s[i]);
+    return w * (i32)GFX_FONT_SCALE;
+}
+
+static void draw_text_face(i32 x, i32 y, const char *s, u32 fg, u32 bg,
+                           const font_face_t *f) {
     i32 sc = (i32)GFX_FONT_SCALE;
     i32 lh  = (i32)f->line_h  * sc;
     i32 cy = y, start_x = x, start_y = y, max_x = x;
@@ -1057,57 +1076,6 @@ void textinput_key(textinput_t *t,char c){
 }
 void textinput_handle_mouse(textinput_t *t, const mouse_t *m){ if (!t || !m || !m->left_clicked) return; t->focused = rect_contains(t->rect, m->x, m->y); t->hover = t->focused; }
 
-static notification_t notifs[MAX_NOTIFICATIONS];
-static bool notif_hover[MAX_NOTIFICATIONS];
-void notify_push(const char *title, const char *body, u32 icon_color) {
-    int slot = -1; u32 oldest_tick = 0xFFFFFFFF;
-    for (int i = 0; i < MAX_NOTIFICATIONS; i++) { if (!notifs[i].active) { slot = i; break; } if (notifs[i].born_tick < oldest_tick) { oldest_tick = notifs[i].born_tick; slot = i; } }
-    if (slot < 0) slot = 0;
-    kstrncpy(notifs[slot].title, title, 31); kstrncpy(notifs[slot].body, body, 127);
-    notifs[slot].icon_color = icon_color; notifs[slot].born_tick = timer_ms(); notifs[slot].active = true; notif_hover[slot] = false;
-}
-void notify_tick(void) { u32 now = timer_ms(); for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active && now - notifs[i].born_tick > NOTIFY_LIFE_MS) notifs[i].active = false; }
-bool notify_active(void) { for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active) return true; return false; }
-void notify_draw(void) {
-    /* Toast geometry follows the live font: an H3 title over a BODY line.
-     * Both the box height and the title/body split have to track those two
-     * line heights, or the title runs into the body (JetBrains Mono H3 is 21px
-     * against the 13px the old bitmap face used).
-     *
-     * The stack also starts below TOPBAR_H. gui_run() paints the menu bar
-     * after wm_draw_all() -> notify_draw(), so anything drawn above that line
-     * is covered by an opaque bar. */
-    i32 pad      = 12;
-    i32 title_lh = gfx_line_h_ex(FONT_H3);
-    i32 body_lh  = gfx_line_h_ex(FONT_BODY);
-    i32 nw = 264;
-    i32 nh = pad + title_lh + 4 + body_lh + pad;
-    int slot = 0;
-    for (int i = 0; i < MAX_NOTIFICATIONS; i++) {
-        if (!notifs[i].active) continue;
-        i32 nx = (i32)SCREEN_W - nw - 12;
-        i32 ny = TOPBAR_H + 12 + slot*(nh+8);
-        u32 now = timer_ms(); u32 age = now - notifs[i].born_tick; u32 life = NOTIFY_LIFE_MS;
-        u32 pct = (age < life) ? (100 * (life - age) / life) : 0;
-        /* Floating frosted card: soft shadow, blurred wallpaper, tint, hairline. */
-        gfx_shadow_soft(nx, ny, nw, nh, CDL_R_CARD);
-        gfx_glass_panel(nx, ny, nw, nh, CDL_R_CARD);
-        /* Accent dot + title, body, and a thin accent life bar along the bottom. */
-        gfx_circle_fill(nx + 18, ny + pad + title_lh / 2, 4,
-                        notifs[i].icon_color ? notifs[i].icon_color : COL_ACCENT);
-        gfx_str_ex(nx+32, ny+pad, notifs[i].title, COL_TEXT, COL_TRANSPARENT, FONT_H3);
-        gfx_str_clipped(nx+32, ny+pad+title_lh+4, nw-44, notifs[i].body, COL_DIM, COL_TRANSPARENT);
-        gfx_rect_rounded(nx + 12, ny + nh - 5, (nw - 24) * (i32)pct / 100, 2, 1, COL_ACCENT);
-        slot++;
-    }
-}
-
-bool notify_handle_mouse(mouse_t *m) {
-    (void)m;
-    return false;
-}
-
-
 void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy) {
     if (!src || !src->pixels || !g_target) return;
     i32 sw = (i32)src->w;
@@ -1123,4 +1091,30 @@ void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy) {
             g_target->pixels[sy * (g_target->pitch / 4) + sx] = col;
         }
     }
+}
+
+/* Blend `color` through an 8-bit coverage mask (w*h, row-major) at (x,y).
+ * Honours the clip rect; used by the UI kit's glyph cache. */
+void gfx_blend_mask(i32 x, i32 y, const u8 *mask, i32 w, i32 h, u32 color) {
+    if (!mask || w <= 0 || h <= 0) return;
+    for (i32 r = 0; r < h; r++) {
+        const u8 *row = mask + (u32)r * (u32)w;
+        for (i32 c = 0; c < w; c++)
+            if (row[c]) gfx_setpixel_blend(x + c, y + r, color, row[c]);
+    }
+    gfx_dirty(x, y, w, h);
+}
+
+/* Blend an ARGB image (alpha = coverage, colour not premultiplied) at (x,y).
+ * Honours the clip rect; used for the UI kit's anti-aliased app icons. */
+void gfx_blend_argb(i32 x, i32 y, const u32 *src, i32 w, i32 h) {
+    if (!src || w <= 0 || h <= 0) return;
+    for (i32 r = 0; r < h; r++) {
+        const u32 *row = src + (u32)r * (u32)w;
+        for (i32 c = 0; c < w; c++) {
+            u32 a = row[c] >> 24;
+            if (a) gfx_setpixel_blend(x + c, y + r, row[c] & 0xFFFFFFu, (u8)a);
+        }
+    }
+    gfx_dirty(x, y, w, h);
 }

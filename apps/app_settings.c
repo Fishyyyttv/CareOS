@@ -3,6 +3,13 @@
 #include "font.h"
 #include "image.h"
 #include "icon.h"
+#include "care_wallpaper.h"
+
+/* Picker tiles: the Care background first, then the six photo slots. */
+#define WALLPAPER_TILES (WALLPAPER_SLOTS + 1u)
+static u32 wallpaper_tile_value(u32 tile) {
+    return tile == 0 ? WALLPAPER_CARE : tile - 1u;
+}
 
 extern void term_ip_to_str(u32 ip, char *out);
 
@@ -248,16 +255,19 @@ void app_settings_draw(window_t *w){
 
         cy += 82;
         gfx_str(cx, cy, "Wallpaper", COL_TEXT, COL_TRANSPARENT);
-        for (u32 i = 0; i < WALLPAPER_SLOTS; i++) {
-            i32 wx = cx + (i32)(i % 3) * 148;
-            i32 wy = cy + 18 + (i32)(i / 3) * 82;
+        for (u32 i = 0; i < WALLPAPER_TILES; i++) {
+            i32 wx = cx + (i32)(i % 4) * 148;
+            i32 wy = cy + 18 + (i32)(i / 4) * 82;
+            u32 value = wallpaper_tile_value(i);
 
             /* Show the background itself rather than a tinted placeholder.
              * wallpaper_thumb() returns art baked at exactly 132x64, so this is
              * a straight blit -- picking a wallpaper without seeing it first
              * was the reason six identical grey swatches told you nothing. */
-            image_t *thumb = wallpaper_thumb(i);
-            if (thumb) {
+            image_t *thumb = value == WALLPAPER_CARE ? NULL : wallpaper_thumb(value);
+            if (value == WALLPAPER_CARE) {
+                wallpaper_care_preview(wx, wy, 132, 64);
+            } else if (thumb) {
                 gfx_set_clip(wx, wy, 132, 64);
                 gfx_draw_image(thumb, wx, wy);
                 gfx_clear_clip();
@@ -266,12 +276,13 @@ void app_settings_draw(window_t *w){
                 gfx_rect_blend(wx, wy, 132, 64, COL_GLASS_TINT, (u8)(12 + i * 4));
             }
 
-            if (cfg->wallpaper == i) gfx_rect_rounded_outline(wx, wy, 132, 64, 12, COL_PRIMARY);
+            if (cfg->wallpaper == value) gfx_rect_rounded_outline(wx, wy, 132, 64, 12, COL_PRIMARY);
             else                     gfx_rect_rounded_outline(wx, wy, 132, 64, 12, COL_BORDER);
 
             /* Index badge, on a dark plate so it stays legible over any image. */
-            buf[0] = '#'; buf[1] = '0' + (char)i; buf[2] = '\0';
-            gfx_rect_blend(wx + 6, wy + 6, 26, FONT_H + 4, COL_BLACK, 140);
+            if (value == WALLPAPER_CARE) { buf[0] = 'C'; buf[1] = 'a'; buf[2] = 'r'; buf[3] = 'e'; buf[4] = '\0'; }
+            else { buf[0] = '#'; buf[1] = '0' + (char)value; buf[2] = '\0'; }
+            gfx_rect_blend(wx + 6, wy + 6, gfx_str_width(buf) + 8, FONT_H + 4, COL_BLACK, 140);
             gfx_str(wx + 10, wy + 8, buf, COL_WHITE, COL_TRANSPARENT);
         }
 
@@ -493,11 +504,11 @@ void app_settings_click(window_t *w,i32 x,i32 y,mouse_t *m){
             user_set_current_theme_preference(1);
             settings_set_status(w, "Light theme applied", COL_GREEN);
         }
-        for (u32 i = 0; i < WALLPAPER_SLOTS; i++) {
-            i32 wx = cx + (i32)(i % 3) * 148;
-            i32 wy = cy + 100 + (i32)(i / 3) * 82;
+        for (u32 i = 0; i < WALLPAPER_TILES; i++) {
+            i32 wx = cx + (i32)(i % 4) * 148;
+            i32 wy = cy + 100 + (i32)(i / 4) * 82;
             if (rect_contains(rect_make(wx, wy, 132, 64), x, y)) {
-                settings_set_wallpaper(i);
+                settings_set_wallpaper(wallpaper_tile_value(i));
                 settings_set_status(w, "Wallpaper updated", COL_GREEN);
             }
         }

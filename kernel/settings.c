@@ -11,7 +11,9 @@ u32  theme_accent_count(void);
 void gfx_wallpaper_cache_invalidate(void);
 
 #define SETTINGS_MAGIC    0x43535447u /* CSTG */
-#define SETTINGS_VERSION  5u
+/* v6 keeps the v5 layout; only the meaning of `accent` changed when the v10
+ * accent list put Care first (see accent_from_v5). */
+#define SETTINGS_VERSION  6u
 
 typedef struct __attribute__((packed)) {
     u32 magic;
@@ -96,6 +98,18 @@ typedef struct __attribute__((packed)) {
     u32 accent;
 } settings_blob_v5_t;
 
+/* The procedural v10 background, after the six photo slots. Mirrors
+ * WALLPAPER_CARE in gui/care_wallpaper.h (settings.c doesn't include gui/). */
+#define WALLPAPER_CARE_INDEX 6u
+
+/* v5 accents: Blue, Green, Orange, Purple, Red, Auto. v6: Care, Calm, Blue,
+ * Green, Purple, Red, Auto. Blue was the v5 default and moves to the v10
+ * default, Care, along with Orange (its closest match). */
+static u32 accent_from_v5(u32 a) {
+    static const u8 MAP[6] = { 0, 3, 0, 4, 5, 6 };
+    return a < 6u ? MAP[a] : 0u;
+}
+
 static careos_settings_t g_settings;
 static u8 settings_io[CAREOS_DISK_SETTINGS_SECTORS * 512u];
 
@@ -125,7 +139,7 @@ static void settings_defaults(void) {
     g_settings.mouse_sensitivity = 100;
     g_settings.boot_fast = 0;
     g_settings.clock_24h = 1;
-    g_settings.wallpaper = 0;
+    g_settings.wallpaper = WALLPAPER_CARE_INDEX;
     g_settings.taskbar_centered = 1;
     g_settings.vesa_w = 1920;
     g_settings.vesa_h = 1080;
@@ -140,7 +154,7 @@ static void settings_clamp(void) {
     if (g_settings.mouse_sensitivity < 40) g_settings.mouse_sensitivity = 40;
     if (g_settings.mouse_sensitivity > 200) g_settings.mouse_sensitivity = 200;
     if (g_settings.theme > 1) g_settings.theme = 0;
-    if (g_settings.wallpaper > 5) g_settings.wallpaper = 0;
+    if (g_settings.wallpaper > WALLPAPER_CARE_INDEX) g_settings.wallpaper = WALLPAPER_CARE_INDEX;
     g_settings.taskbar_centered = g_settings.taskbar_centered ? 1u : 0u;
     if (g_settings.font_family >= font_registry_count()) g_settings.font_family = 0;
     if (g_settings.accent >= theme_accent_count()) g_settings.accent = 0;
@@ -327,14 +341,24 @@ void settings_init(void) {
     }
 
     if (version == SETTINGS_VERSION && settings_load_v5((const settings_blob_v5_t*)settings_io)) {
-        serial_write("[settings] loaded v5 settings from disk\n");
+        serial_write("[settings] loaded v6 settings from disk\n");
+        theme_set_accent(g_settings.accent);
+        return;
+    }
+
+    if (version == 5u && settings_load_v5((const settings_blob_v5_t*)settings_io)) {
+        g_settings.accent = accent_from_v5(((const settings_blob_v5_t*)settings_io)->accent);
+        /* Still on the shipped default photo: move to the v10 default. */
+        if (g_settings.wallpaper == 0u) g_settings.wallpaper = WALLPAPER_CARE_INDEX;
+        serial_write("[settings] migrated v5 settings to v6\n");
+        settings_save();
         theme_set_accent(g_settings.accent);
         return;
     }
 
     if (version == 4u && settings_load_v4((const settings_blob_v4_t*)settings_io)) {
-        g_settings.accent = 0u;   /* default to Blue */
-        serial_write("[settings] migrated v4 settings to v5\n");
+        g_settings.accent = 0u;   /* default to Care */
+        serial_write("[settings] migrated v4 settings to v6\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;
@@ -343,7 +367,7 @@ void settings_init(void) {
     if (version == 3u && settings_load_v3((const settings_blob_v3_t*)settings_io)) {
         g_settings.font_family = 0u;   /* default to JetBrains Mono */
         g_settings.accent = 0u;
-        serial_write("[settings] migrated v3 settings to v5\n");
+        serial_write("[settings] migrated v3 settings to v6\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;
@@ -352,7 +376,7 @@ void settings_init(void) {
     if (version == 2u && settings_load_v2((const settings_blob_v2_t*)settings_io)) {
         g_settings.font_family = 0u;
         g_settings.accent = 0u;
-        serial_write("[settings] migrated v2 settings to v5\n");
+        serial_write("[settings] migrated v2 settings to v6\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;
@@ -361,7 +385,7 @@ void settings_init(void) {
     if (version == 1u && settings_load_v1((const settings_blob_v1_t*)settings_io)) {
         g_settings.font_family = 0u;
         g_settings.accent = 0u;
-        serial_write("[settings] migrated v1 settings to v5\n");
+        serial_write("[settings] migrated v1 settings to v6\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;

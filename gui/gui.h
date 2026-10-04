@@ -7,6 +7,7 @@
  * ============================================================================= */
 
 #include "kernel.h"
+#include "window_chrome.h"
 
 /* -- Screen dimensions (set at runtime from multiboot) -------------------- */
 extern u32 SCREEN_W;
@@ -84,6 +85,15 @@ typedef struct {
     u32 taskbar, winbar, shadow;
     u32 input_bg, cursor, glass_tint;
     u8  glass_alpha, shadow_alpha;
+    /* v10 design tokens (docs/superpowers/specs/2026-10-03-careos-visual-system-shell-design.md §1) */
+    u32 ground, surface_alt, raised, raised2, track;
+    u32 ink, ink2, care, on_care, care_soft, calm;
+    u32 hairline;         u8 hairline_alpha;
+    u32 menubar_tint;     u8 menubar_alpha;
+    u32 dock_tint;        u8 dock_alpha;
+    u32 panel_tint;       u8 panel_alpha;
+    u32 window_body;      u8 window_alpha;
+    u32 term_green;
     bool is_dark;
 } theme_t;
 
@@ -133,9 +143,9 @@ extern u32 g_last_activity_tick;
  * the desktop loop honours it by running the login/lock flow. */
 extern volatile bool g_lock_request;
 
-#define TASKBAR_H       72
-#define TOPBAR_H        34
-#define SIDEBAR_W       182
+#define TASKBAR_H       88     /* dock: 80 px pill + 8 px edge gap */
+#define TOPBAR_H        40
+#define SIDEBAR_W       0      /* v10: no app sidebar; apps live in the launcher */
 #define TITLEBAR_H      48
 
 #define kabs(x) ((x) < 0 ? -(x) : (x))
@@ -150,12 +160,12 @@ extern volatile bool g_lock_request;
  * One source of truth for radii, shadows, glass, and animation timing so every
  * built-in surface reads as one intentional system. Change it here, not in the
  * individual widgets. Radii are the values from the CDL spec:
- *   buttons/inputs 10, menus 12, windows/cards 14, dock 24.                   */
+ *   buttons/inputs 10, menus 12, windows 22, cards 14, dock 24.               */
 #define CDL_SP            8       /* base spacing grid unit */
 #define CDL_R_BUTTON      10
 #define CDL_R_INPUT       10
 #define CDL_R_MENU        12
-#define CDL_R_WINDOW      14
+#define CDL_R_WINDOW      WM_CHROME_RADIUS
 #define CDL_R_CARD        14
 #define CDL_R_DOCK        24
 
@@ -208,6 +218,21 @@ typedef enum {
     FONT_H2,      /* 20px */
     FONT_H1       /* 28px */
 } font_size_t;
+
+/* v10 type roles (gui/font_roles.c). Size slots 0..4 per role, in px:
+ *   UI (Figtree) 11 13 15 17 20 · DISPLAY (Bricolage) 17 22 28 52 64 · MONO 11 13 14 16 20
+ * Weight: UI regular/bold = Figtree 400/700; DISPLAY = Bricolage 700/800. */
+typedef enum { FONT_ROLE_UI = 0, FONT_ROLE_DISPLAY, FONT_ROLE_MONO, FONT_ROLE_COUNT } font_role_t;
+typedef enum { FONT_W_REGULAR = 0, FONT_W_BOLD } font_weight_t;
+void gfx_str_role(i32 x, i32 y, const char *s, u32 fg, font_role_t role, u32 slot, font_weight_t w);
+i32  gfx_str_role_width(const char *s, font_role_t role, u32 slot, font_weight_t w);
+i32  gfx_str_role_width_n(const char *s, u32 n, font_role_t role, u32 slot, font_weight_t w);
+i32  gfx_role_line_h(font_role_t role, u32 slot);
+void gfx_str_role_fit(i32 x, i32 y, i32 maxw, const char *s, u32 fg,
+                      font_role_t role, u32 slot, font_weight_t w);
+/* Large clock digits; Display ExtraBold 64 until a dedicated face lands. */
+void gfx_str_huge(i32 x, i32 y, const char *s, u32 fg);
+i32  gfx_str_huge_width(const char *s);
 
 /* Active font metrics. Variables, not constants -- font_set_family() updates
  * them. No call site uses these in a constant expression, so every existing
@@ -571,6 +596,9 @@ bool        wallpaper_dominant_color(u32 *out_rgb);
 /* ── Desktop widgets (gui/widgets.c) ─────────────────────────────────────── */
 void widgets_init(void);
 void widgets_draw(mouse_t *m);          /* desktop layer, behind windows */
+u32  widgets_layer_key(void);           /* changes when the widgets would look different */
+bool widgets_dragging(void);
+u32  desktop_layer_key(void);           /* shortcut hover + hero visibility */
 bool widgets_handle_mouse(mouse_t *m);  /* true if a widget consumed the click/drag */
 void clock_read_local(rtc_time_t *out); /* RTC + desktop timezone, date-normalised */
 i32  clock_day_of_week(i32 y, i32 m, i32 d);  /* 0 = Sunday */
@@ -678,6 +706,17 @@ void notify_draw(void);
 void notify_tick(void);
 bool notify_active(void);
 bool notify_handle_mouse(mouse_t *m);
+/* gui/notify.c: one store for toasts and the Notification Center. Actions
+ * may be NULL; on_action(which) gets 0 or 1 when a button is pressed. */
+void notify_push_ex(app_id_t app, const char *title, const char *body,
+                    const char *action0, const char *action1, void (*on_action)(u32 which));
+void notify_set_dnd(bool on);          /* Do Not Disturb: history only, no toasts */
+bool notify_dnd(void);
+u32  notify_count(void);
+void notify_clear_all(void);
+void notify_center_set_visible(bool on);
+void notify_center_draw(i32 x, const mouse_t *m);   /* 360 px column at x */
+bool notify_center_click(i32 x, mouse_t *m);
 
 /* -- Additional GFX helpers ----------------------------------------------- */
 void gfx_gradient_rect(i32 x, i32 y, i32 w, i32 h, u32 c1, u32 c2);
@@ -727,6 +766,8 @@ void gfx_snapshot_rect(i32 x, i32 y, i32 w, i32 h, u32 *dst);
 void gfx_shadow_soft_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy);
 /* Blit an ARGB image, skipping its rounded corners (radius r). */
 void gfx_blit_argb_rounded(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh, i32 r);
+void gfx_blend_mask(i32 x, i32 y, const u8 *mask, i32 w, i32 h, u32 color);
+void gfx_blend_argb(i32 x, i32 y, const u32 *src, i32 w, i32 h);
 void gui_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gui_run(void);
 
@@ -789,6 +830,8 @@ void speaker_stop(void);
 void speaker_beep(u32 freq, u32 ms);
 void speaker_startup(void);
 void speaker_error(void);
+void speaker_set_muted(bool muted);
+bool speaker_muted(void);
 
 extern gfx_buffer_t g_screen_buf;
 extern gfx_buffer_t *g_target;

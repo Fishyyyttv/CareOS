@@ -686,3 +686,12 @@ int ext2_unlink(u32 parent_ino, const char *name) {
     kfree(blk);
     return -5;
 }
+
+/* Used share of the mounted filesystem, 0..100, from the live superblock
+ * (block allocation keeps s_free_blocks_count current). False if unmounted. */
+bool ext2_usage(u32 *used_pct) {
+    if (!ext2_ready || !used_pct || sb.s_blocks_count == 0) return false;
+    u32 free = sb.s_free_blocks_count > sb.s_blocks_count ? sb.s_blocks_count : sb.s_free_blocks_count;
+    *used_pct = (u32)((u64)(sb.s_blocks_count - free) * 100u / sb.s_blocks_count);
+    return true;
+}

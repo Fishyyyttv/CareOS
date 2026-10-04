@@ -63,3 +63,4 @@ int  ext2_write_data(u32 ino_num, u32 off, const void *buf, u32 len);
 u32  ext2_create_file(u32 parent_ino, const char *name);
 u32  ext2_mkdir(u32 parent_ino, const char *name);
 int  ext2_unlink(u32 parent_ino, const char *name);
+bool ext2_usage(u32 *used_pct);   /* used %, false when unmounted */

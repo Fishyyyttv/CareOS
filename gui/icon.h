@@ -107,4 +107,11 @@ bool     wallpaper_draw(i32 x, i32 y, i32 w, i32 h);
  * slot ships no artwork. Cache-owned; safe to draw in the same frame. */
 image_t *wallpaper_thumb(u32 slot);
 
+/* The v10 Care background (settings value WALLPAPER_CARE, care_wallpaper.h):
+ * procedural, so it has no archive image. The full-size render is cached per
+ * size + theme; the preview draws a small cached render for the picker. */
+bool     wallpaper_is_care(void);
+void     wallpaper_care_draw(i32 x, i32 y, i32 w, i32 h);
+void     wallpaper_care_preview(i32 x, i32 y, i32 w, i32 h);
+
 #endif /* CAREOS_ICON_H */

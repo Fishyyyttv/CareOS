@@ -166,7 +166,19 @@ C_SRC     := kernel/kernel.c       \
              gui/fonts/font_ibm_plex_mono_bold.c \
              gui/fonts/font_ibm_plex_sans.c \
              gui/fonts/font_ibm_plex_sans_bold.c \
+             gui/fonts/font_figtree.c \
+             gui/fonts/font_figtree_bold.c \
+             gui/fonts/font_bricolage_bold.c \
+             gui/fonts/font_bricolage_xbold.c \
+             gui/font_roles.c      \
+             gui/ui.c              \
+             gui/ui_glyph.c        \
+             gui/ui_glyph_raster.c \
+             gui/ui_icons.c        \
+             gui/notify.c          \
+             gui/glass.c           \
              gui/theme.c           \
+            gui/care_wallpaper.c  \
              gui/launcher.c        \
              gui/mouse.c           \
              gui/wm.c              \
@@ -428,6 +440,13 @@ HT_SRC_http_parse := apps/http_parse.c
 HT_SRC_fetch_token := apps/fetch_token.c
 HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
+HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass
+HT_SRC_glass := gui/glass.c
+HT_SRC_care_wallpaper := gui/care_wallpaper.c
+HT_SRC_font_roles := gui/font_roles.c
+HT_SRC_ui_icons := gui/ui_icons.c
+HT_SRC_ui_glyph := gui/ui_glyph_raster.c
+$(HOST_TEST_DIR)/test_window_chrome: gui/window_chrome.h
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
@@ -463,6 +482,5 @@ help:
 	@echo "  Mouse: click QEMU window to capture, Ctrl+Alt+G to release"
 	@echo "  Fullscreen: Ctrl+Alt+F toggles it any time (or use make run-1080p)"
 	@echo "  Display: override backend with make run QEMU_DISPLAY=gtk"
-
 
 

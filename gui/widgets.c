@@ -13,12 +13,14 @@
 #include "kernel.h"
 #include "gui.h"
 #include "widgets.h"
+#include "ui.h"
+#include "perf.h"
+#include "../kernel/ext2.h"
 
 /* -- Layout constants (all padding is a multiple of CDL_SP = 8) ------------ */
-#define WGT_W        240      /* shared card width                          */
-#define WGT_PAD      16       /* inner padding (2 * CDL_SP)                  */
-#define WGT_GAP      8        /* gap between cards, and between content rows */
-#define WGT_MARGIN   20       /* clearance from the screen edges            */
+#define WGT_W        300      /* shared card width (Desktop artboard)        */
+#define WGT_GAP      14       /* gap between cards                           */
+#define WGT_MARGIN   24       /* clearance from the screen edge / menu bar   */
 
 /* -- State ----------------------------------------------------------------- */
 static dwidget_t s_widget[WIDGET_KIND_COUNT];
@@ -33,13 +35,9 @@ static const char *k_month_full[] = {
     "January","February","March","April","May","June",
     "July","August","September","October","November","December"
 };
-static const char *k_month_abbr[] = {
-    "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
-};
 static const char *k_weekday_full[] = {
     "Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"
 };
-static const char *k_weekday_abbr[] = { "Su","Mo","Tu","We","Th","Fr","Sa" };
 
 static bool is_leap(i32 y) {
     return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
@@ -87,42 +85,44 @@ void clock_read_local(rtc_time_t *out) { read_local_time(out); }
 i32  clock_day_of_week(i32 y, i32 m, i32 d) { return day_of_week(y, m, d); }
 
 /* ============================================================================
- * Init -- default positions, stacked down the right edge
+ * Init -- default positions: the artboard's right column (right 24, top 64,
+ * width 300, gap 14)
  * ==========================================================================*/
 
+#define CARD_R     24
+#define CAL_CELL   30
+#define CAL_ROW    34            /* 30 px day + 4 px row gap */
+
+static i32 clock_card_h(void) {
+    return 20 + gfx_role_line_h(FONT_ROLE_UI, 0) + 2 + gfx_role_line_h(FONT_ROLE_DISPLAY, 3)
+         + gfx_role_line_h(FONT_ROLE_UI, 1) + 20;
+}
+/* Rows the current month needs (4..6), so the card has no empty band. */
+static i32 calendar_card_h(void) {
+    rtc_time_t t;
+    read_local_time(&t);
+    i32 m = (t.month >= 1 && t.month <= 12) ? (i32)t.month : 1;
+    i32 rows = (day_of_week((i32)t.year, m, 1) + days_in_month(m, (i32)t.year) + 6) / 7;
+    return 18 + gfx_role_line_h(FONT_ROLE_DISPLAY, 0) + 10 + 20 + rows * CAL_ROW - 4 + 14;
+}
+static i32 system_card_h(u32 rows) {
+    i32 row = gfx_role_line_h(FONT_ROLE_UI, 1) + 5 + 6;
+    return 18 + gfx_role_line_h(FONT_ROLE_DISPLAY, 0) + (i32)rows * (12 + row) + 18;
+}
+
+static bool disk_pct(u32 *pct) { return ext2_usage(pct); }
+
 void widgets_init(void) {
-    i32 cap_lh  = gfx_line_h_ex(FONT_CAPTION);
-    i32 body_lh = gfx_line_h_ex(FONT_BODY);
-    i32 h1_lh   = gfx_line_h_ex(FONT_H1);
-    i32 h3_lh   = gfx_line_h_ex(FONT_H3);
-
-    /* Card heights are derived from the real line metrics so they fit whatever
-     * font family/scale is active, not hard-coded pixel guesses. */
-    i32 clock_h = WGT_PAD + cap_lh + h1_lh + body_lh + WGT_PAD;
-
-    i32 grid_w  = WGT_W - 2 * WGT_PAD;
-    i32 cell    = grid_w / 7;                 /* square-ish calendar cell     */
-    i32 cal_h   = WGT_PAD + h3_lh + WGT_GAP   /* title                        */
-                + cell                        /* weekday header row           */
-                + 6 * cell                    /* up to 6 week rows            */
-                + WGT_PAD;
-
-    i32 bar_h   = 12;
-    i32 sys_h   = WGT_PAD + h3_lh + WGT_GAP    /* title                       */
-                + cap_lh + 4 + bar_h + WGT_GAP /* memory label + bar          */
-                + body_lh                      /* uptime row                  */
-                + body_lh                      /* tasks row                   */
-                + WGT_PAD;
-
+    u32 dp;
     i32 x = (i32)SCREEN_W - WGT_W - WGT_MARGIN;
     if (x < WGT_MARGIN) x = WGT_MARGIN;
     i32 y = (i32)TOPBAR_H + WGT_MARGIN;
 
-    s_widget[WIDGET_CLOCK].rect    = rect_make(x, y, WGT_W, clock_h);
-    y += clock_h + WGT_GAP + WGT_GAP;
-    s_widget[WIDGET_CALENDAR].rect = rect_make(x, y, WGT_W, cal_h);
-    y += cal_h + WGT_GAP + WGT_GAP;
-    s_widget[WIDGET_SYSTEM].rect   = rect_make(x, y, WGT_W, sys_h);
+    s_widget[WIDGET_CLOCK].rect = rect_make(x, y, WGT_W, clock_card_h());
+    y += s_widget[WIDGET_CLOCK].rect.h + WGT_GAP;
+    s_widget[WIDGET_CALENDAR].rect = rect_make(x, y, WGT_W, calendar_card_h());
+    y += s_widget[WIDGET_CALENDAR].rect.h + WGT_GAP;
+    s_widget[WIDGET_SYSTEM].rect = rect_make(x, y, WGT_W, system_card_h(disk_pct(&dp) ? 3 : 2));
 
     for (i32 i = 0; i < WIDGET_KIND_COUNT; i++) {
         s_widget[i].grab_dx = 0;
@@ -136,153 +136,121 @@ void widgets_init(void) {
  * Individual widget drawing
  * ==========================================================================*/
 
-/* Common card chrome: a soft shadow, then the frosted glass panel. The shadow
- * is tighter than the CDL default (smaller blur/offset) because the cards stack
- * close together -- a full-size halo would bleed into the neighbour below and
- * read as the cards overlapping. */
 static void draw_card_base(rect_t r) {
-    gfx_shadow_soft_ex(r.x, r.y, r.w, r.h, CDL_R_CARD, 15, 32, 5);
-    gfx_glass_panel(r.x, r.y, r.w, r.h, CDL_R_CARD);
+    ui_glass(16, r, CARD_R, g_theme->panel_tint, g_theme->is_dark ? 168 : 199, 24, UI_GLASS_HAIRLINE);
+}
+
+static void upper(char *dst, const char *src, u32 max) {
+    u32 i = 0;
+    for (; src[i] && i + 1 < max; i++) dst[i] = (src[i] >= 'a' && src[i] <= 'z') ? (char)(src[i] - 32) : src[i];
+    dst[i] = '\0';
 }
 
 static void draw_clock(rect_t r, const rtc_time_t *t) {
-    i32 cap_lh = gfx_line_h_ex(FONT_CAPTION);
-    i32 h1_lh  = gfx_line_h_ex(FONT_H1);
-    i32 wd     = day_of_week((i32)t->year, (i32)t->month, (i32)t->day);
-    i32 inner  = r.w - 2 * WGT_PAD;
-    i32 cx     = r.x + WGT_PAD;
-    i32 cy     = r.y + WGT_PAD;
+    i32 wd = day_of_week((i32)t->year, (i32)t->month, (i32)t->day);
+    i32 x = r.x + 20, y = r.y + 20;
 
-    /* Small accent title: the weekday, e.g. "SATURDAY". */
-    gfx_str_ex(cx, cy, k_weekday_full[wd], COL_ACCENT, COL_TRANSPARENT, FONT_CAPTION);
-    cy += cap_lh;
+    /* "SATURDAY" in care-soft caps */
+    char caps[16];
+    upper(caps, k_weekday_full[wd], sizeof(caps));
+    gfx_str_role(x, y, caps, g_theme->care_soft, FONT_ROLE_UI, 0, FONT_W_BOLD);
+    y += gfx_role_line_h(FONT_ROLE_UI, 0) + 2;
 
-    /* Big live time HH:MM:SS, centred (24h to stay unambiguous & consistent). */
+    /* Time, Display 52, 12/24 h from settings. */
     char time_s[16];
-    ksprintf(time_s, "%02d:%02d:%02d", (int)t->hour, (int)t->minute, (int)t->second);
-    gfx_str_centered_ex(cx, cy, inner, time_s, COL_TEXT, COL_TRANSPARENT, FONT_H1);
-    cy += h1_lh;
+    const careos_settings_t *cfg = settings_get();
+    bool h24 = cfg && cfg->clock_24h;
+    if (h24) ksprintf(time_s, "%02d:%02d", (int)t->hour, (int)t->minute);
+    else {
+        int h = (int)t->hour % 12;
+        if (h == 0) h = 12;
+        ksprintf(time_s, "%d:%02d", h, (int)t->minute);
+    }
+    gfx_str_role(x, y, time_s, g_theme->ink, FONT_ROLE_DISPLAY, 3, FONT_W_REGULAR);
+    if (!h24) {
+        i32 tw = gfx_str_role_width(time_s, FONT_ROLE_DISPLAY, 3, FONT_W_REGULAR);
+        gfx_str_role(x + tw + 6, y + gfx_role_line_h(FONT_ROLE_DISPLAY, 3) - gfx_role_line_h(FONT_ROLE_UI, 2) - 8,
+                     t->hour >= 12 ? "PM" : "AM", g_theme->ink2, FONT_ROLE_UI, 2, FONT_W_BOLD);
+    }
+    y += gfx_role_line_h(FONT_ROLE_DISPLAY, 3);
 
-    /* Date line: "Jul 26, 2026". */
-    const char *mon = (t->month >= 1 && t->month <= 12) ? k_month_abbr[t->month - 1] : "---";
-    char date_s[24];
+    /* "October 3, 2026" */
+    const char *mon = (t->month >= 1 && t->month <= 12) ? k_month_full[t->month - 1] : "---";
+    char date_s[32];
     ksprintf(date_s, "%s %d, %d", mon, (int)t->day, (int)t->year);
-    gfx_str_centered_ex(cx, cy, inner, date_s, COL_DIM, COL_TRANSPARENT, FONT_BODY);
+    gfx_str_role(x, y, date_s, g_theme->ink2, FONT_ROLE_UI, 1, FONT_W_REGULAR);
 }
 
 static void draw_calendar(rect_t r, const rtc_time_t *t) {
-    i32 h3_lh   = gfx_line_h_ex(FONT_H3);
-    i32 cap_lh  = gfx_line_h_ex(FONT_CAPTION);
-    i32 grid_w  = r.w - 2 * WGT_PAD;
-    i32 cell    = grid_w / 7;
-    i32 gx      = r.x + WGT_PAD;
-    i32 gy      = r.y + WGT_PAD;
+    i32 x = r.x + 18, y = r.y + 18, w = r.w - 36;
+    i32 month = (t->month >= 1 && t->month <= 12) ? (i32)t->month : 1;
+    i32 year  = (i32)t->year, today = (i32)t->day;
 
-    i32 month   = (t->month >= 1 && t->month <= 12) ? (i32)t->month : 1;
-    i32 year    = (i32)t->year;
-    i32 today   = (i32)t->day;
+    /* "October" (Display 17) and the year, muted, on the right */
+    gfx_str_role(x, y, k_month_full[month - 1], g_theme->ink, FONT_ROLE_DISPLAY, 0, FONT_W_REGULAR);
+    char ys[8];
+    ksprintf(ys, "%d", year);
+    i32 yw = gfx_str_role_width(ys, FONT_ROLE_UI, 0, FONT_W_REGULAR);
+    i32 dh = gfx_role_line_h(FONT_ROLE_DISPLAY, 0), ch = gfx_role_line_h(FONT_ROLE_UI, 0);
+    gfx_str_role(x + w - yw, y + (dh - ch) / 2, ys, g_theme->muted, FONT_ROLE_UI, 0, FONT_W_REGULAR);
+    y += dh + 10;
 
-    /* Title: "July 2026". */
-    char title[32];
-    ksprintf(title, "%s %d", k_month_full[month - 1], year);
-    gfx_str_ex(gx, gy, title, COL_TEXT, COL_TRANSPARENT, FONT_H3);
-    gy += h3_lh + WGT_GAP;
-
-    /* Weekday header row (Su Mo Tu We Th Fr Sa). */
-    i32 hdr_ty = gy + (cell - cap_lh) / 2;
+    static const char *const DOW[7] = { "S", "M", "T", "W", "T", "F", "S" };
     for (i32 c = 0; c < 7; c++) {
-        gfx_str_centered_ex(gx + c * cell, hdr_ty, cell, k_weekday_abbr[c],
-                            COL_MUTED, COL_TRANSPARENT, FONT_CAPTION);
+        i32 cx = x + c * w / 7 + w / 14;
+        i32 tw = gfx_str_role_width(DOW[c], FONT_ROLE_UI, 0, FONT_W_BOLD);
+        gfx_str_role(cx - tw / 2, y, DOW[c], g_theme->muted, FONT_ROLE_UI, 0, FONT_W_BOLD);
     }
-    gy += cell;
+    y += 20;
 
-    /* Day grid. The 1st sits under its real weekday column. */
-    i32 first_dow = day_of_week(year, month, 1);
-    i32 dim       = days_in_month(month, year);
-
+    i32 first = day_of_week(year, month, 1), dim = days_in_month(month, year);
     for (i32 d = 1; d <= dim; d++) {
-        i32 slot = first_dow + (d - 1);
-        i32 col  = slot % 7;
-        i32 row  = slot / 7;
-        i32 cxx  = gx + col * cell;
-        i32 cyy  = gy + row * cell;
-
+        i32 slot = first + d - 1, col = slot % 7, row = slot / 7;
+        i32 cx = x + col * w / 7 + w / 14, cy = y + row * CAL_ROW + CAL_CELL / 2;
         char num[4];
         ksprintf(num, "%d", (int)d);
-
-        if (d == today) {
-            /* TODAY: a filled accent chip with white text. */
-            i32 inset = 2;
-            gfx_rect_rounded(cxx + inset, cyy + inset,
-                             cell - 2 * inset, cell - 2 * inset,
-                             CDL_R_BUTTON, COL_ACCENT);
-            gfx_str_centered_ex(cxx, cyy + (cell - cap_lh) / 2, cell, num,
-                                COL_WHITE, COL_TRANSPARENT, FONT_CAPTION);
-        } else {
-            /* Sundays dimmed a touch so weekends read at a glance. */
-            u32 col_txt = (col == 0) ? COL_MUTED : COL_TEXT;
-            gfx_str_centered_ex(cxx, cyy + (cell - cap_lh) / 2, cell, num,
-                                col_txt, COL_TRANSPARENT, FONT_CAPTION);
-        }
+        bool is_today = d == today;
+        if (is_today) gfx_circle_fill(cx, cy, CAL_CELL / 2, g_theme->care);
+        font_weight_t fw = is_today ? FONT_W_BOLD : FONT_W_REGULAR;
+        i32 tw = gfx_str_role_width(num, FONT_ROLE_UI, 0, fw);
+        gfx_str_role(cx - tw / 2, cy - ch / 2, num, is_today ? g_theme->on_care : g_theme->ink,
+                     FONT_ROLE_UI, 0, fw);
     }
 }
 
-/* Rounded meter bar in the sysmon style: track + coloured fill sized to pct. */
-static void draw_meter(i32 x, i32 y, i32 w, i32 h, u32 pct, u32 fill_col) {
-    if (pct > 100) pct = 100;
-    gfx_rect_rounded(x, y, w, h, h / 2, COL_SURFACE3);
-    gfx_rect_rounded_outline(x, y, w, h, h / 2, COL_BORDER);
-    if (pct > 0) {
-        i32 fill = (w - 2) * (i32)pct / 100;
-        if (fill > w - 2) fill = w - 2;
-        if (fill > 0)
-            gfx_rect_rounded(x + 1, y + 1, fill, h - 2, (h - 2) / 2, fill_col);
-    }
+static void meter_row(i32 x, i32 *y, i32 w, const char *label, u32 pct, u32 color) {
+    char v[8];
+    ksprintf(v, "%d%%", (int)pct);
+    gfx_str_role(x, *y, label, g_theme->ink2, FONT_ROLE_UI, 1, FONT_W_REGULAR);
+    i32 vw = gfx_str_role_width(v, FONT_ROLE_UI, 1, FONT_W_BOLD);
+    gfx_str_role(x + w - vw, *y, v, g_theme->ink, FONT_ROLE_UI, 1, FONT_W_BOLD);
+    *y += gfx_role_line_h(FONT_ROLE_UI, 1) + 5;
+    ui_progress(rect_make(x, *y, w, 6), pct, color);
+    *y += 6 + 12;
 }
 
 static void draw_system(rect_t r) {
-    i32 h3_lh   = gfx_line_h_ex(FONT_H3);
-    i32 cap_lh  = gfx_line_h_ex(FONT_CAPTION);
-    i32 body_lh = gfx_line_h_ex(FONT_BODY);
-    i32 inner   = r.w - 2 * WGT_PAD;
-    i32 cx      = r.x + WGT_PAD;
-    i32 cy      = r.y + WGT_PAD;
+    i32 x = r.x + 18, y = r.y + 18, w = r.w - 36;
 
-    /* Title. */
-    gfx_str_ex(cx, cy, "System", COL_TEXT, COL_TRANSPARENT, FONT_H3);
-    cy += h3_lh + WGT_GAP;
+    /* Real numbers only: the GUI loop's busy share, kernel heap, ext2 usage. */
+    u32 cpu = perf_cpu_busy_pct();
+    u32 mem = (u32)((u64)kmem_used() * 100u / (u64)kheap_size());
+    u32 disk = 0;
+    bool has_disk = disk_pct(&disk);
+    if (cpu > 100) cpu = 100;
 
-    /* Memory meter -- REAL: kmem_used() over the kernel heap size. 64-bit
-     * intermediate so used*100 can't wrap the u32 range at large heaps. */
-    u32 mem_pct = (u32)((u64)kmem_used() * 100u / (u64)kheap_size());
-    char pct_s[8];
-    ksprintf(pct_s, "%d%%", (int)mem_pct);
-    gfx_str_ex(cx, cy, "Memory", COL_DIM, COL_TRANSPARENT, FONT_CAPTION);
-    gfx_str_right(cx, cy, inner, pct_s, COL_TEXT, COL_TRANSPARENT);
-    cy += cap_lh + 4;
+    bool busy = cpu > 85 || mem > 85 || (has_disk && disk > 85);
+    gfx_str_role(x, y, "System", g_theme->ink, FONT_ROLE_DISPLAY, 0, FONT_W_REGULAR);
+    const char *st = busy ? "Busy" : "All good";
+    i32 sw = gfx_str_role_width(st, FONT_ROLE_UI, 0, FONT_W_BOLD);
+    i32 dh = gfx_role_line_h(FONT_ROLE_DISPLAY, 0);
+    gfx_str_role(x + w - sw, y + (dh - gfx_role_line_h(FONT_ROLE_UI, 0)) / 2, st,
+                 busy ? g_theme->warning : g_theme->success, FONT_ROLE_UI, 0, FONT_W_BOLD);
+    y += dh + 12;
 
-    /* Colour-code the fill by load so the meter carries meaning, not just hue. */
-    u32 mem_col = (mem_pct < 60) ? COL_GREEN : (mem_pct < 85 ? COL_YELLOW : COL_RED);
-    draw_meter(cx, cy, inner, 12, mem_pct, mem_col);
-    cy += 12 + WGT_GAP;
-
-    /* Uptime -- REAL: milliseconds since boot from timer_ms(). */
-    u32 secs = timer_ms() / 1000u;
-    u32 days = secs / 86400u; secs %= 86400u;
-    u32 hrs  = secs / 3600u;  secs %= 3600u;
-    u32 mins = secs / 60u;    secs %= 60u;
-    char up_s[24];
-    if (days > 0) ksprintf(up_s, "%dd %dh %dm", (int)days, (int)hrs, (int)mins);
-    else          ksprintf(up_s, "%02d:%02d:%02d", (int)hrs, (int)mins, (int)secs);
-    gfx_str_ex(cx, cy, "Uptime", COL_DIM, COL_TRANSPARENT, FONT_BODY);
-    gfx_str_right(cx, cy, inner, up_s, COL_ACCENT, COL_TRANSPARENT);
-    cy += body_lh;
-
-    /* Active tasks -- REAL: scheduler count. */
-    char task_s[8];
-    ksprintf(task_s, "%d", (int)task_count_active());
-    gfx_str_ex(cx, cy, "Tasks", COL_DIM, COL_TRANSPARENT, FONT_BODY);
-    gfx_str_right(cx, cy, inner, task_s, COL_TEXT, COL_TRANSPARENT);
+    meter_row(x, &y, w, "CPU", cpu, g_theme->calm);
+    meter_row(x, &y, w, "Memory", mem, g_theme->care);
+    if (has_disk) meter_row(x, &y, w, "Disk", disk, g_theme->success);
 }
 
 /* ============================================================================
@@ -373,3 +341,19 @@ bool widgets_handle_mouse(mouse_t *m) {
     }
     return false;
 }
+
+/* What the cached desktop layer shows from the widgets, so gui.c rebuilds that
+ * layer only when it would look different: the minute, the day, and the meters
+ * (CPU in 5 % steps). */
+u32 widgets_layer_key(void) {
+    rtc_time_t t;
+    read_local_time(&t);
+    u32 cpu = perf_cpu_busy_pct() / 5u, mem = (u32)((u64)kmem_used() * 100u / (u64)kheap_size()), disk = 0;
+    disk_pct(&disk);
+    u32 k = 2166136261u;
+    u32 parts[6] = { t.minute, t.hour, t.day, cpu, mem, disk };
+    for (u32 i = 0; i < 6; i++) k = (k ^ parts[i]) * 16777619u;
+    return k;
+}
+
+bool widgets_dragging(void) { return s_dragging >= 0; }
