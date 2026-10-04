@@ -70,6 +70,12 @@ void gui_wallpaper_draw(void) { draw_elite_wallpaper(); }
 static bool s_control_center_open = false;
 static int  s_brightness = 100;      /* 10% to 100%, software dimming (persisted) */
 
+void gui_set_brightness_live(u32 pct) {
+    if (pct < 10) pct = 10;
+    if (pct > 100) pct = 100;
+    s_brightness = (int)pct;
+}
+
 /* Notification Center: the store and cards live in gui/notify.c. */
 static bool s_notif_center_open = false;
 
@@ -755,6 +761,7 @@ static void enter_desktop(mouse_t *mouse) {
         const careos_settings_t *cfg = settings_get();
         s_brightness = (int)cfg->brightness_pct;
         notify_set_dnd(cfg->dnd != 0);
+        theme_set_glass(cfg->glass_alpha_pct, cfg->reduce_transparency != 0);
     }
 
     i32 sw = (i32)SCREEN_W;

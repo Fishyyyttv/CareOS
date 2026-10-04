@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "gui.h"
 #include "window_chrome.h"
+#include "ui.h"
 
 /* CareOS v10 Terminal / Settings artboards. Kept separate from legacy app
  * colours until the shared v10 token migration lands. Hairlines are already
@@ -105,6 +106,31 @@ static theme_t theme_light = {
 };
 
 theme_t *g_theme = &theme_dark;
+
+/* Window glass (Settings > Appearance): scale the glass alphas of both
+ * themes from their designed values; 100 % = as designed, 40 % = most
+ * see-through. Reduce transparency makes glass draw its tint only. */
+void theme_set_glass(u32 pct, bool reduce) {
+    static bool saved;
+    static u8 base[2][5];
+    theme_t *t[2] = { &theme_dark, &theme_light };
+    if (pct < 40) pct = 40;
+    if (pct > 100) pct = 100;
+    for (u32 i = 0; i < 2; i++) {
+        if (!saved) {
+            base[i][0] = t[i]->menubar_alpha; base[i][1] = t[i]->dock_alpha;
+            base[i][2] = t[i]->panel_alpha;   base[i][3] = t[i]->window_alpha;
+            base[i][4] = t[i]->glass_alpha;
+        }
+        t[i]->menubar_alpha = (u8)(base[i][0] * pct / 100);
+        t[i]->dock_alpha    = (u8)(base[i][1] * pct / 100);
+        t[i]->panel_alpha   = (u8)(base[i][2] * pct / 100);
+        t[i]->window_alpha  = (u8)(base[i][3] * pct / 100);
+        t[i]->glass_alpha   = (u8)(base[i][4] * pct / 100);
+    }
+    saved = true;
+    ui_set_reduce_transparency(reduce);
+}
 
 void theme_switch(bool dark) {
     g_theme = dark ? &theme_dark : &theme_light;

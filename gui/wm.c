@@ -1182,6 +1182,7 @@ void wm_handle_mouse(mouse_t *m) {
         if (rect_contains(cr, m->x, m->y)) {
             if (hit->app == APP_PAINT) app_paint_click(hit, m->x, m->y, m);
         }
+        if (hit->app == APP_SETTINGS) app_settings_drag(hit, m->x, m->y);
         return;
     }
 
@@ -1191,6 +1192,12 @@ void wm_handle_mouse(mouse_t *m) {
         m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H) {
         wm_close(hit);
         return;
+    }
+
+    /* A slider drag in Settings commits (saves) on release, wherever it ends. */
+    if (m->left_released) {
+        window_t *fw = wm_focused();
+        if (fw && fw->app == APP_SETTINGS) app_settings_release(fw);
     }
 
     /* Only discrete clicks from here */

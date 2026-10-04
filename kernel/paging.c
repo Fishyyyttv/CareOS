@@ -26,6 +26,10 @@ static void frame_clear(u32 frame) {
  * 1 GiB VM it used to hand out ~3.5 GiB of frames that do not exist or that
  * sit on the PCI hole (framebuffer, NIC registers). Call once, right after
  * paging_init() and before anything allocates a frame. */
+static u32 s_usable_mib;
+/* Usable RAM reported by the firmware memory map (MiB). */
+u32 pmm_ram_mib(void) { return s_usable_mib; }
+
 void pmm_apply_map(u64 mbi_addr) {
     static mb2_range_t usable[32];
     mb2_range_t resv[1];
@@ -47,6 +51,7 @@ void pmm_apply_map(u64 mbi_addr) {
     }
     u32 withdrawn = 0, usable_mib = 0;
     for (u32 i = 0; i < nu; i++) usable_mib += (u32)((usable[i].end - usable[i].base) >> 20);
+    s_usable_mib = usable_mib;
     for (u32 f = 0; f < FRAME_COUNT; f++) {
         if (phys_bitmap[f / 32] & (1u << (f % 32))) continue;          /* already used */
         if (pmm_frame_ok(usable, nu, resv, nr, (u64)f * PAGE_SIZE, PAGE_SIZE)) continue;

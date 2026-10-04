@@ -689,6 +689,15 @@ int ext2_unlink(u32 parent_ino, const char *name) {
 
 /* Used share of the mounted filesystem, 0..100, from the live superblock
  * (block allocation keeps s_free_blocks_count current). False if unmounted. */
+/* Size and free space of the mounted filesystem in bytes. */
+bool ext2_space(u64 *total, u64 *free_bytes) {
+    if (!ext2_ready || sb.s_blocks_count == 0) return false;
+    u32 fr = sb.s_free_blocks_count > sb.s_blocks_count ? sb.s_blocks_count : sb.s_free_blocks_count;
+    if (total) *total = (u64)sb.s_blocks_count * block_size;
+    if (free_bytes) *free_bytes = (u64)fr * block_size;
+    return true;
+}
+
 bool ext2_usage(u32 *used_pct) {
     if (!ext2_ready || !used_pct || sb.s_blocks_count == 0) return false;
     u32 free = sb.s_free_blocks_count > sb.s_blocks_count ? sb.s_blocks_count : sb.s_free_blocks_count;

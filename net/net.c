@@ -132,6 +132,8 @@ void net_set_ip(u32 ip, u32 nm, u32 gw){
     nic_gateway = gw;
 }
 
+u32 net_get_gateway(void) { return nic_gateway; }
+
 void net_configure(u32 ip, u32 netmask, u32 gateway, const u8 *mac){
     nic_ip = ip;
     nic_netmask = netmask;

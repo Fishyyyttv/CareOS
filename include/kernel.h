@@ -396,6 +396,7 @@ void  paging_init(void);
 u32   pmm_alloc_frame(void);
 void  pmm_free_frame(u32 frame);
 u32   pmm_free_count(void);
+u32   pmm_ram_mib(void);              /* usable RAM from the memory map */
 
 pde_t *paging_create_dir(void);
 int    paging_map(pde_t *dir, u64 virt, u64 phys, u32 flags);
@@ -614,6 +615,7 @@ void        ata_cache_flush(void);
 void        e1000_init(void);
 bool        e1000_is_up(void);
 const u8   *e1000_get_mac(void);
+u32         e1000_link_mbps(void);   /* 0 = no link */
 void        e1000_poll(void);
 
 /* net_send_frame is called by net.c; e1000.c implements it */
@@ -653,6 +655,7 @@ int  dns_resolve(const char *host, u32 *out);
 int  net_dhcp_renew(void);
 void net_set_dns_server(u32 ip);
 u32  net_get_dns_server(void);
+u32  net_get_gateway(void);
 const char *net_last_error(void);
 int  http_get(const char *host, u16 port, const char *path,
               char *resp, u32 maxlen);

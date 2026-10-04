@@ -219,6 +219,15 @@ void e1000_poll(void) {
 /* ── Public: get MAC ────────────────────────────────────────────────────────── */
 const u8 *e1000_get_mac(void) { return e1000_mac; }
 bool      e1000_is_up(void)   { return e1000_up; }
+/* Negotiated link speed from the STATUS register (LU bit 1, SPEED bits
+ * 7:6 = 10 / 100 / 1000 Mb/s); 0 when the NIC is absent or the link is down. */
+u32 e1000_link_mbps(void) {
+    if (!e1000_up) return 0;
+    u32 st = e1000_rd(E1000_STATUS);
+    if (!(st & 2u)) return 0;
+    u32 sp = (st >> 6) & 3u;
+    return sp == 0 ? 10u : sp == 1 ? 100u : 1000u;
+}
 
 /* ── Initialise ─────────────────────────────────────────────────────────────── */
 void e1000_init(void) {

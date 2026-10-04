@@ -527,6 +527,8 @@ void textinput_handle_mouse(textinput_t *t, const mouse_t *m);
 
 /* -- GFX API -------------------------------------------------------------- */
 void theme_switch(bool dark);
+void theme_set_glass(u32 pct, bool reduce);   /* Settings > Appearance */
+void gui_set_brightness_live(u32 pct);         /* software dim, not saved */
 void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gfx_set_pixel_format(u8 r_shift, u8 g_shift, u8 b_shift); /* B-01 */
 void gfx_dirty(i32 x, i32 y, i32 w, i32 h);                   /* P-02 */
@@ -683,6 +685,8 @@ void app_settings_init(window_t *w);
 void app_settings_draw(window_t *w);
 void app_settings_key(window_t *w, char c);
 void app_settings_click(window_t *w, i32 x, i32 y, mouse_t *m);
+void app_settings_drag(window_t *w, i32 x, i32 y);     /* slider drag (button held) */
+void app_settings_release(window_t *w);              /* commit a slider drag */
 
 void app_browser_init(window_t *w);
 void app_browser_draw(window_t *w);

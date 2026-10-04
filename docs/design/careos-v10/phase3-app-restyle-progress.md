@@ -16,8 +16,8 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 | # | App | Status |
 |---|---|---|
 | 1 | Terminal | **done** |
-| 2 | Settings | next |
-| 3 | Files | |
+| 2 | Settings | **done** |
+| 3 | Files | next |
 | 4 | Notes | |
 | 5 | Editor | |
 | 6 | Browser | |
@@ -62,3 +62,52 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 - No "+" new-tab button: the terminal has one session per window.
 - No ghost auto-suggestion text after the cursor.
 - "Done! (0.02 s)" timing isn't shown, because scripts don't report timing.
+
+## 2. Settings
+
+- Sidebar (surface_alt): a **search** field that filters the sections by
+  title and keywords (`apps/settings_index.c`, host-tested; arrows move
+  through the matches, Esc clears), an **account card** (gradient avatar,
+  display name, Administrator/Standard), and sections with coloured glyph
+  tiles. The selected section gets a care-soft fill and bold text.
+- One hit list is built during draw and used for click and drag, so the old
+  draw/click offset drift is gone. Sliders apply live while dragging and
+  save once on release.
+- Sections (real data only):
+  - **Network**: Ethernet card (status, IP, router, DNS, link speed from
+    the e1000 STATUS register). **Run diagnostics** is new and real: it
+    checks the adapter, the link, the address and a DNS lookup, then says
+    what to try next. Also Renew DHCP, and the `network --status` hint.
+  - **Display**: resolution cards (BGA modes, or an honest "set by the
+    boot loader"), Brightness (software dim), Pointer speed.
+  - **Appearance**: Light / Dark / Auto cards, the wallpaper strip (Care
+    plus the installed wallpapers only), accent swatches, a Window glass
+    slider (scales the glass alphas; new `theme_set_glass`), Reduce
+    transparency, Font.
+  - **Sound**: system sounds (PC speaker) on/off.
+  - **Notifications**: Do Not Disturb, plus the list size and Clear all.
+  - **Date & Time** (added): current time, 24-hour clock, time zone
+    stepper (fixed UTC offsets).
+  - **Accounts**: profile card, display name, avatar colour, password
+    with a strength meter. A guest session sees an honest note instead.
+  - **Storage**: ext2 used / total / free bar, or "No disk is mounted"
+    with what that means.
+  - **About CareOS**: logo and version; CPU brand (CPUID, cached), RAM
+    (from the memory map, new `pmm_ram_mib`), display, network adapter,
+    disk, uptime; Fast boot.
+- New kernel getters: `net_get_gateway`, `e1000_link_mbps`,
+  `pmm_ram_mib`, `ext2_space`, `gui_set_brightness_live`,
+  `theme_set_glass` (applied at session start too).
+
+### Deviations (real data or hide)
+- No Wi-Fi card or known networks: there is no wireless driver. The old
+  fake "Connect Wi-Fi" profile button is gone from Settings (the terminal
+  `wifi` command is untouched).
+- **Dock position / autohide hidden**: the setting is stored, but the dock
+  can't move yet. It returns once the dock layout supports it.
+- **Updates hidden**: carepkg has no update source.
+- Notifications has no toast duration or per-app mute, because neither
+  exists in the store.
+- The title bar is the normal window chrome; the canvas puts the traffic
+  lights inside the sidebar.
+- No "Your photo" wallpaper tile: there is no file picker yet.

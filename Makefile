@@ -199,6 +199,7 @@ C_SRC     := kernel/kernel.c       \
              apps/app_terminal.c   \
              apps/term_layout.c    \
              apps/term_cmds.c      \
+             apps/settings_index.c \
              apps/app_notes.c      \
              apps/app_files.c      \
              apps/app_sysmon.c     \
@@ -451,7 +452,9 @@ HT_SRC_fetch_token := apps/fetch_token.c
 HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
 HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring account_rules
-HOST_TESTS    += term_cmds
+HOST_TESTS    += term_cmds settings_index
+HT_SRC_settings_index := apps/settings_index.c
+$(HOST_TEST_DIR)/test_settings_index: apps/settings_index.h
 HT_SRC_term_cmds := apps/term_cmds.c
 $(HOST_TEST_DIR)/test_term_cmds: apps/term_cmds.h
 $(HOST_TEST_DIR)/test_term_layout: apps/term_layout.h
