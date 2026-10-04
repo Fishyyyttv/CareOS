@@ -255,3 +255,10 @@ void taskbar_handle_mouse(mouse_t *m) {
         return;
     }
 }
+
+/* The dock is drawn above windows, so the pointer belongs to it inside its pill. */
+bool taskbar_contains(i32 x, i32 y) {
+    dock_layout_t L;
+    dock_build_layout(&L);
+    return rect_contains(L.dock_rect, x, y);
+}

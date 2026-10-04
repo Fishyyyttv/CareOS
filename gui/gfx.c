@@ -1118,3 +1118,50 @@ void gfx_blend_argb(i32 x, i32 y, const u32 *src, i32 w, i32 h) {
     }
     gfx_dirty(x, y, w, h);
 }
+
+/* Blend an opaque RGB image over the target at a global alpha (0..255). Used
+ * to fade a prepared backdrop in or out without rebuilding it. */
+void gfx_blend_image(i32 x, i32 y, const u32 *src, i32 w, i32 h, u8 alpha) {
+    if (!src || !g_target || !g_target->pixels || w <= 0 || h <= 0 || alpha == 0) return;
+    i32 tw = (i32)g_target->w, th = (i32)g_target->h, st = (i32)(g_target->pitch / 4);
+    i32 x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
+    i32 x1 = x + w > tw ? tw : x + w, y1 = y + h > th ? th : y + h;
+    if (x0 >= x1 || y0 >= y1) return;
+    for (i32 r = y0; r < y1; r++) {
+        const u32 *s = src + (u32)(r - y) * (u32)w + (u32)(x0 - x);
+        u32 *d = g_target->pixels + (u32)r * (u32)st + (u32)x0;
+        if (alpha >= 250) { kmemcpy(d, s, (size_t)(x1 - x0) * 4u); continue; }
+        for (i32 c = 0; c < x1 - x0; c++) d[c] = color_blend(d[c], s[c], alpha);
+    }
+    gfx_dirty(x0, y0, x1 - x0, y1 - y0);
+}
+
+/* Draw an ARGB sprite scaled about its centre, which lands at (cx, cy).
+ * scale is Q16 (65536 = 1:1), nearest-neighbour; every pixel's own alpha is
+ * multiplied by the global alpha. For short zoom animations. */
+void gfx_blit_argb_scaled(i32 cx, i32 cy, const u32 *src, i32 w, i32 h, u32 scale, u8 alpha) {
+    if (!src || !g_target || !g_target->pixels || w <= 0 || h <= 0 || scale < 1024 || alpha == 0) return;
+    i32 dw = (i32)(((i64)w * scale) >> 16), dh = (i32)(((i64)h * scale) >> 16);
+    if (dw <= 0 || dh <= 0) return;
+    i32 dx = cx - dw / 2, dy = cy - dh / 2;
+    i32 tw = (i32)g_target->w, th = (i32)g_target->h, st = (i32)(g_target->pitch / 4);
+    i32 x0 = dx < 0 ? 0 : dx, y0 = dy < 0 ? 0 : dy;
+    i32 x1 = dx + dw > tw ? tw : dx + dw, y1 = dy + dh > th ? th : dy + dh;
+    u32 inv = (u32)(((u64)1 << 32) / scale);          /* Q16 source step per dest pixel */
+    for (i32 r = y0; r < y1; r++) {
+        i32 sy = (i32)(((u64)(u32)(r - dy) * inv) >> 16);
+        if (sy >= h) sy = h - 1;
+        const u32 *srow = src + (u32)sy * (u32)w;
+        u32 *d = g_target->pixels + (u32)r * (u32)st;
+        u64 sxq = (u64)(u32)(x0 - dx) * inv;
+        for (i32 c = x0; c < x1; c++, sxq += inv) {
+            i32 sx = (i32)(sxq >> 16);
+            if (sx >= w) sx = w - 1;
+            u32 p = srow[sx], a = p >> 24;
+            if (!a) continue;
+            a = a * alpha / 255u;
+            d[c] = color_blend(d[c], p & 0xFFFFFFu, (u8)a);
+        }
+    }
+    if (x1 > x0 && y1 > y0) gfx_dirty(x0, y0, x1 - x0, y1 - y0);
+}

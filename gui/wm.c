@@ -170,8 +170,8 @@ static void draw_desktop_icon(const desktop_icon_t *ic) {
 }
 
 /* -- Desktop hero (visual-system spec §10) --------------------------------
- * Date, "Good <part of day>, <name>." and the search bar that opens the
- * launcher. Artboard position left 260 / top 200 / width 700 at 1440x900,
+ * Date, "Good <part of day>, <name>." and the bar reserved for the coming AI
+ * assistant (a placeholder; it does not open anything). Artboard position left 260 / top 200 / width 700 at 1440x900,
  * scaled to the screen. Resume chips need a real source (last session, recent
  * files, pending updates); none exists yet, so none are shown. Hidden on short
  * screens and while a maximized window covers the desktop. */
@@ -216,14 +216,18 @@ static void desktop_draw_hero(void) {
     rect_t s = hero_search_rect();
     ui_glass(30, s, 20, g_theme->panel_tint, g_theme->is_dark ? 184 : 199, 24,
              UI_GLASS_HAIRLINE | UI_GLASS_SHADOW_M);
-    ui_glyph(UI_GLYPH_SEARCH, s.x + 20, s.y + (s.h - 20) / 2, 20, g_theme->ink2);
+    /* Reserved for the AI assistant: a placeholder, not wired to anything yet. */
+    ui_care_logo(s.x + 18, s.y + (s.h - 22) / 2, 22);
     gfx_str_role(s.x + 52, s.y + (s.h - gfx_role_line_h(FONT_ROLE_UI, 3)) / 2,
-                 "Search apps, files, settings and the web", g_theme->muted, FONT_ROLE_UI, 3, FONT_W_REGULAR);
-    i32 kw = gfx_str_role_width("Space", FONT_ROLE_MONO, 0, FONT_W_REGULAR) + 16;
-    i32 kx = s.x + s.w - 10 - kw;
-    ui_kbd(kx, s.y + (s.h - 24) / 2, "Space");
-    kw = gfx_str_role_width("Ctrl", FONT_ROLE_MONO, 0, FONT_W_REGULAR) + 16;
-    ui_kbd(kx - 4 - kw, s.y + (s.h - 24) / 2, "Ctrl");
+                 "Ask Care anything", g_theme->muted, FONT_ROLE_UI, 3, FONT_W_REGULAR);
+    {
+        const char *soon = "Coming soon";
+        i32 cw = gfx_str_role_width(soon, FONT_ROLE_UI, 0, FONT_W_BOLD) + 20, ch = 26;
+        i32 cx = s.x + s.w - 14 - cw, cy = s.y + (s.h - ch) / 2;
+        gfx_rect_rounded(cx, cy, cw, ch, ch / 2, g_theme->raised2);
+        gfx_str_role(cx + 10, cy + (ch - gfx_role_line_h(FONT_ROLE_UI, 0)) / 2, soon,
+                     g_theme->ink2, FONT_ROLE_UI, 0, FONT_W_BOLD);
+    }
 }
 
 void desktop_draw(void) {
@@ -1328,10 +1332,6 @@ static void draw_wallpaper(u32 wallpaper, i32 h) {
 
 
 void desktop_handle_mouse(mouse_t *m) {
-    if (m->left_clicked && hero_visible() && rect_contains(hero_search_rect(), m->x, m->y)) {
-        launcher_open = true;
-        return;
-    }
     for (int i = 0; i < ICON_COUNT; i++) {
         rect_t r = sidebar_icon_rect(i);
         icons[i].hover = rect_contains(r, m->x, m->y);
@@ -1376,4 +1376,30 @@ u32 desktop_layer_key(void) {
     u32 k = hero_visible() ? 1u : 0u;
     for (int i = 0; i < ICON_COUNT; i++) if (icons[i].hover) k |= 2u << i;
     return k;
+}
+
+/* Pointer routing (gui.c): the window manager owns the pointer while a window
+ * is being dragged or resized, while a snap-layout flyout is open, and over
+ * any visible window -- so a click on a window never reaches the desktop
+ * widgets, shortcuts or hero search drawn underneath it. */
+bool wm_busy(void) {
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        const window_t *w = &windows[i];
+        if (w->active && (w->dragging || w->resizing || w->showing_snap_layouts)) return true;
+    }
+    return false;
+}
+
+bool wm_pointer_owner(i32 x, i32 y) {
+    if (wm_busy()) return true;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        const window_t *w = &windows[i];
+        if (w->active && !w->minimized && wm_on_current_desktop(w) && rect_contains(w->rect, x, y))
+            return true;
+    }
+    return false;
+}
+
+void desktop_clear_hover(void) {
+    for (int i = 0; i < ICON_COUNT; i++) icons[i].hover = false;
 }

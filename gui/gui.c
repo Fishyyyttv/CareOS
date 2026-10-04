@@ -178,11 +178,12 @@ static void control_center_add_notif(const char *title, const char *body, u32 co
 
 /* ── Menu bar (visual-system spec §8, TopBar artboard) ──────────────────────
  * 40 px glass band. Left: the CareOS menu, the focused app's name. Right:
- * Search, Network, Sound, Control Center and the date/time; every icon is
+ * Network, Sound, Control Center and the date/time (the artboard's Search
+ * button waits for the AI assistant; the launcher has Super and the dock); every icon is
  * backed by real state (e1000 link, speaker mute) and battery is omitted
  * because nothing reports one. Draw and click share menubar_layout(). */
 typedef struct {
-    rect_t logo, app, search, net, sound, cc, clock;
+    rect_t logo, app, net, sound, cc, clock;
     char   date_s[24], time_s[16];   /* drawn as "date · time" */
     char   app_s[32];
 } menubar_layout_t;
@@ -260,7 +261,6 @@ static void menubar_layout(menubar_layout_t *L) {
     x -= 2 + MB_ICON_W; L->cc     = rect_make(x, MB_BTN_Y, MB_ICON_W, MB_BTN_H);
     x -= 2 + MB_ICON_W; L->sound  = rect_make(x, MB_BTN_Y, MB_ICON_W, MB_BTN_H);
     x -= 2 + MB_ICON_W; L->net    = rect_make(x, MB_BTN_Y, MB_ICON_W, MB_BTN_H);
-    x -= 2 + MB_ICON_W; L->search = rect_make(x, MB_BTN_Y, MB_ICON_W, MB_BTN_H);
 }
 
 /* The CareOS menu (heart logo). Real actions only. */
@@ -481,7 +481,6 @@ static void draw_top_bar(const mouse_t *m) {
         }
     }
 
-    ui_icon_button(L.search, UI_GLYPH_SEARCH, ui_state_for(L.search, m, false, false), launcher_open);
     {
         bool up = net_is_up();
         ui_state_t st = ui_state_for(L.net, m, false, false);
@@ -524,11 +523,6 @@ static bool handle_top_bar_mouse(mouse_t *m) {
         return true;
     }
     s_net_popover_open = false;
-    if (rect_contains(L.search, m->x, m->y)) {
-        launcher_open = !launcher_open;
-        if (launcher_open) { s_notif_center_open = false; s_control_center_open = false; }
-        return true;
-    }
     if (rect_contains(L.sound, m->x, m->y)) {
         speaker_set_muted(!speaker_muted());
         return true;
@@ -1714,14 +1708,6 @@ void gui_run(void) {
                 /* Alt+F4 detection if scan is mapped to F4 */
                 // if (keyboard_alt_held() && is_f4(c)) ...
 
-                /* Ctrl+Space toggles the launcher (spec §10/§11). */
-                if (keyboard_ctrl_held() && !keyboard_alt_held() && c == ' ') {
-                    launcher_open = !launcher_open;
-                    if (launcher_open) { s_notif_center_open = false; s_control_center_open = false; s_care_menu_open = false; }
-                    activity = true;
-                    continue;
-                }
-
                 /* Multi-desktop Switch: Ctrl + 1-4 */
                 if (keyboard_ctrl_held() && c >= '1' && c <= '4') {
                     wm_switch_desktop((u32)(c - '1'));
@@ -1801,6 +1787,7 @@ void gui_run(void) {
              * read as smooth motion instead of the 5 Hz steps the old 200 ms
              * gate produced. */
             if (wm_animate_all()) activity = true;
+            if (launcher_animating()) activity = true;
 
             /* Keep relative times and toast expiry moving while either shows. */
             if (notify_active()) activity = true;
@@ -1889,12 +1876,27 @@ void gui_run(void) {
                     needs_redraw = true;
                 } else if (launcher_open) {
                     launcher_handle_mouse(&mouse);
-                } else if (widgets_handle_mouse(&mouse)) {
+                } else if (widgets_dragging()) {
+                    widgets_handle_mouse(&mouse);
                     needs_redraw = true;
                 } else {
-                    taskbar_handle_mouse(&mouse);
-                    desktop_handle_mouse(&mouse);
-                    wm_handle_mouse(&mouse);
+                    /* One owner per event, topmost first: a live window drag,
+                     * the dock (drawn above windows), a window under the
+                     * pointer, then the desktop layer (widgets, shortcuts). */
+                    taskbar_handle_mouse(&mouse);       /* tracks the pointer; acts only inside the dock */
+                    if (wm_busy()) {
+                        wm_handle_mouse(&mouse);
+                    } else if (taskbar_contains(mouse.x, mouse.y)) {
+                        desktop_clear_hover();
+                    } else if (wm_pointer_owner(mouse.x, mouse.y)) {
+                        desktop_clear_hover();
+                        wm_handle_mouse(&mouse);
+                    } else if (widgets_handle_mouse(&mouse)) {
+                        needs_redraw = true;
+                    } else {
+                        desktop_handle_mouse(&mouse);
+                        wm_handle_mouse(&mouse);
+                    }
                 }
             }
             if (activity) needs_redraw = true;
@@ -1942,8 +1944,8 @@ void gui_run(void) {
                 wm_draw_all();
                 taskbar_draw();
                 draw_top_bar(&mouse);
-                if (launcher_open) launcher_draw(&mouse);
-                if (launcher_open) taskbar_draw();   /* the dock stays crisp above it */
+                launcher_draw(&mouse);              /* also plays the close animation */
+                if (launcher_visible()) taskbar_draw();   /* the dock stays crisp above it */
 
                 draw_notification_center(&mouse);
                 draw_control_center(&mouse);

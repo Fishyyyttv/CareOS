@@ -632,6 +632,10 @@ void desktop_draw(void);
 void desktop_handle_mouse(mouse_t *m);
 void taskbar_draw(void);
 void taskbar_handle_mouse(mouse_t *m);
+bool taskbar_contains(i32 x, i32 y);
+bool wm_busy(void);                        /* a window drag / resize / snap flyout is live */
+bool wm_pointer_owner(i32 x, i32 y);       /* busy, or a visible window is under (x,y) */
+void desktop_clear_hover(void);
 
 /* -- App API -------------------------------------------------------------- */
 void app_terminal_init(window_t *w);
@@ -768,6 +772,8 @@ void gfx_shadow_soft_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alph
 void gfx_blit_argb_rounded(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh, i32 r);
 void gfx_blend_mask(i32 x, i32 y, const u8 *mask, i32 w, i32 h, u32 color);
 void gfx_blend_argb(i32 x, i32 y, const u32 *src, i32 w, i32 h);
+void gfx_blend_image(i32 x, i32 y, const u32 *src, i32 w, i32 h, u8 alpha);
+void gfx_blit_argb_scaled(i32 cx, i32 cy, const u32 *src, i32 w, i32 h, u32 scale_q16, u8 alpha);
 void gui_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gui_run(void);
 
@@ -791,6 +797,8 @@ char gui_read_key(void);      /* keyboard_getchar() + sequence collapsing */
 /* -- Launcher ------------------------------------------------------------- */
 extern bool launcher_open;
 void launcher_draw(mouse_t *m);
+bool launcher_visible(void);     /* open, or still animating closed */
+bool launcher_animating(void);
 void launcher_handle_key(char c);
 void launcher_handle_mouse(mouse_t *m);
 

@@ -14,6 +14,8 @@
 #include "image.h"
 #include "resource_cache.h"
 #include "icon.h"
+#include "glass.h"
+#include "spring.h"
 
 #define LAUNCHER_MAX_MATCHES 64
 #define LN_W        1000            /* content column width            */
@@ -218,11 +220,10 @@ static void launcher_update_matches(void) {
     if (selected_index < 0) selected_index = 0;
 }
 
+/* Closing only drops the flag; launcher_draw() sees the edge and plays the
+ * exit animation, then frees the backdrop. */
 static void launcher_close(void) {
     launcher_open = false;
-    prev_launcher_open = false;   /* re-arm the open-edge reset */
-    if (s_backdrop) { kfree(s_backdrop); s_backdrop = NULL; }   /* 8 MB at 1080p */
-    s_backdrop_ok = false;
 }
 
 static void launcher_open_entry(const app_entry_t *entry) {
@@ -327,17 +328,19 @@ static void build_backdrop(void) {
         s_backdrop = (u32 *)kmalloc((size_t)sw * (size_t)h * 4u);
         s_backdrop_w = sw; s_backdrop_h = h;
     }
-    /* blur(30px) ~ three box passes of radius 10, then the artboard's
-     * rgba(7,10,22,.55) tint (white at 55 % on the light theme). */
-    gfx_blur_region(0, y0, sw, h, 10);
-    gfx_blur_region(0, y0, sw, h, 10);
-    gfx_blur_region(0, y0, sw, h, 10);
-    gfx_rect_blend(0, y0, sw, h, g_theme->is_dark ? 0x070A16u : 0xFFFFFFu, 140);
     s_backdrop_ok = false;
-    if (s_backdrop) {
-        gfx_snapshot_rect(0, y0, sw, h, s_backdrop);
-        s_backdrop_ok = true;
-    }
+    if (!s_backdrop || !g_target || !g_target->pixels) return;
+    /* The artboard's blur(30px) of the live screen, then its rgba(7,10,22,.55)
+     * tint (white at 55 % on the light theme), baked in once. The screen
+     * itself is left untouched so the animation can fade between the two. */
+    u32 *scratch = (u32 *)kmalloc((size_t)glass_scratch_words((u32)sw, (u32)h) * 4u);
+    if (!scratch) return;
+    u32 st = g_target->pitch / 4u;
+    glass_blur(g_target->pixels + (u32)y0 * st, st, (u32)sw, (u32)h, 30, s_backdrop, scratch);
+    kfree(scratch);
+    u32 tint = g_theme->is_dark ? 0x070A16u : 0xFFFFFFu;
+    for (u32 i = 0; i < (u32)sw * (u32)h; i++) s_backdrop[i] = ui_mix(s_backdrop[i], tint, 140);
+    s_backdrop_ok = true;
 }
 
 static void draw_search(const ln_layout_t *L) {
@@ -388,28 +391,8 @@ static void draw_tile(rect_t t, u32 idx, bool hover, bool sel) {
                      FONT_ROLE_UI, 1, FONT_W_BOLD);
 }
 
-static void launcher_on_open_edge(void) {
-    if (launcher_open && !prev_launcher_open) {
-        search_query[0] = '\0';
-        search_len = 0;
-        selected_index = 0;
-        s_category = CAT_ALL;
-        s_page = 0;
-        s_kbd_used = false;
-        launcher_update_matches();
-        build_backdrop();
-    }
-    prev_launcher_open = launcher_open;
-}
-
-void launcher_draw(mouse_t *m) {
-    if (!launcher_open) return;
-    bool first = !prev_launcher_open;
-    launcher_on_open_edge();
-    if (!first && s_backdrop_ok)
-        gfx_blit_argb(0, TOPBAR_H, s_backdrop, s_backdrop_w, s_backdrop_h,
-                      0, TOPBAR_H, s_backdrop_w, s_backdrop_h);
-
+/* Search, chips, grid and page dots (everything above the backdrop). */
+static void draw_content(mouse_t *m) {
     ln_layout_t L;
     launcher_layout(&L);
     if ((i32)s_page >= L.pages) s_page = (u32)(L.pages - 1);
@@ -451,6 +434,136 @@ void launcher_draw(mouse_t *m) {
             else gfx_rect_rounded_blend(d.x, d.y, d.w, d.h, 4, over, 77);
         }
     }
+}
+
+/* ---- Open / close animation ----------------------------------------------------
+ * Launchpad-style: the grid starts slightly small and recessed and springs
+ * forward to full size (a ~1.5 % overshoot gives the "pop") while it fades in,
+ * and the desktop behind it blurs and darkens at the same rate -- the work
+ * recedes as the apps come forward. Closing plays it back on a quicker,
+ * critically damped spring. While the spring runs, the launcher is a sprite
+ * rendered once and scaled each frame; once it settles it draws live again so
+ * hover, typing and paging respond normally. */
+#define LN_SCALE_FROM 56360            /* 0.86 in Q16 */
+
+static spring_t s_anim;                /* 0 = closed, SPRING_ONE = open */
+static bool     s_anim_ready = false;
+static u32      s_anim_ms = 0;
+static u32     *s_layer = NULL;        /* ARGB sprite of draw_content() */
+static rect_t   s_layer_r;
+
+static void free_layer(void) {
+    if (s_layer) { kfree(s_layer); s_layer = NULL; }
+}
+
+static rect_t content_bounds(void) {
+    ln_layout_t L;
+    launcher_layout(&L);
+    i32 x0 = L.x < L.search.x ? L.x : L.search.x;
+    i32 x1 = L.x + L.w > L.search.x + L.search.w ? L.x + L.w : L.search.x + L.search.w;
+    for (u32 i = 0; i < CAT_COUNT; i++) {
+        if (L.chips[i].x < x0) x0 = L.chips[i].x;
+        if (L.chips[i].x + L.chips[i].w > x1) x1 = L.chips[i].x + L.chips[i].w;
+    }
+    i32 y0 = L.search.y - 4, y1 = L.dots_y + 16;
+    x0 -= 24; x1 += 24;                /* icon shadows */
+    if (x0 < 0) x0 = 0;
+    if (x1 > (i32)SCREEN_W) x1 = (i32)SCREEN_W;
+    if (y1 > (i32)SCREEN_H) y1 = (i32)SCREEN_H;
+    return rect_make(x0, y0, x1 - x0, y1 - y0);
+}
+
+/* Render draw_content() over the backdrop off-screen and keep the pixels that
+ * differ from the backdrop: that is the content, as an ARGB sprite. */
+static void render_layer(void) {
+    free_layer();
+    if (!s_backdrop_ok) return;
+    i32 sw = (i32)SCREEN_W, sh = (i32)SCREEN_H;
+    u32 *tmp = (u32 *)kmalloc((size_t)sw * (size_t)sh * 4u);
+    if (!tmp) return;
+    kmemset(tmp, 0, (size_t)sw * (size_t)TOPBAR_H * 4u);
+    kmemcpy(tmp + (u32)sw * (u32)TOPBAR_H, s_backdrop, (size_t)s_backdrop_w * (size_t)s_backdrop_h * 4u);
+    gfx_buffer_t off = { tmp, (u32)sw, (u32)sh, (u32)sw * 4u };
+    gfx_buffer_t *prev = g_target;
+    gfx_set_target(&off);
+    draw_content(NULL);
+    gfx_set_target(prev);
+
+    rect_t r = content_bounds();
+    s_layer = (u32 *)kmalloc((size_t)r.w * (size_t)r.h * 4u);
+    if (s_layer) {
+        for (i32 y = 0; y < r.h; y++) {
+            const u32 *t = tmp + (u32)(r.y + y) * (u32)sw + (u32)r.x;
+            const u32 *b = s_backdrop + (u32)(r.y + y - TOPBAR_H) * (u32)s_backdrop_w + (u32)r.x;
+            u32 *o = s_layer + (u32)y * (u32)r.w;
+            for (i32 x = 0; x < r.w; x++) o[x] = (t[x] == b[x]) ? 0u : (0xFF000000u | t[x]);
+        }
+        s_layer_r = r;
+    }
+    kfree(tmp);
+}
+
+bool launcher_visible(void) {
+    return launcher_open || (s_anim_ready && (s_anim.pos > 0 || !spring_settled(&s_anim)));
+}
+
+bool launcher_animating(void) {
+    return s_anim_ready && !spring_settled(&s_anim);
+}
+
+void launcher_draw(mouse_t *m) {
+    u32 now = timer_ms();
+    if (!s_anim_ready) { spring_init(&s_anim, 0, SPRING_POP_K, SPRING_POP_C); s_anim_ready = true; }
+
+    if (launcher_open && !prev_launcher_open) {            /* opening */
+        search_query[0] = '\0';
+        search_len = 0;
+        selected_index = 0;
+        s_category = CAT_ALL;
+        s_page = 0;
+        s_kbd_used = false;
+        launcher_update_matches();
+        if (!s_backdrop_ok) build_backdrop();               /* reopening mid-close keeps it */
+        render_layer();
+        s_anim.k = SPRING_POP_K; s_anim.c = SPRING_POP_C;
+        spring_set_target(&s_anim, SPRING_ONE);
+        s_anim_ms = now;
+    } else if (!launcher_open && prev_launcher_open) {     /* closing */
+        render_layer();                                     /* as it looks right now */
+        s_anim.k = SPRING_EXIT_K; s_anim.c = SPRING_EXIT_C;
+        spring_set_target(&s_anim, 0);
+        s_anim_ms = now;
+    }
+    prev_launcher_open = launcher_open;
+
+    if (!s_backdrop_ok) return;
+    spring_step(&s_anim, now - s_anim_ms);
+    s_anim_ms = now;
+
+    if (!launcher_open && spring_settled(&s_anim)) {        /* fully closed: release ~10 MB */
+        free_layer();
+        if (s_backdrop) { kfree(s_backdrop); s_backdrop = NULL; }
+        s_backdrop_ok = false;
+        return;
+    }
+    if (launcher_open && spring_settled(&s_anim)) {         /* at rest: live and interactive */
+        free_layer();
+        gfx_blit_argb(0, TOPBAR_H, s_backdrop, s_backdrop_w, s_backdrop_h,
+                      0, TOPBAR_H, s_backdrop_w, s_backdrop_h);
+        draw_content(m);
+        return;
+    }
+
+    /* In motion. p may pass 1.0 briefly (the overshoot). */
+    i32 p = s_anim.pos;
+    i32 pc = p < 0 ? 0 : (p > SPRING_ONE ? SPRING_ONE : p);
+    gfx_blend_image(0, TOPBAR_H, s_backdrop, s_backdrop_w, s_backdrop_h, (u8)((u32)pc * 255u / SPRING_ONE));
+    if (!s_layer) return;
+    u32 scale = (u32)(LN_SCALE_FROM + (i32)(((i64)(SPRING_ONE - LN_SCALE_FROM) * p) >> 16));
+    u32 fade = (u32)pc * 3u / 2u;                           /* content is opaque by ~2/3 */
+    if (fade > SPRING_ONE) fade = SPRING_ONE;
+    gfx_blit_argb_scaled(s_layer_r.x + s_layer_r.w / 2, s_layer_r.y + s_layer_r.h / 2,
+                         s_layer, s_layer_r.w, s_layer_r.h, scale, (u8)(fade * 255u / SPRING_ONE));
 }
 
 void launcher_handle_mouse(mouse_t *m) {

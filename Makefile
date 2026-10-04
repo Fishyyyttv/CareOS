@@ -177,6 +177,7 @@ C_SRC     := kernel/kernel.c       \
              gui/ui_icons.c        \
              gui/notify.c          \
              gui/glass.c           \
+             gui/spring.c          \
              gui/theme.c           \
             gui/care_wallpaper.c  \
              gui/launcher.c        \
@@ -440,13 +441,20 @@ HT_SRC_http_parse := apps/http_parse.c
 HT_SRC_fetch_token := apps/fetch_token.c
 HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
-HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass
+HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring
+HT_SRC_spring := gui/spring.c
 HT_SRC_glass := gui/glass.c
 HT_SRC_care_wallpaper := gui/care_wallpaper.c
 HT_SRC_font_roles := gui/font_roles.c
 HT_SRC_ui_icons := gui/ui_icons.c
 HT_SRC_ui_glyph := gui/ui_glyph_raster.c
 $(HOST_TEST_DIR)/test_window_chrome: gui/window_chrome.h
+$(HOST_TEST_DIR)/test_care_wallpaper: gui/care_wallpaper.h
+$(HOST_TEST_DIR)/test_font_roles: gui/font_roles.h
+$(HOST_TEST_DIR)/test_ui_icons: gui/ui_icons.h
+$(HOST_TEST_DIR)/test_ui_glyph: gui/ui_glyph_raster.h gui/ui_glyph_data.h
+$(HOST_TEST_DIR)/test_glass: gui/glass.h
+$(HOST_TEST_DIR)/test_spring: gui/spring.h
 
 .SECONDEXPANSION:
 $(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
