@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CareOS menu bar</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=Figtree:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>body{margin:0}</style>
+</helmet>
+<div style="width: 1440px; height: 40px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; background: {{bg}}; color: {{fg}}; border-bottom: 1px solid {{line}}; backdrop-filter: blur(24px); font-family: Figtree, system-ui, sans-serif; font-size: 13px">
+<div style="display: flex; align-items: center; gap: 4px">
+<button aria-label="CareOS menu" style="height: 30px; padding: 0 10px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; cursor: pointer">
+<svg viewBox="0 0 24 24" style="width: 18px; height: 18px" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#FF7A59"></circle><path d="M12 17.5s-4.6-2.9-4.6-6.6a2.6 2.6 0 0 1 4.6-1.7a2.6 2.6 0 0 1 4.6 1.7c0 3.7-4.6 6.6-4.6 6.6z" fill="#2A120A"></path></svg>
+<span style="font-family: 'Bricolage Grotesque', Figtree, sans-serif; font-weight: 800; font-size: 14px; letter-spacing: -0.01em">CareOS</span>
+</button>
+<button style="height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-weight: 700; cursor: pointer">{{app}}</button>
+<button style="height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: {{muted}}; font: inherit; cursor: pointer">File</button>
+<button style="height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: {{muted}}; font: inherit; cursor: pointer">Edit</button>
+<button style="height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: {{muted}}; font: inherit; cursor: pointer">View</button>
+<button style="height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: {{muted}}; font: inherit; cursor: pointer">Help</button>
+</div>
+<div style="display: flex; align-items: center; gap: 2px">
+<button aria-label="Search" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 16px; height: 16px"><path d="M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14M20 20l-4-4"></path></svg></button>
+<button aria-label="Wi-Fi: Fishbowl 5G" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: {{wifiBg}}; color: inherit; cursor: pointer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 17px; height: 17px"><path d="M2.5 9a14 14 0 0 1 19 0M5.8 12.5a9.5 9.5 0 0 1 12.4 0M9.2 16a4.6 4.6 0 0 1 5.6 0M12 19.5h.01"></path></svg></button>
+<button aria-label="Volume" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 17px; height: 17px"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4zM16 9a4.5 4.5 0 0 1 0 6M18.8 6.5a8 8 0 0 1 0 11"></path></svg></button>
+<button aria-label="Battery 82 percent" style="height: 30px; padding: 0 8px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer">
+<span style="width: 24px; height: 12px; box-sizing: border-box; border: 1.5px solid currentColor; border-radius: 4px; padding: 1.5px; display: flex"><span style="width: 82%; background: #3DD68C; border-radius: 1.5px"></span></span>82%</button>
+<button aria-label="Control Center" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: {{ccBg}}; color: inherit; cursor: pointer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 17px; height: 17px"><path d="M4 8h9M17 8h3M4 16h3M11 16h9M15 6v4M9 14v4"></path></svg></button>
+<button style="height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer">Sat Oct 3 · 9:41 AM</button>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"app":{"editor":"text","default":"Desktop"},"open":{"editor":"enum","options":["none","wifi","control"],"default":"none"},"$preview":{"width":1440,"height":40}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var light = this.props.theme === 'light';
+    var open = this.props.open || 'none';
+    var hl = light ? 'rgba(22,26,43,0.10)' : 'rgba(255,255,255,0.14)';
+    return {
+      app: this.props.app || 'Desktop',
+      bg: light ? 'rgba(250,250,253,0.78)' : 'rgba(10,14,30,0.62)',
+      fg: light ? '#161A2B' : '#EEF1FA',
+      muted: light ? '#4A5168' : '#B4BBD2',
+      line: light ? 'rgba(22,26,43,0.08)' : 'rgba(255,255,255,0.06)',
+      wifiBg: open === 'wifi' ? hl : 'transparent',
+      ccBg: open === 'control' ? hl : 'transparent'
+    };
+  }
+}
+</script>
+</body>
+</html>

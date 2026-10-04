@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CareOS launcher</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=Figtree:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>body{margin:0} input::placeholder{color:#9AA3BD}</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; background: #0B1020; color: #EEF1FA; font-family: Figtree, system-ui, sans-serif">
+<div style="position: absolute; width: 900px; height: 900px; left: -200px; top: 220px; border-radius: 50%; background: #2C3FA8; opacity: 0.55; filter: blur(90px)"></div>
+<div style="position: absolute; width: 620px; height: 620px; right: -120px; top: -180px; border-radius: 50%; background: #FF7A59; opacity: 0.30; filter: blur(100px)"></div>
+<div style="position: absolute; width: 520px; height: 520px; right: 240px; bottom: -280px; border-radius: 50%; background: #7B61FF; opacity: 0.35; filter: blur(90px)"></div>
+<div style="position: absolute; inset: 0; background: rgba(7,10,22,0.55); backdrop-filter: blur(30px)"></div>
+
+<div style="position: absolute; left: 0; top: 0">
+<dc-import name="TopBar" theme="dark" app="Launcher" hint-size="1440px,40px"></dc-import>
+</div>
+
+<div style="position: absolute; left: 220px; top: 84px; width: 1000px; display: flex; flex-direction: column; gap: 22px">
+<label for="ln-search" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search apps</label>
+<div style="align-self: center; width: 560px; height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 18px; border-radius: 18px; background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.16)">
+<svg viewBox="0 0 24 24" fill="none" stroke="#B4BBD2" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px"><path d="M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14M20 20l-4-4"></path></svg>
+<input id="ln-search" placeholder="Type to find an app" style="flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: #EEF1FA; font: inherit; font-size: 17px; outline: none">
+</div>
+<div style="align-self: center; display: flex; gap: 8px">
+<button style="height: 38px; padding: 0 16px; border-radius: 19px; border: 0; background: #EEF1FA; color: #161A2B; font: inherit; font-weight: 700; font-size: 14px">All apps</button>
+<button style="height: 38px; padding: 0 16px; border-radius: 19px; border: 0; background: rgba(255,255,255,0.10); color: #EEF1FA; font: inherit; font-weight: 600; font-size: 14px">Make</button>
+<button style="height: 38px; padding: 0 16px; border-radius: 19px; border: 0; background: rgba(255,255,255,0.10); color: #EEF1FA; font: inherit; font-weight: 600; font-size: 14px">System</button>
+<button style="height: 38px; padding: 0 16px; border-radius: 19px; border: 0; background: rgba(255,255,255,0.10); color: #EEF1FA; font: inherit; font-weight: 600; font-size: 14px">Internet</button>
+<button style="height: 38px; padding: 0 16px; border-radius: 19px; border: 0; background: rgba(255,255,255,0.10); color: #EEF1FA; font: inherit; font-weight: 600; font-size: 14px">Games</button>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 26px; column-gap: 12px; margin-top: 14px">
+<sc-for list="{{apps}}" as="item" hint-placeholder-count="21">
+<button style="padding: 10px 4px; border: 0; border-radius: 22px; background: {{item.bg}}; color: #EEF1FA; font: inherit; display: flex; flex-direction: column; align-items: center; gap: 10px">
+<dc-import name="AppIcon" app="{{item.app}}" size="76" hint-size="76px,76px"></dc-import>
+<span style="font-size: 14px; font-weight: 600">{{item.label}}</span>
+</button>
+</sc-for>
+</div>
+
+<div style="align-self: center; display: flex; gap: 8px; margin-top: 4px">
+<span style="width: 22px; height: 8px; border-radius: 4px; background: #EEF1FA"></span>
+<span style="width: 8px; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.3)"></span>
+</div>
+</div>
+
+<div style="position: absolute; left: 340px; top: 796px">
+<dc-import name="Dock" theme="dark" active="none" running="terminal" hint-size="760px,96px"></dc-import>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var list = [
+      ['terminal', 'Terminal'], ['files', 'Files'], ['browser', 'Browser'], ['notes', 'Notes'],
+      ['editor', 'Editor'], ['paint', 'Paint'], ['photos', 'Photos'],
+      ['music', 'Music'], ['mail', 'Mail'], ['calendar', 'Calendar'], ['clock', 'Clock'],
+      ['calc', 'Calc'], ['monitor', 'Monitor'], ['netmon', 'NetMon'],
+      ['store', 'Packages'], ['settings', 'Settings'], ['users', 'Users'], ['games', 'Maze'],
+      ['games', 'Wolf3D'], ['care', 'Care'], ['about', 'About']
+    ];
+    return {
+      apps: list.map(function (a, i) {
+        return { app: a[0], label: a[1], bg: i === 2 ? 'rgba(255,255,255,0.12)' : 'transparent' };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CareOS control center</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=Figtree:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>body{margin:0}</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; background: #0B1020; color: #EEF1FA; font-family: Figtree, system-ui, sans-serif">
+<div style="position: absolute; width: 900px; height: 900px; left: -200px; top: 220px; border-radius: 50%; background: #2C3FA8; opacity: 0.55; filter: blur(90px)"></div>
+<div style="position: absolute; width: 620px; height: 620px; right: -120px; top: -180px; border-radius: 50%; background: #FF7A59; opacity: 0.30; filter: blur(100px)"></div>
+<div style="position: absolute; width: 520px; height: 520px; right: 240px; bottom: -280px; border-radius: 50%; background: #7B61FF; opacity: 0.35; filter: blur(90px)"></div>
+<div style="position: absolute; width: 1200px; height: 1200px; left: 420px; top: 120px; border-radius: 50%; border: 90px solid rgba(140,155,255,0.06)"></div>
+
+<div style="position: absolute; left: 0; top: 0">
+<dc-import name="TopBar" theme="dark" app="Desktop" open="control" hint-size="1440px,40px"></dc-import>
+</div>
+
+<section aria-label="Notifications" style="position: absolute; right: 424px; top: 52px; width: 360px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 0 6px">
+<span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 18px; text-shadow: 0 1px 6px rgba(0,0,0,0.5)">Notifications</span>
+<button style="height: 30px; padding: 0 12px; border-radius: 15px; border: 0; background: rgba(21,27,46,0.7); color: #D5DAEA; font: inherit; font-size: 13px; font-weight: 600">Clear all</button>
+</div>
+<div style="padding: 16px; border-radius: 22px; background: rgba(21,27,46,0.82); border: 1px solid rgba(255,255,255,0.10); backdrop-filter: blur(30px); display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; gap: 12px">
+<dc-import name="AppIcon" app="store" size="40" hint-size="40px,40px"></dc-import>
+<div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><div style="display: flex; justify-content: space-between; font-size: 12px; color: #9AA3BD"><span style="font-weight: 700">Packages</span><span>now</span></div><span style="font-weight: 700; font-size: 15px">3 updates are ready</span><span style="font-size: 13px; color: #B4BBD2">Browser, Editor and the network driver.</span></div>
+</div>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+<button style="height: 40px; border-radius: 12px; border: 0; background: #FF7A59; color: #2A120A; font: inherit; font-weight: 700; font-size: 14px">Update now</button>
+<button style="height: 40px; border-radius: 12px; border: 0; background: #222A48; color: #EEF1FA; font: inherit; font-weight: 600; font-size: 14px">Tonight</button>
+</div>
+</div>
+<div style="padding: 16px; border-radius: 22px; background: rgba(21,27,46,0.82); border: 1px solid rgba(255,255,255,0.10); backdrop-filter: blur(30px); display: flex; gap: 12px">
+<dc-import name="AppIcon" app="terminal" size="40" hint-size="40px,40px"></dc-import>
+<div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><div style="display: flex; justify-content: space-between; font-size: 12px; color: #9AA3BD"><span style="font-weight: 700">Terminal</span><span>4 min ago</span></div><span style="font-weight: 700; font-size: 15px">care preview finished</span><span style="font-size: 13px; color: #B4BBD2; font-family: 'JetBrains Mono', monospace">Done! · exit 0</span></div>
+</div>
+<div style="padding: 16px; border-radius: 22px; background: rgba(21,27,46,0.82); border: 1px solid rgba(255,255,255,0.10); backdrop-filter: blur(30px); display: flex; gap: 12px">
+<dc-import name="AppIcon" app="calendar" size="40" hint-size="40px,40px"></dc-import>
+<div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><div style="display: flex; justify-content: space-between; font-size: 12px; color: #9AA3BD"><span style="font-weight: 700">Calendar</span><span>9:30 AM</span></div><span style="font-weight: 700; font-size: 15px">Kernel review at 11:00</span><span style="font-size: 13px; color: #B4BBD2">In 1 hr 19 min</span></div>
+</div>
+</section>
+
+<section aria-label="Control Center" style="position: absolute; right: 24px; top: 52px; width: 384px; box-sizing: border-box; padding: 16px; border-radius: 28px; background: rgba(21,27,46,0.86); border: 1px solid rgba(255,255,255,0.12); backdrop-filter: blur(36px); box-shadow: 0 30px 80px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 12px">
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
+<button style="height: 72px; padding: 0 14px; border-radius: 20px; border: 0; background: #FF7A59; color: #2A120A; font: inherit; display: flex; align-items: center; gap: 10px; text-align: left">
+<span style="width: 40px; height: 40px; border-radius: 50%; background: rgba(42,18,10,0.14); display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="width: 20px; height: 20px"><path d="M2.5 9a14 14 0 0 1 19 0M5.8 12.5a9.5 9.5 0 0 1 12.4 0M9.2 16a4.6 4.6 0 0 1 5.6 0M12 19.5h.01"></path></svg></span>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 800; font-size: 14px">Wi-Fi</span><span style="font-size: 12px; font-weight: 600">Fishbowl 5G</span></span></button>
+<button style="height: 72px; padding: 0 14px; border-radius: 20px; border: 0; background: #8C9BFF; color: #12163A; font: inherit; display: flex; align-items: center; gap: 10px; text-align: left">
+<span style="width: 40px; height: 40px; border-radius: 50%; background: rgba(18,22,58,0.14); display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width: 20px; height: 20px"><path d="M7 7l10 10-5 5V2l5 5L7 17"></path></svg></span>
+<span style="display: flex; flex-direction: column"><span style="font-weight: 800; font-size: 14px">Bluetooth</span><span style="font-size: 12px; font-weight: 600">2 devices</span></span></button>
+</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+<button style="height: 76px; border-radius: 20px; border: 0; background: #222A48; color: #EEF1FA; font: inherit; font-size: 12px; font-weight: 600; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 22px; height: 22px"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"></path></svg>Focus</button>
+<button style="height: 76px; border-radius: 20px; border: 0; background: #FFC24B; color: #3A2600; font: inherit; font-size: 12px; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 22px; height: 22px"><path d="M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"></path></svg>Night light</button>
+<button style="height: 76px; border-radius: 20px; border: 0; background: #222A48; color: #EEF1FA; font: inherit; font-size: 12px; font-weight: 600; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 22px; height: 22px"><path d="M10.5 3.5h3l.5 7 6.5 3.5v2l-6.5-1.5-.5 4 2 1.5v1.5L12 20.5 9 21.5V20l2-1.5-.5-4L4 16v-2l6.5-3.5z"></path></svg>Airplane</button>
+<button style="height: 76px; border-radius: 20px; border: 0; background: #222A48; color: #EEF1FA; font: inherit; font-size: 12px; font-weight: 600; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 22px; height: 22px"><path d="M4 6h16v11H4zM9 20h6M12 17v3"></path></svg>Cast</button>
+</div>
+
+<div style="padding: 14px; border-radius: 20px; background: #1A2140; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label for="cc-bright" style="font-size: 13px; font-weight: 700">Display</label>
+<div style="display: flex; align-items: center; gap: 10px"><svg viewBox="0 0 24 24" fill="none" stroke="#B4BBD2" stroke-width="2" stroke-linecap="round" style="width: 18px; height: 18px"><path d="M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6M12 3v2M12 19v2M3 12h2M19 12h2"></path></svg><input id="cc-bright" type="range" value="70" style="flex: 1; accent-color: #FF7A59"></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<label for="cc-vol" style="font-size: 13px; font-weight: 700">Sound</label>
+<div style="display: flex; align-items: center; gap: 10px"><svg viewBox="0 0 24 24" fill="none" stroke="#B4BBD2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4zM16 9a4.5 4.5 0 0 1 0 6"></path></svg><input id="cc-vol" type="range" value="45" style="flex: 1; accent-color: #FF7A59"></div>
+</div>
+</div>
+
+<div style="padding: 12px 14px; border-radius: 20px; background: #1A2140; display: flex; align-items: center; gap: 12px">
+<dc-import name="AppIcon" app="music" size="44" hint-size="44px,44px"></dc-import>
+<div style="flex: 1; display: flex; flex-direction: column; min-width: 0"><span style="font-weight: 700; font-size: 14px">Lo-fi for Coding</span><span style="font-size: 12px; color: #B4BBD2">Radio · CareOS Music</span></div>
+<button aria-label="Pause" style="width: 40px; height: 40px; border-radius: 50%; border: 0; background: #EEF1FA; color: #161A2B; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="currentColor" style="width: 16px; height: 16px"><path d="M7 5h3v14H7zM14 5h3v14h-3z"></path></svg></button>
+</div>
+
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 0">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #D5DAEA"><span style="width: 24px; height: 12px; box-sizing: border-box; border: 1.5px solid #D5DAEA; border-radius: 4px; padding: 1.5px; display: flex"><span style="width: 82%; background: #3DD68C; border-radius: 1.5px"></span></span>82% · about 6 hr left</span>
+<div style="display: flex; gap: 6px">
+<button aria-label="Settings" style="width: 40px; height: 40px; border-radius: 50%; border: 0; background: #222A48; color: #EEF1FA; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 18px; height: 18px"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4"></path></svg></button>
+<button aria-label="Lock" style="width: 40px; height: 40px; border-radius: 50%; border: 0; background: #222A48; color: #EEF1FA; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"></path></svg></button>
+<button aria-label="Power" style="width: 40px; height: 40px; border-radius: 50%; border: 0; background: #222A48; color: #EEF1FA; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 18px; height: 18px"><path d="M12 3v8M6.5 6.5a8 8 0 1 0 11 0"></path></svg></button>
+</div>
+</div>
+</section>
+
+<div style="position: absolute; left: 340px; top: 796px">
+<dc-import name="Dock" theme="dark" active="none" running="terminal" hint-size="760px,96px"></dc-import>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

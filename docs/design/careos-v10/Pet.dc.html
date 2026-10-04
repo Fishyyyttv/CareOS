@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pip the CareOS pet</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=Figtree:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>body{margin:0}</style>
+</helmet>
+<div style="width: {{box}}; height: {{box}}; position: relative; flex-shrink: 0; font-family: 'Bricolage Grotesque', Figtree, sans-serif">
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; transform: scale({{k}}); transform-origin: 0 0">
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.fxGlow.o}}; transition: opacity 0.6s ease">
+<div style="position: absolute; left: 18px; top: 30px; width: 124px; height: 124px; border-radius: 50%; background: {{cLight}}; filter: blur(18px); animation: {{auraAnim}}; transition: background 0.6s ease"></div>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.fxRainbow.o}}; transform: {{v.fxRainbow.t}}; transform-origin: 60px 110px; transition: opacity 0.5s ease, transform 0.5s ease">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M-34 118 Q16 58 58 96" fill="none" stroke="#FF5A5F" stroke-width="6" stroke-linecap="round" opacity="0.85"></path><path d="M-34 126 Q16 66 58 104" fill="none" stroke="#FFC24B" stroke-width="6" stroke-linecap="round" opacity="0.85"></path><path d="M-34 134 Q16 74 58 112" fill="none" stroke="#3DD68C" stroke-width="6" stroke-linecap="round" opacity="0.85"></path><path d="M-34 142 Q16 82 58 120" fill="none" stroke="#5CC0F2" stroke-width="6" stroke-linecap="round" opacity="0.85"></path><path d="M-34 150 Q16 90 58 128" fill="none" stroke="#9C8CFF" stroke-width="6" stroke-linecap="round" opacity="0.85"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.ovPlay.o}}; transform: {{v.ovPlay.t}}; transform-origin: 20px 110px; transition: opacity 0.3s ease, transform 0.4s ease">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M0 90 L14 90M-8 104 L12 104M0 118 L16 118" stroke="{{cDark}}" stroke-width="4" stroke-linecap="round" opacity="0.45"></path><circle cx="18" cy="148" r="6" fill="{{cLight}}" opacity="0.6"></circle><circle cx="6" cy="144" r="4" fill="{{cLight}}" opacity="0.4"></circle></svg>
+</div>
+
+<div ref="{{rShadow}}" style="position: absolute; left: 34px; top: 136px; width: 92px; height: 16px; border-radius: 50%; background: radial-gradient(closest-side, rgba(10,12,30,0.32), rgba(10,12,30,0)); animation: {{shadowAnim}}"></div>
+
+<div ref="{{rBody}}" style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; animation: {{bodyAnim}}; transform-origin: 80px 144px">
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.outCape.o}}; transform: {{v.outCape.t}}; transform-origin: 80px 60px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M40 60 Q8 126 20 152 L140 152 Q152 126 120 60 Z" fill="#E5303A"></path><path d="M40 60 Q16 120 26 148M120 60 Q144 120 134 148" fill="none" stroke="#B81F28" stroke-width="3" stroke-linecap="round"></path></svg>
+</div>
+
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true">
+<ellipse cx="46" cy="48" rx="11" ry="16" transform="rotate(-26 46 48)" style="fill: {{cBase}}; transition: fill 0.6s ease"></ellipse>
+<ellipse cx="46" cy="50" rx="5.5" ry="9.5" transform="rotate(-26 46 50)" fill="#FF9FB8" opacity="0.6"></ellipse>
+<ellipse cx="114" cy="48" rx="11" ry="16" transform="rotate(26 114 48)" style="fill: {{cBase}}; transition: fill 0.6s ease"></ellipse>
+<ellipse cx="114" cy="50" rx="5.5" ry="9.5" transform="rotate(26 114 50)" fill="#FF9FB8" opacity="0.6"></ellipse>
+</svg>
+
+<svg ref="{{rFootA}}" viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: {{footA}}; transform-origin: 58px 143px" aria-hidden="true"><ellipse cx="58" cy="143" rx="15" ry="8.5" style="fill: {{cDark}}; transition: fill 0.6s ease"></ellipse><ellipse cx="54" cy="140" rx="6" ry="2.6" fill="#FFFFFF" opacity="0.25"></ellipse></svg>
+<svg ref="{{rFootB}}" viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: {{footB}}; transform-origin: 102px 143px" aria-hidden="true"><ellipse cx="102" cy="143" rx="15" ry="8.5" style="fill: {{cDark}}; transition: fill 0.6s ease"></ellipse><ellipse cx="98" cy="140" rx="6" ry="2.6" fill="#FFFFFF" opacity="0.25"></ellipse></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><ellipse cx="24" cy="108" rx="9" ry="13" transform="rotate(22 24 108)" style="fill: {{cDark}}; transition: fill 0.6s ease"></ellipse></svg>
+<svg ref="{{rArm}}" viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: {{waveAnim}}; transform-origin: 130px 100px" aria-hidden="true"><ellipse cx="136" cy="108" rx="9" ry="13" transform="rotate(-22 136 108)" style="fill: {{cDark}}; transition: fill 0.6s ease"></ellipse></svg>
+
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true">
+<defs>
+<radialGradient id="{{gBody}}" cx="0.36" cy="0.28" r="0.8">
+<stop offset="0" style="stop-color: {{cLight}}; transition: stop-color 0.6s ease"></stop>
+<stop offset="0.5" style="stop-color: {{cBase}}; transition: stop-color 0.6s ease"></stop>
+<stop offset="1" style="stop-color: {{cDark}}; transition: stop-color 0.6s ease"></stop>
+</radialGradient>
+<radialGradient id="{{gBelly}}" cx="0.5" cy="0.4" r="0.6">
+<stop offset="0" style="stop-color: {{cBelly}}; stop-opacity: 0.95; transition: stop-color 0.6s ease"></stop>
+<stop offset="1" style="stop-color: {{cBelly}}; stop-opacity: 0; transition: stop-color 0.6s ease"></stop>
+</radialGradient>
+<radialGradient id="{{gCheek}}" cx="0.5" cy="0.5" r="0.5">
+<stop offset="0" stop-color="#FF6B8E" stop-opacity="0.75"></stop>
+<stop offset="1" stop-color="#FF6B8E" stop-opacity="0"></stop>
+</radialGradient>
+</defs>
+<path d="M80 36 C114 36 138 64 138 98 C138 128 114 144 80 144 C46 144 22 128 22 98 C22 64 46 36 80 36 Z" fill="url(#{{gBody}})" style="stroke: {{cDark}}; stroke-opacity: 0.28; stroke-width: 2; transition: stroke 0.6s ease"></path>
+<ellipse cx="80" cy="120" rx="40" ry="24" fill="url(#{{gBelly}})"></ellipse>
+<ellipse cx="56" cy="58" rx="17" ry="8" fill="#FFFFFF" opacity="0.5" transform="rotate(-28 56 58)"></ellipse>
+<circle cx="74" cy="48" r="3" fill="#FFFFFF" opacity="0.55"></circle>
+<ellipse cx="49" cy="103" rx="11" ry="7" fill="url(#{{gCheek}})" style="opacity: {{blush}}; transition: opacity 0.5s ease"></ellipse>
+<ellipse cx="111" cy="103" rx="11" ry="7" fill="url(#{{gCheek}})" style="opacity: {{blush}}; transition: opacity 0.5s ease"></ellipse>
+</svg>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.outScarf.o}}; transform: {{v.outScarf.t}}; transform-origin: 80px 120px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M28 112 Q80 132 132 112 L133 125 Q80 145 27 125 Z" fill="#FF5A5F"></path><path d="M28 112 Q80 132 132 112" fill="none" stroke="#FF8A8E" stroke-width="2.5" stroke-linecap="round"></path><path d="M98 128 L110 154 L98 157 L90 132 Z" fill="#E23D44"></path><path d="M96 139 L106 136M99 148 L108 145" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.outBowtie.o}}; transform: {{v.outBowtie.t}}; transform-origin: 80px 124px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M80 124 Q70 112 62 114 Q58 124 62 134 Q70 136 80 124 Z" fill="#4F5EF2"></path><path d="M80 124 Q90 112 98 114 Q102 124 98 134 Q90 136 80 124 Z" fill="#4F5EF2"></path><circle cx="80" cy="124" r="5.5" fill="#3542C9"></circle><path d="M66 120 L70 122M94 120 L90 122" stroke="#8C9BFF" stroke-width="2" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.outHoodie.o}}; transform: {{v.outHoodie.t}}; transform-origin: 80px 128px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M25 108 Q80 130 135 108 Q140 134 114 144 L46 144 Q20 134 25 108 Z" fill="#3A4570"></path><path d="M25 108 Q80 130 135 108" fill="none" stroke="#5A6799" stroke-width="3" stroke-linecap="round"></path><path d="M62 129 L98 129 L94 141 L66 141 Z" fill="#2B3458"></path><path d="M72 120 L70 131M88 120 L90 131" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"></path><circle cx="70" cy="132" r="2" fill="#FFFFFF"></circle><circle cx="90" cy="132" r="2" fill="#FFFFFF"></circle></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.outOveralls.o}}; transform: {{v.outOveralls.t}}; transform-origin: 80px 124px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M62 104 L48 74M98 104 L112 74" stroke="#4C7DFF" stroke-width="5" stroke-linecap="round"></path><path d="M60 110 L100 110 L100 118 L124 118 L128 136 Q80 152 32 136 L36 118 L60 118 Z" fill="#4C7DFF"></path><rect x="71" y="116" width="18" height="11" rx="3" fill="#3A66E0"></rect><circle cx="64" cy="114" r="2.8" fill="#FFC24B"></circle><circle cx="96" cy="114" r="2.8" fill="#FFC24B"></circle></svg>
+</div>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.antenna.o}}; transform: {{v.antenna.t}}; transform-origin: 80px 38px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M80 38 Q75 27 83 17" fill="none" style="stroke: {{cDark}}; transition: stroke 0.6s ease" stroke-width="3.5" stroke-linecap="round"></path></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: {{haloAnim}}; transform-origin: 84px 14px" aria-hidden="true"><circle cx="84" cy="14" r="11" style="fill: {{bulb}}; transition: fill 0.6s ease" opacity="0.35"></circle></svg>
+<svg ref="{{rBulb}}" viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: {{bulbAnim}}" aria-hidden="true"><circle cx="84" cy="14" r="8" style="fill: {{bulb}}; transition: fill 0.6s ease"></circle><circle cx="84" cy="14" r="8" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1.5"></circle><circle cx="81.5" cy="11.5" r="2.8" fill="#FFFFFF" opacity="0.9"></circle></svg>
+</div>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; animation: {{blinkAnim}}; transform-origin: 80px 88px">
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; transform: translate({{lookX}}, {{lookY}}); transition: transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<div ref="{{rLook}}" style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; animation: {{lookAnim}}">
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.eyeOpen.o}}; transform: {{v.eyeOpen.t}}; transform-origin: 80px 88px; transition: opacity 0.18s ease, transform 0.42s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><ellipse cx="62" cy="88" rx="10" ry="12.5" fill="{{ink}}"></ellipse><ellipse cx="98" cy="88" rx="10" ry="12.5" fill="{{ink}}"></ellipse><ellipse cx="62" cy="94" rx="6" ry="4" style="fill: {{cLight}}; transition: fill 0.6s ease" opacity="0.55"></ellipse><ellipse cx="98" cy="94" rx="6" ry="4" style="fill: {{cLight}}; transition: fill 0.6s ease" opacity="0.55"></ellipse><circle cx="65.5" cy="82.5" r="4" fill="{{shine}}"></circle><circle cx="101.5" cy="82.5" r="4" fill="{{shine}}"></circle><circle cx="58.5" cy="92.5" r="1.8" fill="{{shine}}" opacity="0.85"></circle><circle cx="94.5" cy="92.5" r="1.8" fill="{{shine}}" opacity="0.85"></circle></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.eyeHappy.o}}; transform: {{v.eyeHappy.t}}; transform-origin: 80px 88px; transition: opacity 0.18s ease, transform 0.42s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M52 92 Q62 78 72 92M88 92 Q98 78 108 92" fill="none" stroke="{{ink}}" stroke-width="5" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.eyeSad.o}}; transform: {{v.eyeSad.t}}; transform-origin: 80px 88px; transition: opacity 0.18s ease, transform 0.42s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><ellipse cx="62" cy="92" rx="8.5" ry="9.5" fill="{{ink}}"></ellipse><ellipse cx="98" cy="92" rx="8.5" ry="9.5" fill="{{ink}}"></ellipse><circle cx="65" cy="88" r="3" fill="{{shine}}"></circle><circle cx="101" cy="88" r="3" fill="{{shine}}"></circle><ellipse cx="62" cy="97" rx="5" ry="2.5" fill="#9ADBFA" opacity="0.7"></ellipse><ellipse cx="98" cy="97" rx="5" ry="2.5" fill="#9ADBFA" opacity="0.7"></ellipse><path d="M50 77 Q59 74 70 81M110 77 Q101 74 90 81" fill="none" stroke="{{ink}}" stroke-width="3.5" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.eyeClosed.o}}; transform: {{v.eyeClosed.t}}; transform-origin: 80px 88px; transition: opacity 0.18s ease, transform 0.42s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M52 90 Q62 98 72 90M88 90 Q98 98 108 90" fill="none" stroke="{{ink}}" stroke-width="4.5" stroke-linecap="round"></path><path d="M52 90 L48 87M108 90 L112 87" stroke="{{ink}}" stroke-width="3" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.eyeConfused.o}}; transform: {{v.eyeConfused.t}}; transform-origin: 80px 88px; transition: opacity 0.18s ease, transform 0.42s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><ellipse cx="62" cy="88" rx="11" ry="13.5" fill="{{ink}}"></ellipse><circle cx="66" cy="82" r="4.2" fill="{{shine}}"></circle><circle cx="58" cy="93" r="1.8" fill="{{shine}}" opacity="0.85"></circle><path d="M89 91 L108 87" fill="none" stroke="{{ink}}" stroke-width="5" stroke-linecap="round"></path><path d="M49 70 Q62 61 75 69" fill="none" stroke="{{ink}}" stroke-width="3.5" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.eyeStar.o}}; transform: {{v.eyeStar.t}}; transform-origin: 80px 88px; transition: opacity 0.18s ease, transform 0.42s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M62 74 Q64.8 85.2 76 88 Q64.8 90.8 62 102 Q59.2 90.8 48 88 Q59.2 85.2 62 74 Z" fill="#FFC24B" stroke="{{ink}}" stroke-width="2.2" stroke-linejoin="round"></path><path d="M98 74 Q100.8 85.2 112 88 Q100.8 90.8 98 102 Q95.2 90.8 84 88 Q95.2 85.2 98 74 Z" fill="#FFC24B" stroke="{{ink}}" stroke-width="2.2" stroke-linejoin="round"></path><circle cx="59" cy="84" r="2" fill="#FFFFFF"></circle><circle cx="95" cy="84" r="2" fill="#FFFFFF"></circle></svg>
+</div>
+</div>
+</div>
+</div>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.mSmile.o}}; transform: {{v.mSmile.t}}; transform-origin: 80px 108px; transition: opacity 0.2s ease, transform 0.4s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M71 106 Q75.5 112 80 107 Q84.5 112 89 106" fill="none" stroke="{{ink}}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.mBig.o}}; transform: {{v.mBig.t}}; transform-origin: 80px 108px; transition: opacity 0.2s ease, transform 0.4s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M68 104 Q80 124 92 104 Z" fill="{{ink}}" stroke="{{ink}}" stroke-width="2.5" stroke-linejoin="round"></path><path d="M73.5 113.5 Q80 108.5 86.5 113.5 Q80 119 73.5 113.5 Z" fill="#FF6B8E"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.mFrown.o}}; transform: {{v.mFrown.t}}; transform-origin: 80px 108px; transition: opacity 0.2s ease, transform 0.4s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M72 113 Q80 105 88 113" fill="none" stroke="{{ink}}" stroke-width="3.5" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.mO.o}}; transform: {{v.mO.t}}; transform-origin: 80px 108px; transition: opacity 0.2s ease, transform 0.4s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><ellipse cx="80" cy="110" rx="4.5" ry="5.5" fill="{{ink}}"></ellipse></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.mWavy.o}}; transform: {{v.mWavy.t}}; transform-origin: 80px 108px; transition: opacity 0.2s ease, transform 0.4s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M70 110 Q74 105 78 110 Q82 115 86 110 Q88 108 90 108" fill="none" stroke="{{ink}}" stroke-width="3.5" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.mFlat.o}}; transform: {{v.mFlat.t}}; transform-origin: 80px 108px; transition: opacity 0.2s ease, transform 0.4s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M74 109 Q80 107 87 108" fill="none" stroke="{{ink}}" stroke-width="3.5" stroke-linecap="round"></path></svg>
+</div>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.accGlasses.o}}; transform: {{v.accGlasses.t}}; transform-origin: 80px 88px; transition: opacity 0.25s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><circle cx="62" cy="88" r="14" fill="#FFFFFF" fill-opacity="0.18" stroke="#2A2F45" stroke-width="3"></circle><circle cx="98" cy="88" r="14" fill="#FFFFFF" fill-opacity="0.18" stroke="#2A2F45" stroke-width="3"></circle><path d="M76 87 Q80 83 84 87M48 86 L34 82M112 86 L126 82" fill="none" stroke="#2A2F45" stroke-width="3" stroke-linecap="round"></path><path d="M54 80 L58 77M90 80 L94 77" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.7"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.accShades.o}}; transform: {{v.accShades.t}}; transform-origin: 80px 88px; transition: opacity 0.25s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M45 81 L77 81 L75 95 Q62 103 48 95 Z" fill="#14121F"></path><path d="M83 81 L115 81 L112 95 Q98 103 85 95 Z" fill="#14121F"></path><path d="M77 83 L83 83M45 82 L34 79M115 82 L126 79" stroke="#14121F" stroke-width="3" stroke-linecap="round"></path><path d="M51 85 L59 85M89 85 L97 85" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" opacity="0.7"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.accStar.o}}; transform: {{v.accStar.t}}; transform-origin: 116px 58px; transition: opacity 0.25s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M116 48 L119 55 L127 56 L121 61 L123 69 L116 65 L109 69 L111 61 L105 56 L113 55 Z" fill="#FFC24B" stroke="#D98E12" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+</div>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatBeanie.o}}; transform: {{v.hatBeanie.t}}; transform-origin: 80px 50px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M42 56 Q44 18 80 16 Q116 18 118 56 Z" fill="#FF7A59"></path><path d="M60 22 L58 52M80 17 L80 52M100 22 L102 52" stroke="#E5603F" stroke-width="2.5" stroke-linecap="round"></path><rect x="38" y="49" width="84" height="14" rx="7" fill="#E5603F"></rect><circle cx="80" cy="13" r="9.5" fill="#FFF1E8"></circle><circle cx="77" cy="10" r="3" fill="#FFFFFF"></circle></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatCrown.o}}; transform: {{v.hatCrown.t}}; transform-origin: 80px 50px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M52 48 L55 18 L68 33 L80 12 L92 33 L105 18 L108 48 Z" fill="#FFC24B" stroke="#D98E12" stroke-width="2" stroke-linejoin="round"></path><rect x="51" y="42" width="58" height="8" rx="3" fill="#F5AE2E"></rect><circle cx="80" cy="38" r="4.5" fill="#FF5A7A"></circle><circle cx="64" cy="40" r="3" fill="#5CC0F2"></circle><circle cx="96" cy="40" r="3" fill="#3DD68C"></circle><circle cx="55" cy="18" r="3" fill="#FFE08A"></circle><circle cx="80" cy="12" r="3" fill="#FFE08A"></circle><circle cx="105" cy="18" r="3" fill="#FFE08A"></circle></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatParty.o}}; transform: {{v.hatParty.t}}; transform-origin: 80px 50px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><g transform="rotate(14 80 44)"><path d="M63 48 L80 0 L97 48 Z" fill="#8C9BFF"></path><path d="M70 30 L90 30M66 42 L94 42" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.7"></path><circle cx="76" cy="22" r="2.6" fill="#FFC24B"></circle><circle cx="86" cy="36" r="2.6" fill="#FF8EC4"></circle><circle cx="80" cy="0" r="7" fill="#FF8EC4"></circle></g></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatWizard.o}}; transform: {{v.hatWizard.t}}; transform-origin: 80px 50px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M56 48 Q70 28 72 2 Q86 -6 100 10 Q90 18 104 48 Z" fill="#6A55D9"></path><ellipse cx="80" cy="48" rx="46" ry="8.5" fill="#4B3AA8"></ellipse><path d="M86 22 L88 27 L93 27.5 L89 31 L90.5 36 L86 33.5 L81.5 36 L83 31 L79 27.5 L84 27 Z" fill="#FFC24B"></path><circle cx="72" cy="38" r="2" fill="#FFE08A"></circle><circle cx="95" cy="40" r="1.6" fill="#FFE08A"></circle></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatCap.o}}; transform: {{v.hatCap.t}}; transform-origin: 80px 50px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M46 54 Q46 20 80 20 Q114 20 114 54 Z" fill="#3CA0E8"></path><path d="M102 50 Q132 46 142 56 Q126 61 104 56 Z" fill="#2A7CC0"></path><circle cx="80" cy="21" r="3.5" fill="#2A7CC0"></circle><path d="M60 36 Q68 27 80 26" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.5"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatBow.o}}; transform: {{v.hatBow.t}}; transform-origin: 104px 46px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M104 44 Q88 24 82 40 Q84 58 104 44 Z" fill="#FF5A8E"></path><path d="M104 44 Q120 24 126 40 Q124 58 104 44 Z" fill="#FF5A8E"></path><path d="M90 36 Q92 42 98 43M118 36 Q116 42 110 43" stroke="#FF9FBF" stroke-width="2" stroke-linecap="round" fill="none"></path><circle cx="104" cy="44" r="6" fill="#E23D74"></circle></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatPhones.o}}; transform: {{v.hatPhones.t}}; transform-origin: 80px 50px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M28 96 Q26 30 80 28 Q134 30 132 96" fill="none" stroke="#2A2F45" stroke-width="7" stroke-linecap="round"></path><rect x="15" y="84" width="22" height="32" rx="10" fill="#FF7A59"></rect><rect x="123" y="84" width="22" height="32" rx="10" fill="#FF7A59"></rect><rect x="19" y="90" width="6" height="18" rx="3" fill="#FFB49E"></rect><rect x="127" y="90" width="6" height="18" rx="3" fill="#FFB49E"></rect></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.hatSprout.o}}; transform: {{v.hatSprout.t}}; transform-origin: 80px 40px; transition: opacity 0.25s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M80 38 Q79 28 81 18" fill="none" stroke="#2FAE7D" stroke-width="3.5" stroke-linecap="round"></path><path d="M80 25 Q66 10 56 20 Q68 32 80 25 Z" fill="#5FD9A8"></path><path d="M81 20 Q92 2 106 10 Q96 26 81 20 Z" fill="#3DD68C"></path><path d="M68 21 L76 24M94 12 L86 18" stroke="#2FAE7D" stroke-width="1.5" stroke-linecap="round"></path></svg>
+</div>
+</div>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.ovQ.o}}; transform: {{v.ovQ.t}}; transform-origin: 130px 30px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<span style="position: absolute; left: 122px; top: 2px; font-weight: 800; font-size: 34px; color: #A97CFF; animation: pip-wobble 1.4s ease-in-out infinite; text-shadow: 0 2px 0 rgba(0,0,0,0.15)">?</span>
+<span style="position: absolute; left: 142px; top: 28px; font-weight: 800; font-size: 20px; color: #C08BFF; opacity: 0.8">?</span>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.ovThink.o}}; transform: {{v.ovThink.t}}; transform-origin: 118px 50px; transition: opacity 0.3s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<div style="position: absolute; left: 118px; top: 50px; width: 7px; height: 7px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.2)"></div>
+<div style="position: absolute; left: 126px; top: 36px; width: 11px; height: 11px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.2)"></div>
+<div style="position: absolute; left: 126px; top: -6px; width: 56px; height: 36px; border-radius: 18px; background: #FFFFFF; box-shadow: 0 4px 10px rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; gap: 5px">
+<span style="width: 6px; height: 6px; border-radius: 50%; background: #6E5CE0; animation: pip-pulse 1s ease-in-out infinite"></span>
+<span style="width: 6px; height: 6px; border-radius: 50%; background: #6E5CE0; animation: pip-pulse 1s ease-in-out 0.2s infinite"></span>
+<span style="width: 6px; height: 6px; border-radius: 50%; background: #6E5CE0; animation: pip-pulse 1s ease-in-out 0.4s infinite"></span>
+</div>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.ovZ.o}}; transition: opacity 0.5s ease">
+<span style="position: absolute; left: 112px; top: 34px; font-weight: 800; font-size: 18px; color: #8C9BFF; animation: pip-float 2.4s ease-out infinite">z</span>
+<span style="position: absolute; left: 126px; top: 20px; font-weight: 800; font-size: 26px; color: #8C9BFF; animation: pip-float 2.4s ease-out 0.8s infinite">Z</span>
+<span style="position: absolute; left: 142px; top: 2px; font-weight: 800; font-size: 32px; color: #B7C1FF; animation: pip-float 2.4s ease-out 1.6s infinite">Z</span>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.ovTear.o}}; transform: {{v.ovTear.t}}; transform-origin: 128px 26px; transition: opacity 0.4s ease, transform 0.5s cubic-bezier(.34,1.56,.64,1)">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-tear 2s ease-in infinite" aria-hidden="true"><path d="M55 100 Q50 109 55 112 Q60 109 55 100 Z" fill="#6CB8FF"></path></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible" aria-hidden="true"><path d="M112 26 Q112 16 122 16 Q126 8 134 12 Q144 10 144 20 Q150 26 142 30 L116 30 Q108 30 112 26 Z" fill="#9AA3BD"></path><path d="M118 36 L116 42M128 36 L126 44M138 36 L136 42" stroke="#6CB8FF" stroke-width="2.5" stroke-linecap="round"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.ovBang.o}}; transform: {{v.ovBang.t}}; transform-origin: 132px 24px; transition: opacity 0.25s ease, transform 0.45s cubic-bezier(.34,1.56,.64,1)">
+<span style="position: absolute; left: 124px; top: -4px; font-weight: 800; font-size: 38px; color: #FF7A59; animation: pip-hop 0.5s ease-in-out infinite; text-shadow: 0 2px 0 rgba(0,0,0,0.15)">!</span>
+</div>
+
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.fxSparkles.o}}; transition: opacity 0.5s ease">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-twinkle 1.6s ease-in-out infinite; transform-origin: 20px 40px" aria-hidden="true"><path d="M20 30 Q21 39 30 40 Q21 41 20 50 Q19 41 10 40 Q19 39 20 30 Z" fill="#FFE08A"></path></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-twinkle 1.6s ease-in-out 0.5s infinite; transform-origin: 148px 70px" aria-hidden="true"><path d="M148 62 Q149 69 156 70 Q149 71 148 78 Q147 71 140 70 Q147 69 148 62 Z" fill="#FFFFFF"></path></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-twinkle 1.6s ease-in-out 1s infinite; transform-origin: 142px 130px" aria-hidden="true"><path d="M142 122 Q143 129 150 130 Q143 131 142 138 Q141 131 134 130 Q141 129 142 122 Z" fill="#FFE08A"></path></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-twinkle 1.6s ease-in-out 0.8s infinite; transform-origin: 10px 112px" aria-hidden="true"><path d="M10 106 Q11 111 16 112 Q11 113 10 118 Q9 113 4 112 Q9 111 10 106 Z" fill="#FFFFFF"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.fxHearts.o}}; transition: opacity 0.5s ease">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-float 2.2s ease-out infinite" aria-hidden="true"><path d="M28 50 C28 44 36 42 38 48 C40 42 48 44 48 50 C48 56 38 62 38 62 C38 62 28 56 28 50 Z" fill="#FF6B8E"></path></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-float 2.2s ease-out 1.1s infinite" aria-hidden="true"><path d="M122 40 C122 35 129 33 130 38 C132 33 139 35 139 40 C139 45 130 50 130 50 C130 50 122 45 122 40 Z" fill="#FF8EC4"></path></svg>
+</div>
+<div style="position: absolute; left: 0; top: 0; width: 160px; height: 160px; opacity: {{v.fxBubbles.o}}; transition: opacity 0.5s ease">
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-float 2.6s ease-out infinite" aria-hidden="true"><circle cx="22" cy="70" r="7" fill="#9ADBFA" fill-opacity="0.35" stroke="#9ADBFA" stroke-width="1.5"></circle><circle cx="20" cy="68" r="2" fill="#FFFFFF" opacity="0.8"></circle></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-float 2.6s ease-out 0.9s infinite" aria-hidden="true"><circle cx="140" cy="60" r="9" fill="#9ADBFA" fill-opacity="0.35" stroke="#9ADBFA" stroke-width="1.5"></circle><circle cx="137" cy="57" r="2.4" fill="#FFFFFF" opacity="0.8"></circle></svg>
+<svg viewBox="0 0 160 160" style="position: absolute; inset: 0; width: 160px; height: 160px; overflow: visible; animation: pip-float 2.6s ease-out 1.7s infinite" aria-hidden="true"><circle cx="130" cy="100" r="5" fill="#9ADBFA" fill-opacity="0.35" stroke="#9ADBFA" stroke-width="1.5"></circle></svg>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"mood":{"editor":"enum","options":["idle","happy","sad","thinking","confused","watching","playing","sleeping","excited"],"default":"idle"},"color":{"editor":"enum","options":["lilac","coral","mint","sky","honey","bubblegum","midnight","snow"],"default":"lilac"},"hat":{"editor":"enum","options":["none","beanie","crown","party","wizard","cap","bow","headphones","sprout"],"default":"none"},"outfit":{"editor":"enum","options":["none","scarf","bowtie","hoodie","cape","overalls"],"default":"none"},"acc":{"editor":"enum","options":["none","glasses","shades","star"],"default":"none"},"effect":{"editor":"enum","options":["none","glow","sparkles","hearts","bubbles","rainbow"],"default":"none"},"size":{"editor":"int","default":160,"min":24,"max":480},"still":{"editor":"boolean","default":false},"$preview":{"width":160,"height":160}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    var self = this;
+    this.uid = 'pip' + Math.random().toString(36).slice(2, 9);
+    this.els = {};
+    this.refs2 = {};
+    ['body', 'shadow', 'look', 'arm', 'footA', 'footB', 'bulb'].forEach(function (k) {
+      self.refs2[k] = function (el) { self.els[k] = el; };
+    });
+  }
+  getSnapshotBeforeUpdate(prevProps) {
+    if (prevProps.mood === this.props.mood) return null;
+    if (typeof window === 'undefined' || !window.getComputedStyle) return null;
+    var snap = {};
+    var els = this.els;
+    Object.keys(els).forEach(function (k) {
+      var el = els[k];
+      if (!el) return;
+      var cs = window.getComputedStyle(el);
+      snap[k] = { t: cs.transform || 'none', o: cs.opacity || '1' };
+    });
+    return snap;
+  }
+  componentDidUpdate(prevProps, prevState, snap) {
+    if (!snap) return;
+    var els = this.els;
+    var spring = 'cubic-bezier(.34,1.4,.64,1)';
+    Object.keys(snap).forEach(function (k) {
+      var el = els[k];
+      if (!el || !el.animate) return;
+      var s = snap[k];
+      var frames;
+      if (k === 'body') {
+        frames = [
+          { transform: s.t },
+          { transform: 'translateY(-8px) scale(0.95,1.05)', offset: 0.45 },
+          { transform: 'none' }
+        ];
+      } else if (k === 'shadow') {
+        frames = [{ transform: s.t }, { transform: 'scale(0.82)', offset: 0.45 }, { transform: 'none' }];
+      } else {
+        frames = [{ transform: s.t, opacity: s.o }, { transform: 'none', opacity: 1 }];
+      }
+      try { el.animate(frames, { duration: 420, easing: k === 'body' ? 'ease-in-out' : spring }); } catch (e) {}
+    });
+  }
+  renderVals() {
+    var p = this.props;
+    var C = {
+      lilac: ['#9C8CFF', '#CEC5FF', '#6A57DE', '#EEEAFF'],
+      coral: ['#FF8A6B', '#FFC0AD', '#E0573A', '#FFE7DF'],
+      mint: ['#5FD9A8', '#A8F0D1', '#25A574', '#E4FAF0'],
+      sky: ['#5CC0F2', '#A8E0FB', '#2786C4', '#E2F4FD'],
+      honey: ['#FFC24B', '#FFE09A', '#DD9112', '#FFF4D6'],
+      bubblegum: ['#FF8EC4', '#FFC4E1', '#DD4F94', '#FFE8F3'],
+      midnight: ['#3E4A78', '#6370A6', '#222A4A', '#8B96C4'],
+      snow: ['#ECEFF8', '#FFFFFF', '#B8BFD6', '#FFFFFF']
+    };
+    var colorKey = C[p.color] ? p.color : 'lilac';
+    var c = C[colorKey];
+    var mood = p.mood || 'idle';
+    var hat = p.hat || 'none';
+    var outfit = p.outfit || 'none';
+    var acc = p.acc || 'none';
+    var fx = p.effect || 'none';
+    var still = p.still === true || p.still === 'true';
+    var D = ' 0.42s infinite';
+    var M = {
+      idle: { eye: 'open', mouth: 'smile', anim: 'pip-bob 2.6s ease-in-out', sh: 'pip-sh-bob 2.6s ease-in-out', bulb: '#8C9BFF' },
+      happy: { eye: 'happy', mouth: 'big', anim: 'pip-bounce 0.95s ease-in-out', sh: 'pip-sh-bounce 0.95s ease-in-out', bulb: '#FF8EC4', wave: true },
+      sad: { eye: 'sad', mouth: 'frown', anim: 'pip-droop 3.2s ease-in-out', bulb: '#6CB8FF', ov: 'tear', blush: 0.15 },
+      thinking: { eye: 'open', look: [4, -6], mouth: 'flat', anim: 'pip-tilt 3s ease-in-out', bulb: '#FFC24B', pulse: true, ov: 'think' },
+      confused: { eye: 'confused', mouth: 'wavy', anim: 'pip-wobble 1.8s ease-in-out', bulb: '#C08BFF', pulse: true, ov: 'q' },
+      watching: { eye: 'open', mouth: 'o', anim: 'pip-bob 3.2s ease-in-out', sh: 'pip-sh-bob 3.2s ease-in-out', bulb: '#3DD68C', lookAnim: true },
+      playing: { eye: 'happy', mouth: 'big', anim: 'pip-hop 0.5s ease-in-out', sh: 'pip-sh-hop 0.5s ease-in-out', bulb: '#FF7A59', feet: true, ov: 'play' },
+      sleeping: { eye: 'closed', mouth: 'o', anim: 'pip-breathe 3.4s ease-in-out', bulb: '#5A6385', ov: 'z' },
+      excited: { eye: 'star', mouth: 'big', anim: 'pip-jump 0.85s ease-in-out', sh: 'pip-sh-jump 0.85s ease-in-out', bulb: '#FFC24B', wave: true, ov: 'bang' }
+    };
+    var m = M[mood] || M.idle;
+    var none = 'none';
+    var dark = colorKey === 'midnight';
+    var s = parseFloat(p.size);
+    if (!(s > 0)) s = 160;
+    var look = m.look || [0, 0];
+    var antennaHats = { none: 1, bow: 1, headphones: 1 };
+    var T = {
+      eye: ['scale(1,1)', 'scale(1.1,0.08)'],
+      mouth: ['scale(1)', 'scale(0.3)'],
+      hat: ['translateY(0)', 'translateY(-28px) rotate(-8deg)'],
+      out: ['scale(1)', 'scale(0.82)'],
+      acc: ['translateY(0)', 'translateY(-12px)'],
+      ov: ['translateY(0) scale(1)', 'translateY(10px) scale(0.5)'],
+      fx: ['none', 'none']
+    };
+    var mk = function (kind, on) { return { o: on ? 1 : 0, t: T[kind][on ? 0 : 1] }; };
+    return {
+      box: s + 'px',
+      k: s / 160,
+      gBody: this.uid + 'b', gBelly: this.uid + 'y', gCheek: this.uid + 'c',
+      cBase: c[0], cLight: c[1], cDark: c[2], cBelly: c[3],
+      ink: dark ? '#F4F1FF' : '#1A1630',
+      shine: dark ? '#1A1630' : '#FFFFFF',
+      blush: m.blush != null ? m.blush : 1,
+      bulb: m.bulb,
+      lookX: look[0] + 'px', lookY: look[1] + 'px',
+      rBody: this.refs2.body, rShadow: this.refs2.shadow, rLook: this.refs2.look, rArm: this.refs2.arm,
+      rFootA: this.refs2.footA, rFootB: this.refs2.footB, rBulb: this.refs2.bulb,
+      bodyAnim: still ? none : m.anim + D,
+      shadowAnim: still || !m.sh ? none : m.sh + D,
+      blinkAnim: still || m.eye !== 'open' ? none : 'pip-blink 4.2s ease-in-out infinite',
+      lookAnim: still || !m.lookAnim ? none : 'pip-look 2.8s ease-in-out' + D,
+      waveAnim: still || !m.wave ? none : 'pip-wave 0.6s ease-in-out' + D,
+      footA: still || !m.feet ? none : 'pip-feet 0.5s ease-in-out' + D,
+      footB: still || !m.feet ? none : 'pip-feet 0.5s ease-in-out 0.67s infinite',
+      bulbAnim: still || !m.pulse ? none : 'pip-pulse 0.8s ease-in-out' + D,
+      haloAnim: still ? none : 'pip-halo 2.4s ease-out infinite',
+      auraAnim: still ? none : 'pip-aura 2.4s ease-in-out infinite',
+      v: {
+        eyeOpen: mk('eye', m.eye === 'open'), eyeHappy: mk('eye', m.eye === 'happy'), eyeSad: mk('eye', m.eye === 'sad'),
+        eyeClosed: mk('eye', m.eye === 'closed'), eyeConfused: mk('eye', m.eye === 'confused'), eyeStar: mk('eye', m.eye === 'star'),
+        mSmile: mk('mouth', m.mouth === 'smile'), mBig: mk('mouth', m.mouth === 'big'), mFrown: mk('mouth', m.mouth === 'frown'),
+        mO: mk('mouth', m.mouth === 'o'), mWavy: mk('mouth', m.mouth === 'wavy'), mFlat: mk('mouth', m.mouth === 'flat'),
+        hatBeanie: mk('hat', hat === 'beanie'), hatCrown: mk('hat', hat === 'crown'), hatParty: mk('hat', hat === 'party'),
+        hatWizard: mk('hat', hat === 'wizard'), hatCap: mk('hat', hat === 'cap'), hatBow: mk('hat', hat === 'bow'),
+        hatPhones: mk('hat', hat === 'headphones'), hatSprout: mk('hat', hat === 'sprout'),
+        antenna: mk('hat', !!antennaHats[hat]),
+        outScarf: mk('out', outfit === 'scarf'), outBowtie: mk('out', outfit === 'bowtie'), outHoodie: mk('out', outfit === 'hoodie'),
+        outCape: mk('out', outfit === 'cape'), outOveralls: mk('out', outfit === 'overalls'),
+        accGlasses: mk('acc', acc === 'glasses'), accShades: mk('acc', acc === 'shades'), accStar: mk('acc', acc === 'star'),
+        fxGlow: mk('fx', fx === 'glow'), fxSparkles: mk('fx', fx === 'sparkles'),
+        fxHearts: mk('fx', fx === 'hearts' || mood === 'happy'), fxBubbles: mk('fx', fx === 'bubbles'),
+        fxRainbow: mk('out', fx === 'rainbow'),
+        ovQ: mk('ov', m.ov === 'q'), ovThink: mk('ov', m.ov === 'think'), ovZ: mk('fx', m.ov === 'z'),
+        ovTear: mk('ov', m.ov === 'tear'), ovBang: mk('ov', m.ov === 'bang'), ovPlay: mk('ov', m.ov === 'play')
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

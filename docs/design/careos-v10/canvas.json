@@ -1,0 +1,318 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "AppIcon.dc.html": {
+      "h": 120,
+      "title": "App icon",
+      "w": 120,
+      "x": 2360,
+      "y": 160
+    },
+    "Boot.dc.html": {
+      "h": 900,
+      "title": "Boot",
+      "w": 1440,
+      "x": 0,
+      "y": 1260
+    },
+    "Browser.dc.html": {
+      "h": 900,
+      "title": "Browser",
+      "w": 1440,
+      "x": 3040,
+      "y": 5040
+    },
+    "ControlCenter.dc.html": {
+      "h": 900,
+      "title": "Control Center + notifications",
+      "w": 1440,
+      "x": 3040,
+      "y": 3780
+    },
+    "Desktop.dc.html": {
+      "h": 900,
+      "title": "Desktop · home + widgets",
+      "w": 1440,
+      "x": 0,
+      "y": 3780
+    },
+    "Dock.dc.html": {
+      "h": 96,
+      "title": "Dock / taskbar",
+      "w": 760,
+      "x": 1520,
+      "y": 160
+    },
+    "Editor.dc.html": {
+      "h": 900,
+      "title": "Editor",
+      "w": 1440,
+      "x": 9120,
+      "y": 5040
+    },
+    "Files.dc.html": {
+      "h": 900,
+      "title": "Files (light)",
+      "w": 1440,
+      "x": 4560,
+      "y": 5040
+    },
+    "Launcher.dc.html": {
+      "h": 900,
+      "title": "Launcher",
+      "w": 1440,
+      "x": 1520,
+      "y": 3780
+    },
+    "Lock.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Lock screen",
+      "w": 1440,
+      "x": 4560,
+      "y": 1260
+    },
+    "Login.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Login",
+      "w": 1440,
+      "x": 1520,
+      "y": 1260
+    },
+    "Main.dc.html": {
+      "h": 900,
+      "title": "Icons & system kit",
+      "w": 1440,
+      "x": 0,
+      "y": 0
+    },
+    "Notes.dc.html": {
+      "h": 900,
+      "title": "Notes (light)",
+      "w": 1440,
+      "x": 10640,
+      "y": 5040
+    },
+    "OnboardLook.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Onboarding 3 · Look",
+      "w": 1440,
+      "x": 3040,
+      "y": 2520
+    },
+    "OnboardReady.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Onboarding 4 · Ready",
+      "w": 1440,
+      "x": 4560,
+      "y": 2520
+    },
+    "OnboardWifi.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Onboarding 2 · Wi-Fi",
+      "w": 1440,
+      "x": 1520,
+      "y": 2520
+    },
+    "Pet.dc.html": {
+      "h": 160,
+      "title": "Pip component",
+      "w": 160,
+      "x": 4560,
+      "y": 6300
+    },
+    "PetDesktop.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Pip out on the desktop",
+      "w": 1440,
+      "x": 3040,
+      "y": 6300
+    },
+    "PetHome.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Pip’s Home · customize",
+      "w": 1440,
+      "x": 1520,
+      "y": 6300
+    },
+    "PetMoods.dc.html": {
+      "h": 900,
+      "title": "Pip · moods",
+      "w": 1440,
+      "x": 0,
+      "y": 6300
+    },
+    "Power.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Power menu",
+      "w": 1440,
+      "x": 6080,
+      "y": 1260
+    },
+    "SettingsLook.dc.html": {
+      "h": 900,
+      "title": "Settings · Appearance (light)",
+      "w": 1440,
+      "x": 1520,
+      "y": 5040
+    },
+    "SettingsNetwork.dc.html": {
+      "h": 900,
+      "title": "Settings · Network (dark)",
+      "w": 1440,
+      "x": 0,
+      "y": 5040
+    },
+    "Signup.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Create account",
+      "w": 1440,
+      "x": 3040,
+      "y": 1260
+    },
+    "Store.dc.html": {
+      "h": 900,
+      "title": "Packages store (light)",
+      "w": 1440,
+      "x": 7600,
+      "y": 5040
+    },
+    "Terminal.dc.html": {
+      "h": 900,
+      "title": "Terminal",
+      "w": 1440,
+      "x": 6080,
+      "y": 5040
+    },
+    "TopBar.dc.html": {
+      "h": 40,
+      "title": "Menu bar",
+      "w": 1440,
+      "x": 1520,
+      "y": 0
+    },
+    "Welcome.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "title": "Onboarding 1 · Welcome",
+      "w": 1440,
+      "x": 0,
+      "y": 2520
+    },
+    "Widgets.dc.html": {
+      "h": 900,
+      "title": "Widget gallery",
+      "w": 1440,
+      "x": 6080,
+      "y": 3780
+    },
+    "WifiMenu.dc.html": {
+      "h": 900,
+      "title": "Wi-Fi menu + join dialog",
+      "w": 1440,
+      "x": 4560,
+      "y": 3780
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-03T17:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "rowApps": {
+      "kind": "title1",
+      "maxW": 8000,
+      "text": "Apps",
+      "w": 240,
+      "x": 0,
+      "y": 4740
+    },
+    "rowDesk": {
+      "kind": "title1",
+      "maxW": 7520,
+      "text": "Desktop & system UI",
+      "w": 240,
+      "x": 0,
+      "y": 3480
+    },
+    "rowKit": {
+      "kind": "title1",
+      "maxW": 2480,
+      "text": "Components · icons, menu bar, dock",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "rowOnboard": {
+      "kind": "title1",
+      "maxW": 6000,
+      "text": "Onboarding · first run",
+      "w": 240,
+      "x": 0,
+      "y": 2220
+    },
+    "rowPip": {
+      "kind": "title1",
+      "maxW": 4720,
+      "text": "Pip · your AI desktop pet",
+      "w": 240,
+      "x": 0,
+      "y": 6000
+    },
+    "rowStart": {
+      "kind": "title1",
+      "maxW": 7520,
+      "text": "Start · boot, login, sign up, lock, power",
+      "w": 240,
+      "x": 0,
+      "y": 960
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "TopBar.dc.html",
+    "Dock.dc.html",
+    "AppIcon.dc.html",
+    "Boot.dc.html",
+    "Login.dc.html",
+    "Signup.dc.html",
+    "Lock.dc.html",
+    "Power.dc.html",
+    "Welcome.dc.html",
+    "OnboardWifi.dc.html",
+    "OnboardLook.dc.html",
+    "OnboardReady.dc.html",
+    "Desktop.dc.html",
+    "Launcher.dc.html",
+    "ControlCenter.dc.html",
+    "WifiMenu.dc.html",
+    "Widgets.dc.html",
+    "SettingsNetwork.dc.html",
+    "SettingsLook.dc.html",
+    "Browser.dc.html",
+    "Files.dc.html",
+    "Terminal.dc.html",
+    "Store.dc.html",
+    "Editor.dc.html",
+    "Notes.dc.html",
+    "PetMoods.dc.html",
+    "PetHome.dc.html",
+    "PetDesktop.dc.html",
+    "Pet.dc.html"
+  ],
+  "pages": [],
+  "title": "CareOS Design"
+}

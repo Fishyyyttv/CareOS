@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CareOS onboarding welcome</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=Figtree:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>body{margin:0} a{color:#B7C1FF} a:hover{color:#FFFFFF} input::placeholder{color:#8A93B0}</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; background: #0B1020; color: #EEF1FA; font-family: Figtree, system-ui, sans-serif; display: flex; align-items: center; justify-content: center">
+<div style="position: absolute; width: 900px; height: 900px; left: -200px; top: 220px; border-radius: 50%; background: #2C3FA8; opacity: 0.55; filter: blur(90px)"></div>
+<div style="position: absolute; width: 620px; height: 620px; right: -120px; top: -180px; border-radius: 50%; background: #FF7A59; opacity: 0.30; filter: blur(100px)"></div>
+<div style="position: absolute; width: 1200px; height: 1200px; left: 420px; top: 120px; border-radius: 50%; border: 90px solid rgba(140,155,255,0.06)"></div>
+
+<div style="position: relative; width: 1000px; height: 660px; box-sizing: border-box; padding: 40px 48px; border-radius: 32px; background: rgba(18,23,42,0.80); border: 1px solid rgba(255,255,255,0.10); backdrop-filter: blur(30px); box-shadow: 0 40px 120px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 16px">
+<div style="flex: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<span style="height: 6px; border-radius: 3px; background: #FF7A59"></span>
+<span style="height: 6px; border-radius: 3px; background: #2E3757"></span>
+<span style="height: 6px; border-radius: 3px; background: #2E3757"></span>
+<span style="height: 6px; border-radius: 3px; background: #2E3757"></span>
+</div>
+<span style="font-size: 13px; font-weight: 600; color: #9AA3BD">Step 1 of 4</span>
+</div>
+
+<div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 48px">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<svg viewBox="0 0 24 24" style="width: 56px; height: 56px" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#FF7A59"></circle><path d="M12 17.5s-4.6-2.9-4.6-6.6a2.6 2.6 0 0 1 4.6-1.7a2.6 2.6 0 0 1 4.6 1.7c0 3.7-4.6 6.6-4.6 6.6z" fill="#2A120A"></path></svg>
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 52px; line-height: 1; letter-spacing: -0.03em">Hi, fishfish.<br>Let’s get you settled in.</h1>
+<p style="margin: 0; font-size: 17px; line-height: 1.55; color: #B4BBD2; max-width: 380px">First, pick the language you want CareOS to speak. You can change any of this later in Settings.</p>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 16px">
+<fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px">
+<legend style="font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #9AA3BD; margin-bottom: 8px">Language</legend>
+<label style="height: 52px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-radius: 16px; background: rgba(255,122,89,0.14); border: 1.5px solid #FF7A59; font-weight: 700"><span>English (United States)</span><input type="radio" name="lang" checked style="width: 20px; height: 20px; accent-color: #FF7A59"></label>
+<label style="height: 52px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-radius: 16px; background: #1C2440; border: 1.5px solid transparent; font-weight: 500"><span>Español</span><input type="radio" name="lang" style="width: 20px; height: 20px; accent-color: #FF7A59"></label>
+<label style="height: 52px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-radius: 16px; background: #1C2440; border: 1.5px solid transparent; font-weight: 500"><span>Français</span><input type="radio" name="lang" style="width: 20px; height: 20px; accent-color: #FF7A59"></label>
+<label style="height: 52px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-radius: 16px; background: #1C2440; border: 1.5px solid transparent; font-weight: 500"><span>Deutsch</span><input type="radio" name="lang" style="width: 20px; height: 20px; accent-color: #FF7A59"></label>
+<label style="height: 52px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-radius: 16px; background: #1C2440; border: 1.5px solid transparent; font-weight: 500"><span>日本語</span><input type="radio" name="lang" style="width: 20px; height: 20px; accent-color: #FF7A59"></label>
+</fieldset>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="ob-region" style="font-size: 13px; font-weight: 600; color: #B4BBD2">Region</label>
+<select id="ob-region" style="height: 46px; padding: 0 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.12); background: #1C2440; color: #EEF1FA; font: inherit"><option>United States</option></select>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label for="ob-kb" style="font-size: 13px; font-weight: 600; color: #B4BBD2">Keyboard</label>
+<select id="ob-kb" style="height: 46px; padding: 0 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.12); background: #1C2440; color: #EEF1FA; font: inherit"><option>US · QWERTY</option></select>
+</div>
+</div>
+</div>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center">
+<a href="#" style="font-size: 14px; font-weight: 600">Accessibility options</a>
+<a href="OnboardWifi.dc.html" style="height: 52px; padding: 0 28px; border-radius: 16px; background: #FF7A59; color: #2A120A; font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 8px; text-decoration: none">Continue<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

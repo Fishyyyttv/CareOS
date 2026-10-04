@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CareOS onboarding Wi-Fi</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=Figtree:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+<style>body{margin:0} a{color:#B7C1FF} a:hover{color:#FFFFFF} input::placeholder{color:#8A93B0}</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; background: #0B1020; color: #EEF1FA; font-family: Figtree, system-ui, sans-serif; display: flex; align-items: center; justify-content: center">
+<div style="position: absolute; width: 900px; height: 900px; left: -200px; top: 220px; border-radius: 50%; background: #2C3FA8; opacity: 0.55; filter: blur(90px)"></div>
+<div style="position: absolute; width: 620px; height: 620px; right: -120px; top: -180px; border-radius: 50%; background: #FF7A59; opacity: 0.30; filter: blur(100px)"></div>
+<div style="position: absolute; width: 1200px; height: 1200px; left: 420px; top: 120px; border-radius: 50%; border: 90px solid rgba(140,155,255,0.06)"></div>
+
+<div style="position: relative; width: 1000px; height: 660px; box-sizing: border-box; padding: 40px 48px; border-radius: 32px; background: rgba(18,23,42,0.80); border: 1px solid rgba(255,255,255,0.10); backdrop-filter: blur(30px); box-shadow: 0 40px 120px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 28px">
+<div style="display: flex; align-items: center; gap: 16px">
+<div style="flex: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<span style="height: 6px; border-radius: 3px; background: #FF7A59"></span>
+<span style="height: 6px; border-radius: 3px; background: #FF7A59"></span>
+<span style="height: 6px; border-radius: 3px; background: #2E3757"></span>
+<span style="height: 6px; border-radius: 3px; background: #2E3757"></span>
+</div>
+<span style="font-size: 13px; font-weight: 600; color: #9AA3BD">Step 2 of 4</span>
+</div>
+
+<div style="flex: 1; display: grid; grid-template-columns: 340px 1fr; gap: 48px; min-height: 0">
+<div style="display: flex; flex-direction: column; gap: 18px">
+<div style="width: 64px; height: 64px; border-radius: 20px; background: linear-gradient(160deg, #3CC8E8, #1290C2); display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" style="width: 34px; height: 34px"><path d="M2.5 9a14 14 0 0 1 19 0M5.8 12.5a9.5 9.5 0 0 1 12.4 0M9.2 16a4.6 4.6 0 0 1 5.6 0M12 19.5h.01"></path></svg></div>
+<h1 style="margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 44px; line-height: 1.02; letter-spacing: -0.03em">Get online</h1>
+<p style="margin: 0; font-size: 16px; line-height: 1.55; color: #B4BBD2">Pick your network. We’ll remember the password so you only type it once.</p>
+<div style="margin-top: auto; padding: 16px; border-radius: 18px; background: #1C2440; display: flex; gap: 12px; align-items: flex-start; font-size: 14px; line-height: 1.45; color: #D5DAEA">
+<svg viewBox="0 0 24 24" fill="none" stroke="#8C9BFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 20px; height: 20px; flex-shrink: 0; margin-top: 1px"><path d="M4 7h16v10H4zM8 17v3M16 17v3M8 11h.01M12 11h.01M16 11h.01"></path></svg>
+<span>Plugged into a cable? CareOS uses Ethernet automatically, so you can skip this.</span>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px">
+<span style="font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #9AA3BD">Networks nearby</span>
+<button aria-label="Scan again" style="height: 32px; padding: 0 12px; border-radius: 10px; border: 0; background: #1C2440; color: #D5DAEA; font: inherit; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"></path></svg>Scan</button>
+</div>
+
+<div style="border-radius: 18px; background: rgba(255,122,89,0.10); border: 1.5px solid #FF7A59; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 14px">
+<svg viewBox="0 0 24 24" fill="none" stroke="#EEF1FA" stroke-width="2.2" stroke-linecap="round" style="width: 22px; height: 22px"><path d="M2.5 9a14 14 0 0 1 19 0M5.8 12.5a9.5 9.5 0 0 1 12.4 0M9.2 16a4.6 4.6 0 0 1 5.6 0M12 19.5h.01"></path></svg>
+<div style="flex: 1; display: flex; flex-direction: column"><span style="font-weight: 700; font-size: 16px">Fishbowl 5G</span><span style="font-size: 13px; color: #B4BBD2">Secured · WPA3 · Excellent signal</span></div>
+<svg viewBox="0 0 24 24" fill="none" stroke="#B4BBD2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"></path></svg>
+</div>
+<label for="wf-pw" style="font-size: 13px; font-weight: 600; color: #D5DAEA">Password for Fishbowl 5G</label>
+<div style="display: flex; gap: 8px">
+<div style="flex: 1; height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 14px; border-radius: 14px; background: #0F1426; border: 1px solid rgba(255,255,255,0.16)">
+<input id="wf-pw" type="password" value="goldfish42" style="flex: 1; min-width: 0; border: 0; background: transparent; color: #EEF1FA; font: inherit; font-size: 15px; outline: none">
+<button aria-label="Show password" style="width: 36px; height: 36px; border: 0; border-radius: 10px; background: transparent; color: #B4BBD2; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM12 9.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5"></path></svg></button>
+</div>
+<button style="height: 48px; padding: 0 20px; border-radius: 14px; border: 0; background: #FF7A59; color: #2A120A; font: inherit; font-weight: 700">Connect</button>
+</div>
+</div>
+
+<button style="height: 56px; padding: 0 16px; border-radius: 16px; border: 0; background: #1C2440; color: #EEF1FA; font: inherit; display: flex; align-items: center; gap: 14px; text-align: left">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="width: 22px; height: 22px"><path d="M5.8 12.5a9.5 9.5 0 0 1 12.4 0M9.2 16a4.6 4.6 0 0 1 5.6 0M12 19.5h.01"></path><path d="M2.5 9a14 14 0 0 1 19 0" stroke-opacity="0.3"></path></svg>
+<span style="flex: 1; font-weight: 600">Fishbowl Guest</span><span style="font-size: 13px; color: #9AA3BD">Open</span></button>
+<button style="height: 56px; padding: 0 16px; border-radius: 16px; border: 0; background: #1C2440; color: #EEF1FA; font: inherit; display: flex; align-items: center; gap: 14px; text-align: left">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="width: 22px; height: 22px"><path d="M9.2 16a4.6 4.6 0 0 1 5.6 0M12 19.5h.01"></path><path d="M2.5 9a14 14 0 0 1 19 0M5.8 12.5a9.5 9.5 0 0 1 12.4 0" stroke-opacity="0.3"></path></svg>
+<span style="flex: 1; font-weight: 600">NETGEAR-22</span><svg viewBox="0 0 24 24" fill="none" stroke="#9AA3BD" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"></path></svg></button>
+<button style="height: 56px; padding: 0 16px; border-radius: 16px; border: 0; background: #1C2440; color: #EEF1FA; font: inherit; display: flex; align-items: center; gap: 14px; text-align: left">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="width: 22px; height: 22px"><path d="M12 19.5h.01"></path><path d="M2.5 9a14 14 0 0 1 19 0M5.8 12.5a9.5 9.5 0 0 1 12.4 0M9.2 16a4.6 4.6 0 0 1 5.6 0" stroke-opacity="0.3"></path></svg>
+<span style="flex: 1; font-weight: 600">Neighbor’s Wi-Fi</span><svg viewBox="0 0 24 24" fill="none" stroke="#9AA3BD" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"></path></svg></button>
+<button style="height: 44px; padding: 0 16px; border-radius: 14px; border: 1px dashed rgba(255,255,255,0.22); background: transparent; color: #D5DAEA; font: inherit; font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 10px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" style="width: 16px; height: 16px"><path d="M12 5v14M5 12h14"></path></svg>Join a hidden network</button>
+</div>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center">
+<a href="Welcome.dc.html" style="height: 52px; padding: 0 22px; border-radius: 16px; background: #1C2440; color: #EEF1FA; font-weight: 600; display: flex; align-items: center; text-decoration: none">Back</a>
+<div style="display: flex; gap: 12px; align-items: center">
+<a href="OnboardLook.dc.html" style="font-size: 14px; font-weight: 600; padding: 0 12px">Skip for now</a>
+<a href="OnboardLook.dc.html" style="height: 52px; padding: 0 28px; border-radius: 16px; background: #FF7A59; color: #2A120A; font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 8px; text-decoration: none">Continue<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
