@@ -20,6 +20,10 @@ static bool super_down   = false;
 static bool super_used   = false;   /* another key was pressed during the hold */
 static bool e0_prefix    = false;   /* previous byte was the 0xE0 extend marker */
 static volatile bool super_tap_latch = false;
+/* Physical up/down state of every key, indexed by set-1 make code with 0x80
+ * added for E0-extended keys (so Up arrow is 0xC8). Games poll this to get
+ * real key releases; the char queue only ever reports presses. */
+static volatile bool key_held[256];
 
 /* US QWERTY scancode-to-ASCII (unshifted) */
 static const char sc_normal[128] = {
@@ -64,6 +68,7 @@ static void keyboard_irq(registers_t *r) {
 
     bool released = (sc & 0x80) != 0;
     u8   key      = sc & 0x7F;
+    key_held[key | (e0_prefix ? 0x80 : 0)] = !released;
 
     if (e0_prefix) {
         e0_prefix = false;
@@ -151,6 +156,7 @@ bool keyboard_ctrl_held(void) { return ctrl_down; }
 bool keyboard_alt_held(void) { return alt_down; }
 bool keyboard_shift_held(void) { return shift_down; }
 bool keyboard_super_held(void) { return super_down; }
+bool keyboard_key_held(u8 code) { return key_held[code]; }
 
 /* One-shot: true once after a lone Super tap, then clears. */
 bool keyboard_super_tapped(void) {

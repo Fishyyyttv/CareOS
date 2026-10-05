@@ -6,6 +6,7 @@
 static window_t *doom_win = NULL;
 static char *doom_argv[] = {"doom", "-iwad", "/home/user/DOOM1.WAD"};
 static bool doom_started = false;
+static volatile u32 s_frame_seq = 0;   /* bumped per published frame */
 
 /* -- doomgeneric Implementation ------------------------------------------- */
 
@@ -27,7 +28,9 @@ void DG_DrawFrame() {
     kmemcpy(doom_win->win_buffer.pixels, DG_ScreenBuffer,
             DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4);
     /* NOTE: no gfx_dirty()/gfx_flip() from this thread -- the dirty list and
-       backbuffer are owned by the GUI loop, which repaints periodically. */
+       backbuffer are owned by the GUI loop. Bumping the frame counter tells it
+       (app_doom_new_frame) to repaint now rather than at its idle heartbeat. */
+    s_frame_seq++;
 }
 
 void DG_SleepMs(uint32_t ms) {
@@ -47,7 +50,24 @@ uint32_t DG_GetTicksMs() {
 static volatile u8  s_kq[DOOM_KQ];
 static volatile u32 s_kq_head = 0, s_kq_tail = 0;
 static int  s_pending_release = -1;   /* key whose synthetic key-up is due */
-static bool s_fire_down = false;
+
+/* Movement and action keys are polled from the driver's physical key state,
+ * so DOOM sees a real key-down while the key is held and a key-up when it is
+ * let go. (As taps, a press and its release landed in the same tic and the
+ * player never moved.) Everything else -- menus, cheats, y/n -- stays a tap
+ * from the char queue. Set-1 make codes, +0x80 for E0-extended keys. */
+static const struct { u8 code; unsigned char key; } s_held_keys[] = {
+    { 0xC8, KEY_UPARROW }, { 0xD0, KEY_DOWNARROW },
+    { 0xCB, KEY_LEFTARROW }, { 0xCD, KEY_RIGHTARROW },
+    { 0x1D, KEY_FIRE }, { 0x9D, KEY_FIRE },      /* left / right Ctrl  */
+    { 0x39, KEY_USE },                            /* Space              */
+    { 0x2A, KEY_RSHIFT }, { 0x36, KEY_RSHIFT },   /* Shift: run         */
+    { 0x38, KEY_RALT }, { 0xB8, KEY_RALT },       /* Alt: strafe        */
+};
+#define HELD_N ((int)(sizeof(s_held_keys) / sizeof(s_held_keys[0])))
+static bool s_held_down[HELD_N];
+
+static bool doom_window_open(void);
 
 /* CareOS char / KEY_NAV_* code -> Doom key code, 0 = unmapped. */
 static unsigned char doom_map_key(u8 c) {
@@ -77,17 +97,22 @@ int DG_GetKey(int* pressed, unsigned char* key) {
         s_pending_release = -1;
         return 1;
     }
-    /* Ctrl is a pure modifier (no char), so poll it for Fire. */
-    bool ctrl = keyboard_ctrl_held();
-    if (ctrl != s_fire_down) {
-        s_fire_down = ctrl;
-        *pressed = ctrl ? 1 : 0;
-        *key = KEY_FIRE;
+    /* Held keys count only while DOOM has focus; losing focus releases them. */
+    bool focused = doom_window_open() && doom_win->focused && !doom_win->minimized;
+    for (int i = 0; i < HELD_N; i++) {
+        bool down = focused && keyboard_key_held(s_held_keys[i].code);
+        if (down == s_held_down[i]) continue;
+        s_held_down[i] = down;
+        *pressed = down ? 1 : 0;
+        *key = s_held_keys[i].key;
         return 1;
     }
     while (s_kq_tail != s_kq_head) {
         u8 c = s_kq[s_kq_tail];
         s_kq_tail = (s_kq_tail + 1) % DOOM_KQ;
+        /* Arrows and Space already arrive through the held-key poll. */
+        if (c == KEY_NAV_UP || c == KEY_NAV_DOWN || c == KEY_NAV_LEFT ||
+            c == KEY_NAV_RIGHT || c == ' ') continue;
         unsigned char k = doom_map_key(c);
         if (!k) continue;
         *pressed = 1;
@@ -104,11 +129,33 @@ void DG_SetWindowTitle(const char * title) {
 
 /* -- CareOS App Interface ------------------------------------------------- */
 
+static bool doom_window_open(void) {
+    return doom_win && doom_win->active && doom_win->app == APP_DOOM;
+}
+
 void doom_task_entry(void) {
-    kprintf("[doom] Task started. Initializing engine...\n");
+    serial_write("[doom] task started, initializing engine\n");
+    /* doomgeneric_Create() initializes and runs a single tic; the host owns
+     * the loop and must call doomgeneric_Tick() for every frame after it.
+     * Without this loop DOOM froze on its first frame. The engine cannot be
+     * initialized twice, so the task lives on: while the window is closed it
+     * idles, and reopening DOOM resumes the same game. */
     doomgeneric_Create(3, doom_argv);
-    kprintf("[doom] Task exiting (Doom quit).\n");
-    doom_started = false;
+    serial_write("[doom] engine up, entering game loop\n");
+    for (;;) {
+        if (doom_window_open()) doomgeneric_Tick();
+        else                    task_yield();
+    }
+}
+
+/* True once per frame the DOOM task has published since the last call, so the
+ * GUI loop repaints at DOOM's frame rate while it runs. */
+bool app_doom_new_frame(void) {
+    static u32 seen = 0;
+    u32 now = s_frame_seq;
+    if (now == seen || !doom_window_open() || doom_win->minimized) return false;
+    seen = now;
+    return true;
 }
 
 void app_doom_init(window_t *w) {

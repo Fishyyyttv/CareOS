@@ -948,6 +948,8 @@ void gui_run(void) {
              * gate produced. */
             if (wm_animate_all()) activity = true;
             if (launcher_animating()) activity = true;
+            if (taskbar_animate(&mouse)) activity = true;
+            if (app_doom_new_frame()) activity = true;
 
             /* Theme mode "auto": light 07:00-19:00, dark otherwise (checked
              * every 30 s; a minute boundary is the finest it can change on). */

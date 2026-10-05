@@ -192,10 +192,13 @@ void serial_write(const char *s) {
 
 __attribute__((noreturn)) void kernel_panic(u32 code, const char *msg) {
     char b[20];
-    u64 rbp = 0, ret = 0;
+    u64 rbp = 0;
+    /* The kernel builds without frame pointers, so rbp may hold any value:
+     * print it, never dereference it (doing so faulted inside the panic and
+     * hid the original message). The caller's address is always valid. */
+    u64 ret = (u64)__builtin_return_address(0);
 
     __asm__ volatile ("mov %%rbp, %0" : "=r"(rbp));
-    if (rbp) ret = *((u64*)rbp + 1);
 
     serial_write("\n[KERNEL PANIC] code=0x");
     kutoa(code, b, 16); serial_write(b);

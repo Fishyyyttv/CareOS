@@ -254,21 +254,30 @@ long ftell(FILE *fp) {
     return (long)fh->pos;
 }
 
+/* Console output from ported code (Doom) goes to the serial log, so a fatal
+ * I_Error message is visible instead of vanishing. */
+static int shim_vlog(const char *format, va_list ap) {
+    static char buf[512];
+    int n = kvsnprintf(buf, sizeof(buf), format, ap);
+    serial_write(buf);
+    return n;
+}
+
 int printf(const char *format, ...) {
     va_list args;
     va_start(args, format);
-    kvsnprintf(NULL, 0, format, args);
+    int n = shim_vlog(format, args);
     va_end(args);
-    return 0;
+    return n;
 }
 
 int fprintf(FILE *fp, const char *format, ...) {
     va_list args;
     va_start(args, format);
-    /* For now, just print to console even if fp is a file */
-    kvsnprintf(NULL, 0, format, args);
+    (void)fp;   /* files and std streams alike go to the serial log */
+    int n = shim_vlog(format, args);
     va_end(args);
-    return 0;
+    return n;
 }
 
 int vsnprintf(char *str, size_t size, const char *format, va_list ap) {
@@ -292,7 +301,8 @@ int sprintf(char *str, const char *format, ...) {
 }
 
 int vfprintf(FILE *stream, const char *format, va_list ap) {
-    return kvsnprintf(NULL, 0, format, ap);
+    (void)stream;
+    return shim_vlog(format, ap);
 }
 
 void rewind(FILE *fp) { fseek(fp, 0, 0); }
@@ -475,7 +485,14 @@ size_t strlen(const char *s) { return kstrlen(s); }
 int strcmp(const char *s1, const char *s2) { return kstrcmp(s1, s2); }
 int strncmp(const char *s1, const char *s2, size_t n) { return kstrncmp(s1, s2, n); }
 char *strcpy(char *dest, const char *src) { return kstrcpy(dest, src); }
-char *strncpy(char *dest, const char *src, size_t n) { return kstrncpy(dest, src, n); }
+/* Standard strncpy: zero-fills the rest of dest. kstrncpy writes one NUL and
+ * leaves the tail as-is, which broke DOOM's 8-byte lump-name compares. */
+char *strncpy(char *dest, const char *src, size_t n) {
+    size_t i = 0;
+    for (; i < n && src[i]; i++) dest[i] = src[i];
+    for (; i < n; i++) dest[i] = '\0';
+    return dest;
+}
 
 /* -- ctype.h -- */
 int toupper(int c) { if (c >= 'a' && c <= 'z') return c - 'a' + 'A'; return c; }

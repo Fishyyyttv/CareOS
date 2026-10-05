@@ -197,6 +197,7 @@ bool keyboard_alt_held(void);
 bool keyboard_shift_held(void);
 bool keyboard_super_held(void);
 bool keyboard_super_tapped(void);
+bool keyboard_key_held(u8 code);   /* set-1 make code, +0x80 for E0 keys */
 
 /* Machine power control (kernel/power.c). Neither returns. */
 void power_shutdown(void);

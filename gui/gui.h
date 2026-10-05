@@ -637,12 +637,14 @@ void      wm_minimize_all(void);
 void      wm_minimize(window_t *w);
 void      wm_close_all(void);
 window_t *wm_get_window(int i);
+bool      wm_fullscreen_active(void);      /* a maximized window is showing */
 
 void desktop_draw(void);
 void desktop_handle_mouse(mouse_t *m);
 void taskbar_draw(void);
 void taskbar_handle_mouse(mouse_t *m);
 bool taskbar_contains(i32 x, i32 y);
+bool taskbar_animate(const mouse_t *m);    /* dock auto-hide step; true while moving */
 bool wm_busy(void);                        /* a window drag / resize / snap flyout is live */
 bool wm_pointer_owner(i32 x, i32 y);       /* busy, or a visible window is under (x,y) */
 void desktop_clear_hover(void);
@@ -710,6 +712,7 @@ void app_pkgmgr_key(window_t *w, char c);
 void app_doom_init(window_t *w);
 void app_doom_draw(window_t *w);
 void app_doom_key(window_t *w, char c);
+bool app_doom_new_frame(void);   /* DOOM published a frame since last asked */
 
 void app_editor_init(window_t *w);
 void app_editor_draw(window_t *w);

@@ -184,6 +184,16 @@ static bool hero_visible(void) {
     return true;
 }
 
+/* A maximized window covers the desktop: the dock tucks itself away. */
+bool wm_fullscreen_active(void) {
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        if (w->active && !w->minimized && w->maximized && w->anim_kind != WM_ANIM_MINIMIZE &&
+            wm_on_current_desktop(w)) return true;
+    }
+    return false;
+}
+
 static rect_t hero_search_rect(void) {
     i32 x = 260 * (i32)SCREEN_W / 1440, y = 200 * (i32)SCREEN_H / 900;
     i32 head = gfx_role_line_h(FONT_ROLE_UI, 4) + 6 + gfx_role_line_h(FONT_ROLE_DISPLAY, 4);
@@ -561,9 +571,11 @@ void wm_maximize(window_t *w) {
     } else {
         w->restore_rect = w->rect;
         /* Start below the top bar (which draws over windows) so the titlebar and
-         * its min/max/close buttons stay reachable, and stop above the dock. */
+         * its min/max/close buttons stay reachable, and run to the bottom edge:
+         * the dock slides away while a maximized window shows and comes back
+         * when the pointer touches the bottom of the screen (taskbar.c). */
         w->rect = rect_make(0, (i32)TOPBAR_H, (i32)SCREEN_W,
-                            (i32)SCREEN_H - (i32)TOPBAR_H - (i32)TASKBAR_H);
+                            (i32)SCREEN_H - (i32)TOPBAR_H);
         w->maximized = true;
     }
 }

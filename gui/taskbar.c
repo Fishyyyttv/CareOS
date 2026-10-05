@@ -12,6 +12,7 @@
 #include "ui.h"
 #include "image.h"
 #include "icon.h"
+#include "spring.h"
 
 #define DOCK_SLOT      56      /* slot (button) size            */
 #define DOCK_ICON      52      /* icon size inside a slot       */
@@ -30,6 +31,21 @@
 
 static i32 g_dock_mouse_x = -10000;
 static i32 g_dock_mouse_y = -10000;
+
+/* Auto-hide: while a maximized window shows, the dock slides below the screen
+ * edge. Touching the bottom edge springs it back up; it tucks away again a
+ * moment after the pointer leaves it. 0 = shown, SPRING_ONE = hidden. */
+#define DOCK_REVEAL_EDGE   3      /* px band at the bottom that summons it   */
+#define DOCK_KEEP_MARGIN  28      /* px around the pill that keeps it up     */
+#define DOCK_HIDE_DELAY  450      /* ms after the pointer leaves             */
+#define DOCK_HIDE_TRAVEL (DOCK_PAD_T + DOCK_SLOT + DOCK_PAD_B + DOCK_EDGE + 40)  /* + shadow */
+static spring_t s_hide;
+static bool     s_hide_ready = false;
+static bool     s_revealed = false;
+static u32      s_hide_ms = 0, s_leave_ms = 0;
+static i32      g_hide_px = 0;
+
+static bool dock_hidden(void) { return g_hide_px >= DOCK_HIDE_TRAVEL; }
 
 /* Pinned apps, in the artboard's order (Pip's Home arrives with phase 4). */
 static const app_id_t pinned_apps[] = {
@@ -116,7 +132,7 @@ static void dock_build_layout(dock_layout_t *L) {
     i32 dock_w = DOCK_PAD_X * 2 + inner;
     i32 dock_h = DOCK_PAD_T + DOCK_SLOT + DOCK_PAD_B;
     i32 dock_x = (sw - dock_w) / 2;
-    i32 dock_y = sh - DOCK_EDGE - dock_h;
+    i32 dock_y = sh - DOCK_EDGE - dock_h + g_hide_px;
     L->dock_rect = rect_make(dock_x, dock_y, dock_w, dock_h);
 
     i32 x = dock_x + DOCK_PAD_X, y = dock_y + DOCK_PAD_T;
@@ -155,6 +171,7 @@ static void dock_tooltip(rect_t slot, const char *name) {
 
 /* ---- Draw ---------------------------------------------------------------- */
 void taskbar_draw(void) {
+    if (dock_hidden()) return;
     dock_layout_t L;
     dock_build_layout(&L);
     rect_t dr = L.dock_rect;
@@ -218,7 +235,7 @@ void taskbar_handle_mouse(mouse_t *m) {
     /* Cache the pointer every frame for magnification and hover labels. */
     g_dock_mouse_x = m->x;
     g_dock_mouse_y = m->y;
-    if (!m->left_clicked) return;
+    if (!m->left_clicked || dock_hidden()) return;
 
     /* Show-desktop nub, bottom-right corner. */
     if (m->x >= (i32)SCREEN_W - DOCK_SHOW_DESK_W && m->y >= (i32)SCREEN_H - TASKBAR_H) {
@@ -258,7 +275,58 @@ void taskbar_handle_mouse(mouse_t *m) {
 
 /* The dock is drawn above windows, so the pointer belongs to it inside its pill. */
 bool taskbar_contains(i32 x, i32 y) {
+    if (dock_hidden()) return false;
     dock_layout_t L;
     dock_build_layout(&L);
     return rect_contains(L.dock_rect, x, y);
+}
+
+/* ---- Auto-hide ----------------------------------------------------------- */
+bool taskbar_animate(const mouse_t *m) {
+    u32 now = timer_ms();
+    if (!s_hide_ready) {
+        spring_init(&s_hide, 0, SPRING_POP_K, SPRING_POP_C);
+        s_hide_ms = now;
+        s_hide_ready = true;
+    }
+
+    bool want_hidden = false;
+    if (wm_fullscreen_active() && !launcher_open) {
+        i32 sh = (i32)SCREEN_H;
+        if (m->y >= sh - DOCK_REVEAL_EDGE) s_revealed = true;
+        if (s_revealed) {
+            /* Keep it up while the pointer is on or near the pill (measured at
+             * its resting position, so a rising dock can't outrun the pointer). */
+            i32 saved = g_hide_px;
+            g_hide_px = 0;
+            dock_layout_t L;
+            dock_build_layout(&L);
+            g_hide_px = saved;
+            rect_t r = L.dock_rect;
+            bool near = m->x >= r.x - DOCK_KEEP_MARGIN && m->x < r.x + r.w + DOCK_KEEP_MARGIN &&
+                        m->y >= r.y - DOCK_KEEP_MARGIN;
+            if (near || m->y >= sh - DOCK_REVEAL_EDGE) s_leave_ms = now;
+            else if (now - s_leave_ms >= DOCK_HIDE_DELAY) s_revealed = false;
+        }
+        want_hidden = !s_revealed;
+    } else {
+        s_revealed = false;
+    }
+
+    /* Rise with a soft overshoot; drop critically damped (no bounce). */
+    i32 target = want_hidden ? SPRING_ONE : 0;
+    if (s_hide.target != target) {
+        if (want_hidden) { s_hide.k = SPRING_EXIT_K; s_hide.c = SPRING_EXIT_C; }
+        else             { s_hide.k = SPRING_POP_K;  s_hide.c = SPRING_POP_C;  }
+        spring_set_target(&s_hide, target);
+        if (!want_hidden) s_leave_ms = now;
+    }
+    spring_step(&s_hide, now - s_hide_ms);
+    s_hide_ms = now;
+
+    i32 px = (i32)(((i64)s_hide.pos * DOCK_HIDE_TRAVEL) / SPRING_ONE);
+    if (px > DOCK_HIDE_TRAVEL) px = DOCK_HIDE_TRAVEL;
+    bool moved = px != g_hide_px;
+    g_hide_px = px;
+    return moved || !spring_settled(&s_hide);
 }

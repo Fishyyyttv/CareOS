@@ -122,6 +122,7 @@ C_SRC     := kernel/kernel.c       \
              kernel/users.c        \
              kernel/settings.c     \
              kernel/account_rules.c \
+             kernel/kfmt.c         \
              kernel/power.c        \
              kernel/appdb.c        \
              kernel/carepkg.c      \
@@ -455,7 +456,9 @@ HT_SRC_fetch_token := apps/fetch_token.c
 HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
 HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring account_rules
-HOST_TESTS    += term_cmds settings_index care_syntax notes_md store_model
+HOST_TESTS    += term_cmds settings_index care_syntax notes_md store_model kfmt
+HT_SRC_kfmt := kernel/kfmt.c
+$(HOST_TEST_DIR)/test_kfmt: kernel/kfmt.h
 HT_SRC_store_model := apps/store_model.c
 $(HOST_TEST_DIR)/test_store_model: apps/store_model.h
 HT_SRC_notes_md := apps/notes_md.c
