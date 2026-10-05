@@ -68,6 +68,16 @@ void web_page_paint(web_page_t *pg, uint32_t *canvas, int cw, int ch, int stride
 /* Link under a document-space point; writes the absolute URL. */
 bool web_page_link_at(web_page_t *pg, int x, int y, char *href, size_t cap);
 
+/* Interaction. Coordinates are document space. A WEB_ACT_NAVIGATE result
+ * wrote the URL to load into `url` (link, or a submitted GET form). */
+enum { WEB_ACT_NONE = 0, WEB_ACT_NAVIGATE, WEB_ACT_REPAINT };
+enum { WEB_KEY_BACKSPACE = 0x110000, WEB_KEY_ENTER, WEB_KEY_TAB, WEB_KEY_ESCAPE };
+int  web_page_click(web_page_t *pg, int x, int y, char *url, size_t cap);
+/* Key for the focused control: a Unicode code point or WEB_KEY_*. */
+int  web_page_key(web_page_t *pg, uint32_t key, char *url, size_t cap);
+bool web_page_focused(web_page_t *pg);
+void web_page_blur(web_page_t *pg);
+
 /* Document y of an element id (for #fragment navigation), or -1. */
 int  web_page_anchor_y(web_page_t *pg, const char *id);
 

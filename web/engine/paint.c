@@ -327,21 +327,39 @@ static void paint_replaced(page_t *pg, canvas_t *c, box_t *b, float x, float y) 
         font_t *f = style_font(&tmp);
         int saved[4]; memcpy(saved, c->clip, sizeof saved);
         for (int i = 0; i < 4; i++) c->clip[i] = (i < 2) ? (clip[i] > saved[i] ? clip[i] : saved[i]) : (clip[i] < saved[i] ? clip[i] : saved[i]);
-        if (b->alt) {
-            if (b->rkind == 5) {
-                const char *s = b->alt; float ly = cy + font_ascent(f);
-                while (*s && ly < cy + ch + font_ascent(f)) {
-                    const char *e = strchr(s, '\n'); size_t l = e ? (size_t)(e - s) : strlen(s);
-                    draw_text(c, &tmp, cx, ly, s, (u32)l, 0);
-                    ly += font_normal_lh(f);
-                    s += l + (e ? 1 : 0);
-                }
-            } else {
-                float lh = font_ascent(f) + font_descent(f);
-                draw_text(c, &tmp, cx, cy + (ch - lh) / 2 + font_ascent(f), b->alt, (u32)strlen(b->alt), 0);
+        bool focused = pg->focus == b;
+        float caret_x = cx, caret_y = cy, lh = font_ascent(f) + font_descent(f);
+        if (b->rkind == 5) {
+            const char *s = b->alt ? b->alt : ""; float ly = cy + font_ascent(f);
+            bool ph = b->colspan == 1;
+            for (;;) {
+                const char *e = strchr(s, '\n'); size_t l = e ? (size_t)(e - s) : strlen(s);
+                if (ly < cy + ch + font_ascent(f)) draw_text(c, &tmp, cx, ly, s, (u32)l, 0);
+                caret_x = cx + (ph ? 0 : font_text_width(f, s, (u32)l, tmp.letter_spacing));
+                caret_y = ly - font_ascent(f);
+                if (!e) break;
+                ly += font_normal_lh(f);
+                s = e + 1;
+            }
+            if (ph) { caret_x = cx; caret_y = cy; }
+        } else {
+            float ty = cy + (ch - lh) / 2;
+            caret_y = ty;
+            if (b->alt) {
+                float tw = font_text_width(f, b->alt, (u32)strlen(b->alt), tmp.letter_spacing);
+                /* keep the end (and the caret) visible while typing */
+                float shift = (focused && b->colspan != 1 && tw > cw - 2) ? tw - (cw - 2) : 0;
+                draw_text(c, &tmp, cx - shift, ty + font_ascent(f), b->alt, (u32)strlen(b->alt), 0);
+                caret_x = cx + (b->colspan == 1 ? 0 : tw - shift);
             }
         }
+        if (focused) cv_fill(c, caret_x, caret_y, 1.5f, lh, st->color);
         memcpy(c->clip, saved, sizeof saved);
+        if (focused) {
+            /* focus ring */
+            float r[4] = { 4, 4, 4, 4 }, bw[4] = { 2, 2, 2, 2 };
+            cv_ring(c, x - 1, y - 1, b->w + 2, b->h + 2, r, bw, 0xFF1A73E8u);
+        }
         if (b->rkind == 4) {
             /* dropdown chevron */
             float ax = x + b->w - b->b[1] - 13, ay = y + b->h / 2 - 2;

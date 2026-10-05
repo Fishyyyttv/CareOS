@@ -255,3 +255,11 @@ void web_page_dump(web_page_t *pg, void (*out)(const char *line)) {
 }
 
 uint32_t web_page_generation(web_page_t *pg) { return pg ? pg->generation : 0; }
+
+/* Deepest box under a document point (text boxes included), or NULL. */
+box_t *page_hit_box(page_t *pg, float x, float y) {
+    if (!pg || !pg->root) return NULL;
+    hit_t h = { x, y, NULL };
+    hit_box(pg->root, pg->root->x, pg->root->y, &h, 0);
+    return h.hit;
+}

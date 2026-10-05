@@ -195,6 +195,7 @@ struct web_page {
     char  *arena; size_t arena_used, arena_cap;
     u32   bg;                    /* canvas background */
     uint64_t *sel_set; u32 sel_cap;   /* hashes of classes/ids present in the DOM */
+    box_t *focus;                 /* focused form control (replaced box) */
 };
 typedef struct web_page page_t;
 
@@ -253,6 +254,9 @@ void paint_page(page_t *pg, canvas_t *c);
 void cv_fill(canvas_t *c, float x, float y, float w, float h, u32 color);
 void cv_fill_rrect(canvas_t *c, float x, float y, float w, float h,
                    const float r[4], u32 color);
+
+/* page.c */
+box_t *page_hit_box(page_t *pg, float x, float y);
 
 /* image.c */
 web_img_t *img_request(page_t *pg, const char *url);

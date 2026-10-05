@@ -1475,6 +1475,25 @@ void app_browser_key(window_t *w, char c) {
         return;
     }
 
+    /* A focused form control on the page takes the keystroke. */
+    if (w->browser_page && web_page_focused(w->browser_page)) {
+        u32 k = 0;
+        if (c == '\b') k = WEB_KEY_BACKSPACE;
+        else if (c == '\n') k = WEB_KEY_ENTER;
+        else if (c == '\t') k = WEB_KEY_TAB;
+        else if (c == 27) k = WEB_KEY_ESCAPE;
+        else if ((u8)c >= 32 && (u8)c < 127) k = (u8)c;
+        if (k) {
+            char abs[1024];
+            if (web_page_key(w->browser_page, k, abs, sizeof abs) == WEB_ACT_NAVIGATE) {
+                w->browser_push_history = true;
+                w->browser_autohttps = false;
+                app_browser_navigate(w, abs);
+            }
+            return;
+        }
+    }
+
     /* Scroll */
     if (c == ' ' || c == '\n') w->browser_scroll += FH * 10;
     else if (c == '\b')        w->browser_scroll -= FH * 10;
@@ -1572,12 +1591,14 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
         }
     }
     if (w->browser_page) {
+        /* links, buttons, form controls (focus / toggle / submit) */
         char abs[1024];
-        if (web_page_link_at(w->browser_page, x - cr.x, y - cont_y + w->browser_scroll,
-                             abs, sizeof(abs))) {
+        int r = web_page_click(w->browser_page, x - cr.x, y - cont_y + w->browser_scroll,
+                               abs, sizeof(abs));
+        if (r == WEB_ACT_NAVIGATE) {
             w->browser_push_history = true;
+            w->browser_autohttps = false;
             app_browser_navigate(w, abs);
-            return;
         }
     }
 }

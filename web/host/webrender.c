@@ -93,6 +93,24 @@ int main(int argc, char **argv) {
     double t3 = now();
     web_page_relayout_if_needed(pg, w, vh);
     double t4 = now();
+    /* WEB_ACTIONS="click:x,y;type:text;key:enter|tab|esc|bs" (document coords) */
+    const char *acts = getenv("WEB_ACTIONS");
+    while (acts && *acts) {
+        const char *end = strchr(acts, ';');
+        size_t n = end ? (size_t)(end - acts) : strlen(acts);
+        char a[512]; snprintf(a, sizeof a, "%.*s", (int)(n < 511 ? n : 511), acts);
+        char nav[2048] = "";
+        int r = WEB_ACT_NONE;
+        if (!strncmp(a, "click:", 6)) { int x = 0, y = 0; sscanf(a + 6, "%d,%d", &x, &y); r = web_page_click(pg, x, y, nav, sizeof nav); }
+        else if (!strncmp(a, "type:", 5)) { for (const char *p = a + 5; *p; p++) r = web_page_key(pg, (unsigned char)*p, nav, sizeof nav); }
+        else if (!strcmp(a, "key:enter")) r = web_page_key(pg, WEB_KEY_ENTER, nav, sizeof nav);
+        else if (!strcmp(a, "key:tab")) r = web_page_key(pg, WEB_KEY_TAB, nav, sizeof nav);
+        else if (!strcmp(a, "key:esc")) r = web_page_key(pg, WEB_KEY_ESCAPE, nav, sizeof nav);
+        else if (!strcmp(a, "key:bs")) r = web_page_key(pg, WEB_KEY_BACKSPACE, nav, sizeof nav);
+        fprintf(stderr, "action %s -> %s%s%s\n", a, r == WEB_ACT_NAVIGATE ? "NAVIGATE " : r == WEB_ACT_REPAINT ? "repaint" : "none",
+                r == WEB_ACT_NAVIGATE ? nav : "", web_page_focused(pg) ? " [focused]" : "");
+        acts = end ? end + 1 : NULL;
+    }
     if (getenv("WEB_DUMP")) web_page_dump(pg, dump_line);
     int H = web_page_height(pg);
     int h = H < maxh ? H : maxh;
