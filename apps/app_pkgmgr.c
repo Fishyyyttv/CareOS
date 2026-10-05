@@ -1,350 +1,459 @@
-/* CareOS v9 -- apps/app_pkgmgr.c -- Package Manager */
+/* CareOS v9 -- apps/app_pkgmgr.c -- Packages (v10 Store, Phase 3 spec §6)
+ *
+ * CareOS has no package server, so the Store shows what really exists:
+ * installed packages (carepkg's registry) and .care files on this computer
+ * (Downloads, the home folder and /tmp). A file that is newer than the
+ * installed copy is a real update. apps/store_model.c parses manifests and
+ * decides the page state (host-tested). */
 #include "apps_common.h"
+#include "ui.h"
+#include "store_model.h"
 
-#define PKG_TAB_INSTALLED  0
-#define PKG_TAB_INSTALL    1
-#define PKG_TAB_CREATE     2
-#define PKG_TAB_ABOUT      3
+#define AVAIL_MAX 24
+#define PHITS     96
 
-/* Shared layout constants — used by both draw and click */
-#define PKG_HDR_H      38
-#define PKG_TAB_Y      (PKG_HDR_H + 2)
-#define PKG_TAB_H      26
-#define PKG_SEP_Y      (PKG_TAB_Y + PKG_TAB_H + 2)
-#define PKG_CONTENT_Y  (PKG_SEP_Y + 1)
-#define PKG_ROW_H      26
-/* Column-header band: one body line plus padding. A flat 20 clipped the
- * glyph bottoms as soon as the line height went past it. */
-#define PKG_COL_H      (FONT_H * (i32)GFX_FONT_SCALE + 8)
-#define PKG_SB_H       24
-#define PKG_LINE_H     (FONT_H * (i32)GFX_FONT_SCALE + 2)
+enum { V_DISCOVER = 0, V_INSTALLED, V_UPDATES, V_CATEGORY };
+enum {
+    PA_NONE = 0, PA_VIEW, PA_CAT, PA_SEARCH, PA_GET, PA_UPDATE, PA_REMOVE, PA_UPDATE_ALL,
+    PA_NEWPKG, PA_SHEET_OK, PA_SHEET_CANCEL, PA_SHOW_INSTALLED
+};
+typedef struct { rect_t r; u8 act; i32 arg; } phit_t;
 
-/* Create-tab sub-layout (relative to PKG_CONTENT_Y) */
-#define PKG_CR_TITLE_H  28
-#define PKG_CR_SEP_H    14
-#define PKG_CR_LABEL_H  28
-#define PKG_CR_BTN_Y    (PKG_CR_TITLE_H + PKG_CR_SEP_H + PKG_CR_LABEL_H)
-#define PKG_CR_BTN_H    28
+typedef struct {
+    care_manifest_t m;
+    char path[FS_PATH_MAX];
+    pkg_rel_t rel;
+} avail_t;
+
+typedef struct {
+    avail_t avail[AVAIL_MAX]; u32 navail;
+    char    cats[12][32]; u32 ncats;
+    u32     view; i32 cat;
+    char    search[32]; u32 search_len; bool search_focus;
+    bool    sheet; char pname[32]; u32 pname_len;
+    i32     remove_armed; u32 remove_ms;
+    u32     scan_ms;
+    phit_t  hits[PHITS]; u32 nhits;
+} pstate_t;
+
+static pstate_t *pst(window_t *w) {
+    if (!w->app_state) {
+        pstate_t *s = (pstate_t *)kmalloc(sizeof(pstate_t));
+        if (!s) return NULL;
+        kmemset(s, 0, sizeof *s);
+        s->remove_armed = -1;
+        w->app_state = s;
+    }
+    return (pstate_t *)w->app_state;
+}
+static void hit(pstate_t *s, rect_t r, u8 act, i32 arg) {
+    if (s->nhits < PHITS) { s->hits[s->nhits].r = r; s->hits[s->nhits].act = act; s->hits[s->nhits].arg = arg; s->nhits++; }
+}
+static i32 lh(u32 slot) { return gfx_role_line_h(FONT_ROLE_UI, slot); }
+
+/* -- Model ---------------------------------------------------------------------- */
+/* The installed version of name, or NULL. */
+static const char *installed_version(const char *name, char *buf) {
+    for (u32 i = 0; i < carepkg_count(); i++) {
+        char n[32], v[16], d[128], c[32]; bool inst;
+        if (carepkg_get_info(i, n, v, d, c, &inst) && inst && !kstrcmp(n, name)) { kstrcpy(buf, v); return buf; }
+    }
+    return NULL;
+}
+
+static void add_cat(pstate_t *s, const char *c) {
+    if (!c[0]) return;
+    for (u32 i = 0; i < s->ncats; i++) if (!kstrcmp(s->cats[i], c)) return;
+    if (s->ncats < 12) { kstrncpy(s->cats[s->ncats], c, 31); s->cats[s->ncats][31] = '\0'; s->ncats++; }
+}
+
+static void scan_dir(pstate_t *s, const char *dirpath) {
+    fs_node_t *d = vfs_resolve_path(dirpath);
+    if (!d || d->type != FS_DIR) return;
+    for (u32 i = 0; i < d->child_count && s->navail < AVAIL_MAX; i++) {
+        fs_node_t *f = d->children[i];
+        const char *e = kstrrchr(f->name, '.');
+        if (f->type != FS_FILE || !e || (kstrcmp(e, ".care") && kstrcmp(e, ".cpk"))) continue;
+        avail_t *a = &s->avail[s->navail];
+        if (!care_manifest_parse(vfs_file_str(f), f->size, &a->m)) continue;
+        bool dup = false;                                  /* same package seen already: keep the newest */
+        for (u32 k = 0; k < s->navail; k++)
+            if (!kstrcmp(s->avail[k].m.name, a->m.name)) {
+                dup = true;
+                if (care_version_cmp(a->m.version, s->avail[k].m.version) > 0) {
+                    s->avail[k].m = a->m; vfs_get_path(f, s->avail[k].path, FS_PATH_MAX);
+                }
+            }
+        if (dup) continue;
+        vfs_get_path(f, a->path, FS_PATH_MAX);
+        s->navail++;
+    }
+}
+
+static void store_scan(pstate_t *s) {
+    s->navail = 0; s->ncats = 0;
+    char home[64], dl[80];
+    app_home_path(home);
+    kstrcpy(dl, home); kstrcat(dl, "/Downloads");
+    scan_dir(s, dl); scan_dir(s, home); scan_dir(s, "/tmp");
+    for (u32 i = 0; i < s->navail; i++) {
+        char v[16];
+        s->avail[i].rel = store_relation(installed_version(s->avail[i].m.name, v), s->avail[i].m.version);
+        add_cat(s, s->avail[i].m.category);
+    }
+    for (u32 i = 0; i < carepkg_count(); i++) {
+        char n[32], v[16], d[128], c[32]; bool inst;
+        if (carepkg_get_info(i, n, v, d, c, &inst) && inst) add_cat(s, c);
+    }
+    s->scan_ms = timer_ms();
+}
+
+static store_counts_t counts(pstate_t *s) {
+    store_counts_t c = { 0, 0, 0 };
+    for (u32 i = 0; i < carepkg_count(); i++) {
+        char n[32], v[16], d[128], cat[32]; bool inst;
+        if (carepkg_get_info(i, n, v, d, cat, &inst) && inst) c.installed++;
+    }
+    for (u32 i = 0; i < s->navail; i++) {
+        if (s->avail[i].rel == PKG_NEW) c.fresh++;
+        if (s->avail[i].rel == PKG_UPDATE) c.updates++;
+    }
+    return c;
+}
+
+static bool matches(pstate_t *s, const char *name, const char *desc, const char *cat) {
+    if (s->view == V_CATEGORY && s->cat >= 0 && (u32)s->cat < s->ncats && kstrcmp(cat, s->cats[s->cat])) return false;
+    if (!s->search_len) return true;
+    for (u32 k = 0; k < 2; k++) {
+        const char *hay = k ? desc : name;
+        for (; *hay; hay++) {
+            u32 i = 0;
+            while (s->search[i] && hay[i]) {
+                char a = hay[i], b = s->search[i];
+                if (a >= 'A' && a <= 'Z') a += 32;
+                if (b >= 'A' && b <= 'Z') b += 32;
+                if (a != b) break;
+                i++;
+            }
+            if (!s->search[i]) return true;
+        }
+    }
+    return false;
+}
+
+/* -- Actions ---------------------------------------------------------------------- */
+static void do_install(window_t *w, pstate_t *s, u32 i, bool update) {
+    if (i >= s->navail) return;
+    avail_t *a = &s->avail[i];
+    w->pkgmgr_installing = true;
+    if (update) carepkg_remove(a->m.name);                 /* reinstall would duplicate */
+    int rc = carepkg_install(a->path);
+    w->pkgmgr_installing = false;
+    char msg[96];
+    kstrcpy(msg, a->m.name); kstrcat(msg, rc == 0 ? (update ? " updated to " : " installed, version ") : " couldn't be installed");
+    if (rc == 0) kstrcat(msg, a->m.version);
+    notify_push("Packages", msg, rc == 0 ? g_theme->success : g_theme->error);
+    store_scan(s);
+}
+
+/* -- Drawing ----------------------------------------------------------------------- */
+typedef struct { u32 body, side, line, ink, ink2, muted, sel, field, card; bool dark; } ppal_t;
+static ppal_t ppal(void) {
+    ppal_t p;
+    p.dark = g_theme->is_dark;
+    p.body = g_theme->window_body; p.side = g_theme->surface_alt;
+    p.line = p.dark ? rgb(0x26, 0x2d, 0x48) : rgb(0xe1, 0xe4, 0xee);
+    p.ink = g_theme->ink; p.ink2 = g_theme->ink2; p.muted = g_theme->muted;
+    p.sel = p.dark ? ui_mix(p.side, g_theme->care, 70) : rgb(0xff, 0xe3, 0xd9);
+    p.field = p.dark ? rgb(0x10, 0x15, 0x29) : rgb(0xff, 0xff, 0xff);
+    p.card = p.dark ? rgb(0x1a, 0x20, 0x38) : rgb(0xff, 0xff, 0xff);
+    return p;
+}
+
+static const u32 CAT_COLS[6] = {
+    rgb(0xff,0x7a,0x59), rgb(0x4f,0x5e,0xf2), rgb(0x1f,0xa5,0x62),
+    rgb(0xf5,0xae,0x2e), rgb(0x8e,0x4d,0xf0), rgb(0x12,0x90,0xc2)
+};
+static u32 cat_col(const char *c) { u32 h = 0; for (; *c; c++) h = h * 31u + (u8)*c; return CAT_COLS[h % 6u]; }
+
+static i32 pill(i32 x, i32 y, const char *label, u32 bg, u32 fg) {
+    i32 w = gfx_str_role_width(label, FONT_ROLE_UI, 1, FONT_W_BOLD) + 28;
+    gfx_rect_rounded(x - w, y, w, 34, 17, bg);
+    gfx_str_role(x - w + 14, y + (34 - lh(1)) / 2, label, fg, FONT_ROLE_UI, 1, FONT_W_BOLD);
+    return w;
+}
+
+/* One package card; returns nothing, registers the action. kind: 0 get, 1 update, 2 remove, 3 installed (no action) */
+static void pkg_card(pstate_t *s, const ppal_t *p, i32 x, i32 y, i32 w, const char *name, const char *ver,
+                     const char *desc, const char *cat, u32 kind, i32 arg) {
+    i32 h = 76;
+    gfx_rect_rounded(x, y, w, h, 18, p->card);
+    if (!p->dark) gfx_rect_rounded_outline(x, y, w, h, 18, p->line);
+    char l[2] = { name[0] >= 'a' && name[0] <= 'z' ? (char)(name[0] - 32) : name[0], '\0' };
+    gfx_rect_rounded(x + 14, y + 16, 44, 44, 14, cat_col(cat[0] ? cat : name));
+    i32 tw = gfx_str_role_width(l, FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+    gfx_str_role(x + 14 + (44 - tw) / 2, y + 16 + (44 - gfx_role_line_h(FONT_ROLE_DISPLAY, 1)) / 2, l, rgb(0xff, 0xff, 0xff), FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+    const char *lab = kind == 0 ? "Get" : kind == 1 ? "Update" : kind == 2 ? (s->remove_armed == arg && timer_ms() - s->remove_ms < 3000 ? "Sure?" : "Remove") : "Installed";
+    u32 bg = kind == 0 ? g_theme->care : kind == 1 ? (p->dark ? p->ink : rgb(0x16, 0x1a, 0x2b)) : kind == 2 ? (lab[0] == 'S' ? g_theme->error : (p->dark ? rgb(0x2a, 0x33, 0x58) : rgb(0xee, 0xf0, 0xf6))) : 0;
+    u32 fg = kind == 0 ? g_theme->on_care : kind == 1 ? (p->dark ? g_theme->ground : rgb(0xff, 0xff, 0xff)) : kind == 2 ? (lab[0] == 'S' ? rgb(0xff, 0xff, 0xff) : p->ink) : 0;
+    i32 bw;
+    if (kind == 3) {
+        bw = gfx_str_role_width(lab, FONT_ROLE_UI, 1, FONT_W_BOLD) + 24;
+        ui_glyph(UI_GLYPH_CHECK, x + w - 14 - bw, y + (h - 16) / 2, 16, g_theme->success);
+        gfx_str_role(x + w - 14 - bw + 20, y + (h - lh(1)) / 2, lab, g_theme->success, FONT_ROLE_UI, 1, FONT_W_BOLD);
+    } else {
+        bw = pill(x + w - 14, y + (h - 34) / 2, lab, bg, fg);
+        hit(s, rect_make(x + w - 14 - bw, y + (h - 34) / 2, bw, 34), kind == 0 ? PA_GET : kind == 1 ? PA_UPDATE : PA_REMOVE, arg);
+    }
+    i32 tx = x + 72, tmax = w - 72 - bw - 26;
+    gfx_str_role_fit(tx, y + 16, tmax, name, p->ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
+    i32 nw = gfx_str_role_width(name, FONT_ROLE_UI, 2, FONT_W_BOLD);
+    if (nw + 60 < tmax) gfx_str_role(tx + nw + 8, y + 16 + (lh(2) - lh(0)) / 2 + 1, ver, p->muted, FONT_ROLE_UI, 0, FONT_W_REGULAR);
+    gfx_str_role_fit(tx, y + 16 + lh(2) + 2, tmax, desc[0] ? desc : "No description", p->muted, FONT_ROLE_UI, 1, FONT_W_REGULAR);
+}
+
+static void section_title(const ppal_t *p, i32 x, i32 y, const char *t) {
+    gfx_str_role(x, y, t, p->ink, FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+}
 
 void app_pkgmgr_init(window_t *w){
-    w->pkgmgr_tab = PKG_TAB_INSTALLED;
-    w->pkgmgr_sel = 0;
-    w->input_buf[0] = '\0';
-    w->input_len = 0;
+    w->pkgmgr_tab = 0; w->pkgmgr_sel = 0;
+    w->input_buf[0] = '\0'; w->input_len = 0;
     kstrcpy(w->pkgmgr_status, "Ready");
+    pstate_t *s = pst(w);
+    if (s) { s->cat = -1; store_scan(s); }
 }
 
 void app_pkgmgr_draw(window_t *w){
     rect_t cr = wm_client_rect(w);
-    i32 sc = (i32)GFX_FONT_SCALE;
-    (void)sc;
+    pstate_t *s = pst(w);
+    ppal_t p = ppal();
+    gfx_rect(cr.x, cr.y, cr.w, cr.h, p.body);
+    if (!s) return;
+    s->nhits = 0;
+    if (timer_ms() - s->scan_ms > 3000) store_scan(s);         /* new files appear on their own */
+    store_counts_t c = counts(s);
 
-    gfx_rect(cr.x, cr.y, cr.w, cr.h, COL_SURFACE);
-
-    /* Header */
-    gfx_gradient_rect(cr.x, cr.y, cr.w, PKG_HDR_H, g_theme->surface3, COL_SURFACE);
-    gfx_hline(cr.x, cr.y + PKG_HDR_H, cr.w, COL_BORDER);
-    gfx_str_ex(cr.x + 12, cr.y + 10, "Package Manager", COL_TEXT, COL_TRANSPARENT, FONT_H2);
-    gfx_str_right(cr.x, cr.y + 12, cr.w - 12, ".care format", COL_PRIMARY, COL_TRANSPARENT);
-
-    /* Tabs */
-    const char *tabs[] = { "Installed", "Install", "Create", "About", NULL };
-    i32 tab_w = (cr.w - 8) / 4;
-    for (int i = 0; tabs[i]; i++) {
-        i32 tx  = cr.x + 4 + i * tab_w;
-        bool sel = ((u32)i == w->pkgmgr_tab);
-        u32 bg  = sel ? COL_SELECTION : g_theme->surface2;
-        gfx_rect_rounded(tx, cr.y + PKG_TAB_Y, tab_w - 4, PKG_TAB_H, 6, bg);
-        if (sel) {
-            gfx_rect_rounded_outline(tx, cr.y + PKG_TAB_Y, tab_w - 4, PKG_TAB_H, 6, COL_BORDER);
-            gfx_rect_rounded(tx + 8, cr.y + PKG_TAB_Y + PKG_TAB_H - 3, tab_w - 20, 2, 1, COL_PRIMARY);
+    /* Sidebar */
+    i32 sbw = cr.w >= 820 ? 230 : 190;
+    gfx_rect(cr.x, cr.y, sbw, cr.h, p.side);
+    gfx_vline(cr.x + sbw, cr.y, cr.h, p.line);
+    i32 sx = cr.x + 12, sw = sbw - 24, y = cr.y + 16;
+    {
+        rect_t r = rect_make(sx, y, sw, 40);
+        gfx_rect_rounded(r.x, r.y, r.w, r.h, 12, p.field);
+        gfx_rect_rounded_outline(r.x, r.y, r.w, r.h, 12, s->search_focus ? g_theme->care : p.line);
+        ui_glyph(UI_GLYPH_SEARCH, r.x + 12, r.y + 11, 18, p.muted);
+        i32 ty = r.y + (40 - lh(2)) / 2;
+        if (s->search_len) gfx_str_role_fit(r.x + 38, ty, r.w - 46, s->search, p.ink, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+        else gfx_str_role_fit(r.x + 38, ty, r.w - 46, "Search packages", p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+        if (s->search_focus && ((timer_ms() / 500) & 1) == 0) {
+            i32 cx = r.x + 38 + (s->search_len ? gfx_str_role_width(s->search, FONT_ROLE_UI, 2, FONT_W_REGULAR) : 0);
+            if (cx < r.x + r.w - 8) gfx_rect(cx, ty, 2, lh(2), g_theme->care);
         }
-        gfx_str_centered(tx, cr.y + PKG_TAB_Y + (PKG_TAB_H - FONT_H) / 2, tab_w - 4,
-                         tabs[i], sel ? COL_TEXT : g_theme->dim, bg);
+        hit(s, r, PA_SEARCH, 0);
+        y += 52;
     }
-    gfx_hline(cr.x, cr.y + PKG_SEP_Y, cr.w, COL_BORDER);
-
-    i32 y          = cr.y + PKG_CONTENT_Y;
-    i32 content_h  = cr.h - PKG_CONTENT_Y - PKG_SB_H;
-
-    if (w->pkgmgr_tab == PKG_TAB_INSTALLED) {
-        /* Column header row */
-        gfx_rect(cr.x, y, cr.w, PKG_COL_H, g_theme->surface3);
-        gfx_hline(cr.x, y + PKG_COL_H, cr.w, COL_BORDER);
-        gfx_str(cr.x + 44, y + 4, "Name",        g_theme->dim, g_theme->surface3);
-        gfx_str(cr.x + 144, y + 4, "Version",    g_theme->dim, g_theme->surface3);
-        gfx_str(cr.x + 214, y + 4, "Category",   g_theme->dim, g_theme->surface3);
-        gfx_str(cr.x + 314, y + 4, "Description",g_theme->dim, g_theme->surface3);
-        y += PKG_COL_H + 1;
-
-        u32 cnt = carepkg_count();
-        i32 pkg_bottom = cr.y + PKG_CONTENT_Y + content_h;
-        {   /* clamp the scroll offset to the installed-package count */
-            i32 vis = (pkg_bottom - y) / PKG_ROW_H; if (vis < 1) vis = 1;
-            u32 tot = 0;
-            for (u32 i = 0; i < cnt; i++) {
-                char n2[32], v2[16], d2[128], c2[32]; bool in2;
-                if (carepkg_get_info(i, n2, v2, d2, c2, &in2) && in2) tot++;
-            }
-            u32 maxs = (tot > (u32)vis) ? tot - (u32)vis : 0;
-            if (w->scroll > maxs) w->scroll = maxs;
+    struct { const char *label; u32 view; i32 cat; u32 badge; } rows[16];
+    u32 nr = 0;
+    rows[nr].label = "Discover"; rows[nr].view = V_DISCOVER; rows[nr].cat = -1; rows[nr].badge = 0; nr++;
+    for (u32 i = 0; i < s->ncats && nr < 13; i++) { rows[nr].label = s->cats[i]; rows[nr].view = V_CATEGORY; rows[nr].cat = (i32)i; rows[nr].badge = 0; nr++; }
+    u32 sep = nr;
+    rows[nr].label = "Installed"; rows[nr].view = V_INSTALLED; rows[nr].cat = -1; rows[nr].badge = 0; nr++;
+    if (c.updates) { rows[nr].label = "Updates"; rows[nr].view = V_UPDATES; rows[nr].cat = -1; rows[nr].badge = c.updates; nr++; }
+    for (u32 i = 0; i < nr; i++) {
+        if (i == sep) { gfx_hline(sx + 6, y + 6, sw - 12, p.line); y += 14; }
+        bool on = s->view == rows[i].view && (rows[i].view != V_CATEGORY || s->cat == rows[i].cat);
+        if (on) gfx_rect_rounded(sx, y, sw, 40, 11, p.sel);
+        gfx_str_role_fit(sx + 12, y + (40 - lh(2)) / 2, sw - 50, rows[i].label, p.ink, FONT_ROLE_UI, 2, on ? FONT_W_BOLD : FONT_W_REGULAR);
+        if (rows[i].badge) {
+            char b[8]; kutoa(rows[i].badge, b, 10);
+            i32 bw = gfx_str_role_width(b, FONT_ROLE_UI, 0, FONT_W_BOLD) + 12; if (bw < 22) bw = 22;
+            gfx_rect_rounded(sx + sw - 10 - bw, y + 9, bw, 22, 11, g_theme->care);
+            gfx_str_role(sx + sw - 10 - bw + (bw - gfx_str_role_width(b, FONT_ROLE_UI, 0, FONT_W_BOLD)) / 2, y + 9 + (22 - lh(0)) / 2, b, g_theme->on_care, FONT_ROLE_UI, 0, FONT_W_BOLD);
         }
-        u32 shown = 0;
-        for (u32 i = 0; i < cnt; i++) {
-            char name[32], ver[16], desc[128], cat[32]; bool installed;
-            if (!carepkg_get_info(i, name, ver, desc, cat, &installed)) continue;
-            if (!installed) continue;
-            if (shown < w->scroll) { shown++; continue; }   /* scrolled above */
-            if (y >= pkg_bottom) break;
-            bool sel = (i == w->pkgmgr_sel);
-            u32 bg = sel ? COL_SELECTION : (shown % 2 == 0 ? COL_SURFACE : COL_SURFACE2);
-            gfx_rect(cr.x + 1, y, cr.w - 2, PKG_ROW_H, bg);
-            if (sel) gfx_vline(cr.x + 1, y, PKG_ROW_H, COL_PRIMARY);
-            gfx_rect_rounded(cr.x + 4, y + 5, 32, 14, 3, rgb(0x06, 0x3a, 0x1e));
-            gfx_str(cr.x + 6, y + 7, ".care", COL_GREEN, rgb(0x06, 0x3a, 0x1e));
-            gfx_str(cr.x + 42, y + 6, name, COL_TEXT, bg);
-            gfx_str(cr.x + 144, y + 6, ver, COL_ACCENT, bg);
-            gfx_str(cr.x + 214, y + 6, cat[0] ? cat : "Utility", g_theme->dim, bg);
-            gfx_str_clipped(cr.x + 314, y + 6, cr.w - 390, desc, g_theme->muted, bg);
-            /* Uninstall button */
-            i32 rx = cr.x + cr.w - 74;
-            u32 rbg = sel ? rgb(0x3a, 0x0a, 0x0a) : g_theme->surface3;
-            gfx_rect_rounded(rx, y + 4, 68, PKG_ROW_H - 8, 4, rbg);
-            gfx_str_centered(rx, y + 8, 68, "Uninstall", COL_RED, rbg);
-            y += PKG_ROW_H;
-            shown++;
-        }
-        if (shown == 0) {
-            gfx_str(cr.x + 14, y + 12, "No packages installed.", g_theme->muted, COL_SURFACE);
-            gfx_str(cr.x + 14, y + 12 + PKG_LINE_H, "Switch to 'Install' tab to add packages.", g_theme->dim, COL_SURFACE);
-        }
-
-    } else if (w->pkgmgr_tab == PKG_TAB_INSTALL) {
-        gfx_str(cr.x + 12, y + 4, "Browse VFS for .care files:", g_theme->dim, COL_SURFACE);
-        y += 24;
-
-        fs_node_t *tmpd = vfs_find(vfs_root(), "tmp");
-        if (tmpd) {
-            i32 pkg_bottom = cr.y + PKG_CONTENT_Y + content_h;
-            {   /* clamp the scroll offset to the number of .care files */
-                i32 vis = (pkg_bottom - y) / PKG_ROW_H; if (vis < 1) vis = 1;
-                u32 tot = 0;
-                for (u32 i = 0; i < tmpd->child_count; i++) {
-                    const char *e = kstrrchr(tmpd->children[i]->name, '.');
-                    if (e && (kstrcmp(e, ".care") == 0 || kstrcmp(e, ".cpk") == 0)) tot++;
-                }
-                u32 maxs = (tot > (u32)vis) ? tot - (u32)vis : 0;
-                if (w->scroll > maxs) w->scroll = maxs;
-            }
-            u32 shown = 0;
-            for (u32 i = 0; i < tmpd->child_count; i++) {
-                fs_node_t *f = tmpd->children[i];
-                const char *ext = kstrrchr(f->name, '.');
-                bool is_care = ext && (kstrcmp(ext, ".care") == 0 || kstrcmp(ext, ".cpk") == 0);
-                if (!is_care) continue;
-                if (shown < w->scroll) { shown++; continue; }
-                if (y >= pkg_bottom) break;
-                bool sel = ((u32)i == w->pkgmgr_sel);
-                u32 bg = sel ? COL_SELECTION : COL_SURFACE2;
-                gfx_rect(cr.x + 4, y, cr.w - 8, PKG_ROW_H, bg);
-                if (sel) gfx_vline(cr.x + 4, y, PKG_ROW_H, COL_PRIMARY);
-                gfx_rect_rounded(cr.x + 8, y + 5, 32, 16, 3, rgb(0x0a, 0x20, 0x3e));
-                gfx_str(cr.x + 10, y + 8, ".care", COL_PRIMARY, rgb(0x0a, 0x20, 0x3e));
-                gfx_str(cr.x + 46, y + 7, f->name, COL_TEXT, bg);
-                char sz[12]; kutoa(f->size, sz, 10); kstrcat(sz, " B");
-                gfx_str(cr.x + 200, y + 7, sz, g_theme->dim, bg);
-                i32 ib_x = cr.x + cr.w - 72;
-                u32 ib_bg = sel ? COL_PRIMARY : g_theme->surface3;
-                gfx_rect_rounded(ib_x, y + 4, 66, PKG_ROW_H - 8, 4, ib_bg);
-                gfx_str_centered(ib_x, y + 8, 66, "Install",
-                                 sel ? COL_WHITE : COL_PRIMARY, ib_bg);
-                y += PKG_ROW_H;
-                shown++;
-            }
-        }
-        gfx_str(cr.x + 12, cr.y + PKG_CONTENT_Y + content_h - 16,
-                "Tip: Use terminal 'carepkg create <name>' to make a .care template",
-                g_theme->muted, COL_SURFACE);
-
-    } else if (w->pkgmgr_tab == PKG_TAB_CREATE) {
-        gfx_str_ex(cr.x + 12, y, "Create a .care package template",
-                   COL_TEXT, COL_SURFACE, FONT_H2);
-        y += PKG_CR_TITLE_H;
-        gfx_hline(cr.x + 8, y, cr.w - 16, COL_BORDER);
-        y += PKG_CR_SEP_H;
-
-        /* Name input row */
-        gfx_str(cr.x + 12, y + 6, "Package name:", g_theme->dim, COL_SURFACE);
-        i32 inp_x = cr.x + 128, inp_w = cr.w - 188;
-        gfx_rect_rounded(inp_x, y, inp_w, 24, 4, COL_INPUT_BG);
-        gfx_rect_rounded_outline(inp_x, y, inp_w, 24, 4, COL_BORDER);
-        gfx_str(inp_x + 8, y + 6, w->input_buf, COL_TEXT, COL_TRANSPARENT);
-        if ((timer_ms() / 300) % 2 == 0) {
-            i32 cx = inp_x + 8 + (i32)w->input_len * FONT_W;
-            gfx_vline(cx, y + 4, 16, COL_TEXT);
-        }
-        y += PKG_CR_LABEL_H;
-
-        /* Create button — y is now cr.y + PKG_CONTENT_Y + PKG_CR_BTN_Y */
-        bool can = (w->input_len > 0);
-        u32 btn_bg = can ? COL_PRIMARY : g_theme->surface3;
-        gfx_rect_rounded(cr.x + 12, y, 120, PKG_CR_BTN_H, 6, btn_bg);
-        gfx_str_centered(cr.x + 12, y + (PKG_CR_BTN_H - FONT_H) / 2, 120,
-                         "Create Template", can ? COL_WHITE : g_theme->muted, btn_bg);
-        y += PKG_CR_BTN_H + 18;
-
-        gfx_hline(cr.x + 8, y, cr.w - 16, COL_BORDER);
-        y += 10;
-        gfx_str(cr.x + 12, y, "Output: /tmp/<name>.care", g_theme->dim, COL_SURFACE);
-        y += PKG_LINE_H;
-        gfx_str(cr.x + 12, y, "Edit in Editor app, then install from 'Install' tab.",
-                g_theme->muted, COL_SURFACE);
-
-    } else { /* About */
-        const char *lines[] = {
-            ".care Package Format  CareOS v9",
-            "",
-            "A .care file is a plain-text bundle that can be",
-            "installed with carepkg or the Package Manager UI.",
-            "",
-            "Format:",
-            "  CARE 1.0",
-            "  name=myapp",
-            "  version=1.0.0",
-            "  description=My app",
-            "  author=You",
-            "  exec=main",
-            "  icon=generic",
-            "  category=Utilities",
-            "  permissions=fs.read,gui",
-            "  ---FILES---",
-            "  FILE main",
-            "  #!/bin/sh",
-            "  echo Hello!",
-            "  ---ENDFILE---",
-            "  ---END---",
-            "",
-            "Packages install to /apps/<name>/",
-            "carepkg install / remove / list / info / create",
-            NULL
-        };
-        for (int i = 0; lines[i] && y < cr.y + PKG_CONTENT_Y + content_h; i++) {
-            u32 col = (lines[i][0] == '.' || lines[i][0] == 'c') ? COL_PRIMARY :
-                      (lines[i][0] == ' ') ? COL_ACCENT : COL_TEXT;
-            gfx_str(cr.x + 12, y, lines[i], col, COL_SURFACE);
-            y += PKG_LINE_H;
-        }
+        hit(s, rect_make(sx, y, sw, 40), rows[i].view == V_CATEGORY ? PA_CAT : PA_VIEW, rows[i].view == V_CATEGORY ? rows[i].cat : (i32)rows[i].view);
+        y += 42;
+    }
+    {   /* New package (template) */
+        i32 by = cr.y + cr.h - 16 - 40;
+        for (i32 dx = 0; dx < sw; dx += 8) { gfx_hline(sx + dx, by, 4, p.muted); gfx_hline(sx + dx, by + 39, 4, p.muted); }
+        for (i32 dy = 0; dy < 40; dy += 8) { gfx_vline(sx, by + dy, 4, p.muted); gfx_vline(sx + sw - 1, by + dy, 4, p.muted); }
+        ui_glyph(UI_GLYPH_PLUS, sx + 12, by + 12, 16, p.ink2);
+        gfx_str_role(sx + 34, by + (40 - lh(2)) / 2, "New package", p.ink2, FONT_ROLE_UI, 2, FONT_W_BOLD);
+        hit(s, rect_make(sx, by, sw, 40), PA_NEWPKG, 0);
     }
 
-    /* Status bar */
-    i32 sb_y = cr.y + cr.h - PKG_SB_H;
-    gfx_rect(cr.x, sb_y, cr.w, PKG_SB_H, g_theme->surface3);
-    gfx_hline(cr.x, sb_y, cr.w, COL_BORDER);
-    if (w->pkgmgr_installing) {
-        static const char *dot_frames[] = { "Installing", "Installing.", "Installing..", "Installing..." };
-        const char *msg = dot_frames[(timer_ms() / 200) % 4];
-        gfx_str(cr.x + 12, sb_y + (PKG_SB_H - FONT_H) / 2, msg, COL_ACCENT, g_theme->surface3);
+    /* Main */
+    i32 mx = cr.x + sbw + 30, mw = cr.w - sbw - 60, my = cr.y + 26;
+    gfx_set_clip(cr.x + sbw + 1, cr.y, cr.w - sbw - 1, cr.h);
+    i32 cols = mw >= 900 ? 3 : mw >= 560 ? 2 : 1;
+    i32 cw = (mw - (cols - 1) * 12) / cols;
+    if (s->view == V_DISCOVER && !s->search_len) {
+        /* Hero: how packages work here (there is no online store) */
+        i32 hh = 180;
+        gfx_rect_rounded(mx, my, mw, hh, 24, rgb(0x15, 0x1b, 0x2e));
+        if (mw >= 640) ui_care_logo(mx + mw - 34 - 96, my + 22, 96);
+        gfx_str_role(mx + 34, my + 30, "PACKAGES ON THIS COMPUTER", rgb(0xff, 0x9a, 0x76), FONT_ROLE_UI, 0, FONT_W_BOLD);
+        gfx_str_role_fit(mx + 34, my + 30 + lh(0) + 8, mw - 220, "Add apps with .care packages.", rgb(0xee, 0xf1, 0xfa), FONT_ROLE_DISPLAY, 2, FONT_W_BOLD);
+        gfx_str_role_wrap(mx + 34, my + 30 + lh(0) + 8 + gfx_role_line_h(FONT_ROLE_DISPLAY, 2) + 6, mw - 260,
+                          "There's no online store yet. Any .care file in Downloads, your home folder or /tmp shows up here, ready to install.",
+                          rgb(0xd5, 0xda, 0xea), FONT_ROLE_UI, 1, FONT_W_REGULAR, 2);
+        i32 bw = gfx_str_role_width("See installed", FONT_ROLE_UI, 1, FONT_W_BOLD) + 28;
+        pill(mx + 34 + bw, my + hh - 26 - 34, "See installed", rgb(0xff, 0xff, 0xff), rgb(0x16, 0x1a, 0x2b));
+        hit(s, rect_make(mx + 34, my + hh - 26 - 34, bw, 34), PA_SHOW_INSTALLED, 0);
+        my += hh + 22;
+        /* Updates banner, only with real updates */
+        if (store_state(c) == STORE_UPDATES) {
+            i32 bh = 68;
+            gfx_rect_rounded(mx, my, mw, bh, 18, p.dark ? rgb(0x1a, 0x20, 0x38) : rgb(0xf5, 0xf6, 0xfa));
+            gfx_rect_rounded(mx + 14, my + 14, 40, 40, 12, g_theme->care);
+            ui_glyph(UI_GLYPH_RESTART, mx + 24, my + 24, 20, g_theme->on_care);
+            char t[48]; kutoa(c.updates, t, 10); kstrcat(t, c.updates == 1 ? " update ready" : " updates ready");
+            gfx_str_role(mx + 68, my + 14, t, p.ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
+            gfx_str_role(mx + 68, my + 14 + lh(2) + 2, "Newer .care files than what's installed", p.muted, FONT_ROLE_UI, 1, FONT_W_REGULAR);
+            i32 uw = gfx_str_role_width("Update all", FONT_ROLE_UI, 2, FONT_W_BOLD) + 36;
+            gfx_rect_rounded(mx + mw - 14 - uw, my + 14, uw, 40, 12, p.dark ? p.ink : rgb(0x16, 0x1a, 0x2b));
+            gfx_str_role(mx + mw - 14 - uw + 18, my + 14 + (40 - lh(2)) / 2, "Update all", p.dark ? g_theme->ground : rgb(0xff, 0xff, 0xff), FONT_ROLE_UI, 2, FONT_W_BOLD);
+            hit(s, rect_make(mx + mw - 14 - uw, my + 14, uw, 40), PA_UPDATE_ALL, 0);
+            my += bh + 22;
+        }
+        section_title(&p, mx, my, "Ready to install");
+        my += gfx_role_line_h(FONT_ROLE_DISPLAY, 1) + 12;
+        u32 k = 0;
+        for (u32 i = 0; i < s->navail; i++) {
+            if (s->avail[i].rel != PKG_NEW) continue;
+            pkg_card(s, &p, mx + (i32)(k % (u32)cols) * (cw + 12), my + (i32)(k / (u32)cols) * 88, cw,
+                     s->avail[i].m.name, s->avail[i].m.version, s->avail[i].m.description, s->avail[i].m.category, 0, (i32)i);
+            k++;
+        }
+        if (!k) {
+            gfx_str_role_wrap(mx, my, mw, store_state(c) == STORE_EMPTY
+                ? "Nothing here yet. Download a .care file, or make one with New package."
+                : "Everything found is already installed. New .care files will show up here.",
+                p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR, 2);
+        }
     } else {
-        char status[64]; kstrcpy(status, "Status: "); kstrcat(status, w->pkgmgr_status);
-        gfx_str(cr.x + 12, sb_y + (PKG_SB_H - FONT_H) / 2, status, g_theme->dim, g_theme->surface3);
+        const char *title = s->search_len ? "Search" : s->view == V_INSTALLED ? "Installed" : s->view == V_UPDATES ? "Updates"
+                          : (s->cat >= 0 && (u32)s->cat < s->ncats ? s->cats[s->cat] : "Packages");
+        gfx_str_role(mx, my, title, p.ink, FONT_ROLE_DISPLAY, 2, FONT_W_BOLD);
+        my += gfx_role_line_h(FONT_ROLE_DISPLAY, 2) + 16;
+        u32 k = 0;
+        bool show_inst = s->view != V_UPDATES;
+        bool show_avail = s->view != V_INSTALLED;
+        if (show_inst) {
+            for (u32 i = 0; i < carepkg_count(); i++) {
+                char n[32], v[16], d[128], ct[32]; bool inst;
+                if (!carepkg_get_info(i, n, v, d, ct, &inst) || !inst || !matches(s, n, d, ct)) continue;
+                pkg_card(s, &p, mx + (i32)(k % (u32)cols) * (cw + 12), my + (i32)(k / (u32)cols) * 88, cw, n, v, d, ct,
+                         s->view == V_INSTALLED ? 2u : 3u, (i32)i);
+                k++;
+            }
+        }
+        if (show_avail) {
+            for (u32 i = 0; i < s->navail; i++) {
+                avail_t *a = &s->avail[i];
+                if (a->rel == PKG_SAME || a->rel == PKG_OLDER) continue;
+                if (s->view == V_UPDATES && a->rel != PKG_UPDATE) continue;
+                if (s->view == V_CATEGORY && a->rel == PKG_UPDATE) continue;   /* the installed card covers it */
+                if (!matches(s, a->m.name, a->m.description, a->m.category)) continue;
+                pkg_card(s, &p, mx + (i32)(k % (u32)cols) * (cw + 12), my + (i32)(k / (u32)cols) * 88, cw,
+                         a->m.name, a->m.version, a->m.description, a->m.category, a->rel == PKG_UPDATE ? 1u : 0u, (i32)i);
+                k++;
+            }
+        }
+        if (!k) gfx_str_role(mx, my, s->search_len ? "No packages match." : "Nothing here.", p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR);
     }
-    char cnt_s[32]; kstrcpy(cnt_s, "Installed: ");
-    char cnt[8]; kutoa(carepkg_count(), cnt, 10); kstrcat(cnt_s, cnt);
-    gfx_str_right(cr.x, sb_y + (PKG_SB_H - FONT_H) / 2, cr.w - 12, cnt_s,
-                  g_theme->dim, g_theme->surface3);
+    gfx_clear_clip();
+
+    /* New package sheet */
+    if (s->sheet) {
+        s->nhits = 0;
+        i32 bx = cr.x + sbw + 1, bw2 = cr.w - sbw - 1;
+        gfx_rect_rounded_blend(bx, cr.y, bw2, cr.h, 0, p.dark ? 0x000000 : 0x161a2b, p.dark ? 90 : 40);
+        i32 shw = bw2 - 60 < 440 ? bw2 - 60 : 440, shh = 196;
+        i32 shx = bx + (bw2 - shw) / 2, shy = cr.y + (cr.h - shh) / 3;
+        gfx_shadow_soft(shx, shy, shw, shh, 20);
+        gfx_rect_rounded(shx, shy, shw, shh, 20, p.card);
+        gfx_str_role(shx + 22, shy + 20, "New package", p.ink, FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+        gfx_str_role_fit(shx + 22, shy + 20 + gfx_role_line_h(FONT_ROLE_DISPLAY, 1) + 2, shw - 44,
+                         "Makes a .care template in /tmp to edit and install.", p.muted, FONT_ROLE_UI, 1, FONT_W_REGULAR);
+        rect_t f = rect_make(shx + 22, shy + 78, shw - 44, 44);
+        gfx_rect_rounded(f.x, f.y, f.w, f.h, 12, p.field);
+        gfx_rect_rounded_outline(f.x, f.y, f.w, f.h, 12, g_theme->care);
+        i32 ty = f.y + (44 - lh(2)) / 2;
+        if (s->pname_len) gfx_str_role_fit(f.x + 12, ty, f.w - 24, s->pname, p.ink, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+        else gfx_str_role(f.x + 12, ty, "package-name", p.muted, FONT_ROLE_UI, 2, FONT_W_REGULAR);
+        i32 by = shy + shh - 22 - 40;
+        i32 okw = gfx_str_role_width("Create", FONT_ROLE_UI, 2, FONT_W_BOLD) + 32, cnw = gfx_str_role_width("Cancel", FONT_ROLE_UI, 2, FONT_W_BOLD) + 32;
+        gfx_rect_rounded(shx + shw - 22 - okw, by, okw, 40, 12, g_theme->care);
+        gfx_str_role(shx + shw - 22 - okw + 16, by + (40 - lh(2)) / 2, "Create", g_theme->on_care, FONT_ROLE_UI, 2, FONT_W_BOLD);
+        gfx_rect_rounded(shx + shw - 30 - okw - cnw, by, cnw, 40, 12, p.dark ? rgb(0x2a, 0x33, 0x58) : rgb(0xee, 0xf0, 0xf6));
+        gfx_str_role(shx + shw - 30 - okw - cnw + 16, by + (40 - lh(2)) / 2, "Cancel", p.ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
+        hit(s, rect_make(shx + shw - 22 - okw, by, okw, 40), PA_SHEET_OK, 0);
+        hit(s, rect_make(shx + shw - 30 - okw - cnw, by, cnw, 40), PA_SHEET_CANCEL, 0);
+    }
+}
+
+static void make_template(pstate_t *s) {
+    if (!s->pname_len) return;
+    carepkg_run("create", s->pname);
+    char msg[80]; kstrcpy(msg, "Template: /tmp/"); kstrcat(msg, s->pname); kstrcat(msg, ".care");
+    notify_push("Packages", msg, g_theme->success);
+    s->sheet = false; s->pname_len = 0; s->pname[0] = '\0';
+    store_scan(s);
 }
 
 void app_pkgmgr_key(window_t *w, char c){
-    if (w->pkgmgr_tab == PKG_TAB_CREATE) {
-        if (c == '\b') {
-            if (w->input_len > 0) { w->input_len--; w->input_buf[w->input_len] = '\0'; }
-        } else if (c == '\n') {
-            if (w->input_len > 0) {
-                carepkg_run("create", w->input_buf);
-                kstrcpy(w->pkgmgr_status, "Template: /tmp/");
-                kstrcat(w->pkgmgr_status, w->input_buf);
-                kstrcat(w->pkgmgr_status, ".care");
-                w->input_buf[0] = '\0'; w->input_len = 0;
-            }
-        } else if (c >= 32 && c < 127 && w->input_len < 30) {
-            w->input_buf[w->input_len++] = c;
-            w->input_buf[w->input_len] = '\0';
-        }
-    }
+    pstate_t *s = pst(w);
+    if (!s) return;
+    char *buf = s->sheet ? s->pname : s->search;
+    u32 *len = s->sheet ? &s->pname_len : &s->search_len;
+    u32 cap = s->sheet ? sizeof s->pname : sizeof s->search;
+    if (!s->sheet && !s->search_focus) { if (c == 0x06) s->search_focus = true; return; }
+    if (c == 0x1B) { if (s->sheet) s->sheet = false; else { *len = 0; buf[0] = '\0'; s->search_focus = false; } return; }
+    if (c == '\n') { if (s->sheet) make_template(s); else s->search_focus = false; return; }
+    if (c == '\b') { if (*len) buf[--*len] = '\0'; return; }
+    bool ok = c >= 32 && c < 127 && (!s->sheet || c == '-' || c == '_' || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'));
+    if (ok && *len + 1 < cap) { buf[(*len)++] = c; buf[*len] = '\0'; }
+    (void)w;
 }
 
 void app_pkgmgr_click(window_t *w, i32 x, i32 y){
-    rect_t cr = wm_client_rect(w);
-
-    /* Tab bar */
-    if (y >= cr.y + PKG_TAB_Y && y < cr.y + PKG_SEP_Y) {
-        i32 tab_w = (cr.w - 8) / 4;
-        int t = (x - cr.x - 4) / tab_w;
-        if (t >= 0 && t <= 3) { w->pkgmgr_tab = (u32)t; w->pkgmgr_sel = 0; w->scroll = 0; }
+    pstate_t *s = pst(w);
+    if (!s) return;
+    for (u32 i = s->nhits; i-- > 0;) {
+        const phit_t *h = &s->hits[i];
+        if (!rect_contains(h->r, x, y)) continue;
+        if (h->act != PA_SEARCH) s->search_focus = false;
+        if (h->act != PA_REMOVE) s->remove_armed = -1;
+        switch (h->act) {
+        case PA_VIEW:   s->view = (u32)h->arg; s->cat = -1; break;
+        case PA_CAT:    s->view = V_CATEGORY; s->cat = h->arg; break;
+        case PA_SHOW_INSTALLED: s->view = V_INSTALLED; break;
+        case PA_SEARCH: s->search_focus = true; break;
+        case PA_GET:    do_install(w, s, (u32)h->arg, false); break;
+        case PA_UPDATE: do_install(w, s, (u32)h->arg, true); break;
+        case PA_UPDATE_ALL:
+            for (u32 k = 0; k < s->navail; k++) if (s->avail[k].rel == PKG_UPDATE) do_install(w, s, k, true);
+            break;
+        case PA_REMOVE: {
+            char n[32], v[16], d[128], ct[32]; bool inst;
+            if (!carepkg_get_info((u32)h->arg, n, v, d, ct, &inst)) break;
+            if (s->remove_armed == h->arg && timer_ms() - s->remove_ms < 3000) {
+                int rc = carepkg_remove(n);
+                notify_push("Packages", rc == 0 ? "Removed" : "Couldn't remove that package", rc == 0 ? g_theme->success : g_theme->error);
+                s->remove_armed = -1;
+                store_scan(s);
+            } else { s->remove_armed = h->arg; s->remove_ms = timer_ms(); }
+            break;
+        }
+        case PA_NEWPKG: s->sheet = true; s->pname_len = 0; s->pname[0] = '\0'; break;
+        case PA_SHEET_OK: make_template(s); break;
+        case PA_SHEET_CANCEL: s->sheet = false; break;
+        default: break;
+        }
         return;
     }
-
-    if (y < cr.y + PKG_CONTENT_Y) return;
-
-    if (w->pkgmgr_tab == PKG_TAB_INSTALLED) {
-        i32 list_y = cr.y + PKG_CONTENT_Y + PKG_COL_H + 1;
-        if (y < list_y) return;
-        u32 row = (u32)(y - list_y) / PKG_ROW_H + w->scroll;
-        w->pkgmgr_sel = row;
-        if (x >= cr.x + cr.w - 74) {
-            u32 shown = 0;
-            for (u32 i = 0; i < carepkg_count(); i++) {
-                char name[32], ver[16], desc[128], cat[32]; bool installed;
-                if (!carepkg_get_info(i, name, ver, desc, cat, &installed)) continue;
-                if (!installed) continue;
-                if (shown == row) {
-                    w->pkgmgr_installing = true;
-                    carepkg_remove(name);
-                    w->pkgmgr_installing = false;
-                    kstrcpy(w->pkgmgr_status, "Removed: "); kstrcat(w->pkgmgr_status, name);
-                    break;
-                }
-                shown++;
-            }
-        }
-    } else if (w->pkgmgr_tab == PKG_TAB_INSTALL) {
-        i32 list_y = cr.y + PKG_CONTENT_Y + 24;
-        if (y < list_y) return;
-        u32 row = (u32)(y - list_y) / PKG_ROW_H + w->scroll;
-        w->pkgmgr_sel = row;
-        if (x >= cr.x + cr.w - 72) {
-            fs_node_t *tmpd = vfs_find(vfs_root(), "tmp");
-            if (tmpd) {
-                u32 shown = 0;
-                for (u32 i = 0; i < tmpd->child_count; i++) {
-                    fs_node_t *f = tmpd->children[i];
-                    const char *ext = kstrrchr(f->name, '.');
-                    bool is_care = ext && (kstrcmp(ext,".care")==0 || kstrcmp(ext,".cpk")==0);
-                    if (!is_care) continue;
-                    if (shown == row) {
-                        char path[FS_PATH_MAX]; kstrcpy(path, "/tmp/"); kstrcat(path, f->name);
-                        w->pkgmgr_installing = true;
-                        int r = carepkg_install(path);
-                        w->pkgmgr_installing = false;
-                        kstrcpy(w->pkgmgr_status, r == 0 ? "Installed: " : "Failed: ");
-                        kstrcat(w->pkgmgr_status, f->name);
-                        break;
-                    }
-                    shown++;
-                }
-            }
-        }
-    } else if (w->pkgmgr_tab == PKG_TAB_CREATE) {
-        /* Create button — must match draw's y computation exactly */
-        i32 btn_y = cr.y + PKG_CONTENT_Y + PKG_CR_BTN_Y;
-        if (x >= cr.x + 12 && x < cr.x + 132 && y >= btn_y && y < btn_y + PKG_CR_BTN_H) {
-            if (w->input_len > 0) {
-                carepkg_run("create", w->input_buf);
-                kstrcpy(w->pkgmgr_status, "Template: /tmp/");
-                kstrcat(w->pkgmgr_status, w->input_buf);
-                kstrcat(w->pkgmgr_status, ".care");
-                w->input_buf[0] = '\0'; w->input_len = 0;
-            }
-        }
-    }
+    s->search_focus = false;
 }

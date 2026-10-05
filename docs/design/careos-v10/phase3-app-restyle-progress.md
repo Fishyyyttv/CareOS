@@ -21,7 +21,7 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
 | 4 | Notes | **done** |
 | 5 | Editor | **done** |
 | 6 | Browser | **done** |
-| 7 | Packages (Store) | next |
+| 7 | Packages (Store) | **done** |
 
 ## 1. Terminal
 
@@ -256,3 +256,37 @@ QA screenshots: `qa/v10-shell/` (`shots.py` now has a `type:<text>` step).
   a moment (e.g. 13:50 vs 12:50). It happened before these changes too
   (Settings run). It looks like an RTC read race under QEMU TCG; worth a
   look later.
+
+## 7. Packages (Store)
+
+- CareOS has **no package server and no update source**, so the Store
+  shows what is real. "Available" means `.care` files on this computer
+  (`~/Downloads`, `~`, `/tmp`; rescanned every 3 s). A file whose version is
+  newer than the installed copy is a real **update**.
+- Sidebar: search (name and description), **Discover**, the categories
+  that actually have packages (installed or on disk), Installed, and
+  **Updates** with a count badge (only when there are any). A dashed **New
+  package** button makes a template (`carepkg create`) through a small
+  sheet.
+- **Discover**: a dark hero that says how packages work here (no
+  "Editor's pick" exists), an **updates banner** with Update all (only
+  when real updates exist), and **Ready to install** cards (lettered icon
+  coloured by category, name, version, description, **Get**). The empty
+  state depends on the state: "Nothing here yet..." or "Everything found
+  is already installed...".
+- **Installed** / category / search / **Updates** views show cards with
+  Remove (a second click within 3 s confirms), Installed ✓, Get or Update.
+  Update is remove-then-install, because carepkg's install would duplicate
+  the registry entry.
+- `apps/store_model.c` (host-tested): `.care` manifest header parsing,
+  dotted version compare, file-vs-installed relation, and page-state
+  selection (empty / nothing new / new / updates). This is the spec's
+  "store state selection" test; "offline" doesn't apply because nothing is
+  online.
+
+### Deviations
+- No "Popular this week" or "Editor's pick": there's no repository to
+  rank or feature anything.
+- No package sizes in the updates banner (carepkg doesn't report them).
+- No "Open" button: installed packages are scripts with no launch API
+  from the store.
