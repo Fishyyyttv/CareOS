@@ -54,6 +54,9 @@ void pip_session_start(void) {
     g_last_tick_min = nm;
     g_mood = PM_IDLE; g_mood_start_ms = timer_ms();
     pip_sprite_flush();
+#ifdef CAREOS_PERF_BENCH_AT_BOOT
+    pip_desktop_go_play();                   /* bench with Pip roaming the whole run */
+#endif
     if (away >= 60) {
         pip_brain_event(&g_b, PE_WELCOME_BACK, timer_ms(), 0);
         pip_say("You're back!", 3000);

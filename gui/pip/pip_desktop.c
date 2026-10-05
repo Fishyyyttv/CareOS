@@ -48,7 +48,11 @@ bool pip_desktop_hidden(void) {
 
 void pip_desktop_go_play(void) {
     pip_set_mode(PIP_ROAM);
+#ifdef CAREOS_PERF_BENCH_AT_BOOT
+    g_roam_until = timer_ms() + 600000;   /* the benchmark measures a roaming Pip */
+#else
     g_roam_until = timer_ms() + 40000;
+#endif
     g_next_hop = 0;
 }
 void pip_desktop_come_back(void) { pip_set_mode(PIP_PERCH); }
@@ -62,7 +66,7 @@ static void pick_target(void) {
         for (u32 tries = 0; tries < 8; tries++) {
             window_t *w = wm_get_window((int)((r >> 4) % MAX_WINDOWS));
             r = r * 1103515245u + 12345u;
-            if (!w->active || w->minimized || w->rect.w < 200) continue;
+            if (!w->active || w->minimized || w->rect.w < 200 || !wm_on_current_desktop(w)) continue;
             g_tx = w->rect.x + 20 + (i32)((r >> 8) % (u32)(w->rect.w - 160));
             g_ty = w->rect.y - (i32)PERCH_SIZE * 150 / 160 + 4;
             if (g_ty < 48) continue;
@@ -73,10 +77,25 @@ static void pick_target(void) {
     g_ty = d.y - (i32)PERCH_SIZE * 150 / 160 + 6;
 }
 
+static void step_motion_once(void);
+/* Pip moves on a fixed 12 Hz clock, so his speed doesn't follow the frame rate. */
 static void step_motion(void) {
+    static u32 s_last;
+    u32 now = timer_ms();
+    if (!s_last || now - s_last > 1000) s_last = now - 83;   /* first frame, or after a long stall */
+    u32 n = (now - s_last) / 83;
+    s_last += n * 83;
+    while (n--) step_motion_once();
+}
+
+static void step_motion_once(void) {
     pip_brain_t *b = pip_brain();
     if (b->mode == PIP_ROAM) {
+#ifdef CAREOS_PERF_BENCH_AT_BOOT
+        if (timer_ms() > g_roam_until) { pip_desktop_come_back(); return; }
+#else
         if (timer_ms() > g_roam_until || b->energy < 30 || !b->roam) { pip_desktop_come_back(); return; }
+#endif
         if (timer_ms() > g_next_hop) { pick_target(); g_next_hop = timer_ms() + 3500; }
         i32 dx = g_tx - g_x, dy = g_ty - g_y;
         g_x += dx > 3 ? 3 : dx < -3 ? -3 : dx;
@@ -162,7 +181,7 @@ void pip_desktop_draw(void) {
 static void think_line(void) {
     char t[64]; u32 n = 0;
 
-    for (u32 i = 0; i < MAX_WINDOWS; i++) { window_t *ww = wm_get_window((int)i); if (ww && ww->active && !ww->minimized) n++; }
+    for (u32 i = 0; i < MAX_WINDOWS; i++) { window_t *ww = wm_get_window((int)i); if (ww && ww->active && !ww->minimized && wm_on_current_desktop(ww)) n++; }
     pip_brain_t *b = pip_brain();
     u32 sel = timer_ms() / 1000 % 3;
     if (b->energy < 30) kstrcpy(t, "Energy's low... a nap soon?");
@@ -191,7 +210,7 @@ bool pip_desktop_mouse(mouse_t *m) {
         return rect_contains(pr, m->x, m->y);
     }
     if (!g_hover) return false;
-    if (m->right_clicked) { g_menu = true; g_menu_x = m->x; g_menu_y = m->y - 8 - 4 * 38 - 8; if (g_menu_y < 48) g_menu_y = m->y; return true; }
+    if (m->right_clicked) { g_menu = true; g_menu_x = m->x > (i32)SCREEN_W - 248 ? (i32)SCREEN_W - 248 : m->x; g_menu_y = m->y - 8 - 4 * 38 - 8; if (g_menu_y < 48) g_menu_y = m->y; return true; }
     if (m->left_clicked) {
         if (pip_brain()->mode == PIP_NAP) pip_set_mode(PIP_PERCH);   /* wake */
         if (timer_ms() - g_last_pat_ms > 250) pip_event(PE_PAT);      /* debounce a click storm */
