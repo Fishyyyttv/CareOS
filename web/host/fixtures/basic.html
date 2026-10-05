@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><title>Weave fixture</title>
+<style>
+:root { --accent: #3b5bdb; --pad: 12px; }
+body { font-family: system-ui, sans-serif; margin: 0; color: #222; }
+header { background: var(--accent); color: white; padding: var(--pad) 24px; display: flex; align-items: center; justify-content: space-between; }
+header nav a { color: white; margin-left: 16px; text-decoration: none; }
+.wrap { max-width: 900px; margin: 0 auto; padding: 0 16px; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0; }
+.card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; background: #fafafa; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+.card h3 { margin: 0 0 8px; color: var(--accent); }
+.float { float: right; width: 160px; height: 100px; background: #ffd43b; margin: 0 0 8px 16px; border-radius: 50%; }
+table { border-collapse: collapse; width: 100%; }
+td, th { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+th { background: #eee; }
+.btn { display: inline-block; padding: 8px 16px; background: linear-gradient(#5c7cfa, #364fc7); color: #fff; border-radius: 6px; }
+code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; }
+@media (max-width: 600px) { .cards { grid-template-columns: 1fr; } }
+@media print { body { display: none } }
+.rel { position: relative; height: 60px; background: #e7f5ff; }
+.abs { position: absolute; right: 10px; bottom: 10px; background: #fa5252; color: white; padding: 4px 8px; }
+.calc { width: calc(50% - 20px); background: #d3f9d8; padding: 8px; }
+</style></head>
+<body>
+<header><strong style="font-size:20px">Weave Engine</strong><nav><a href="/a">Home</a><a href="/b">Docs</a><a href="/c">About</a></nav></header>
+<div class="wrap">
+<h1>Hello, <em>real</em> rendering</h1>
+<div class="float"></div>
+<p>This paragraph flows around a <b>floated</b> circle. It has <a href="https://example.com">a link</a>, some <code>inline code</code>, and enough text to wrap onto several lines so that we can see the line breaking work correctly in the native CareOS web engine. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+<ul><li>First item</li><li>Second item with <i>italic</i></li><li>Third</li></ul>
+<ol><li>One</li><li>Two</li></ol>
+<div class="cards">
+ <div class="card"><h3>Grid</h3><p>Three equal columns via grid-template-columns.</p></div>
+ <div class="card"><h3>Flex</h3><p>Header uses justify-content: space-between.</p></div>
+ <div class="card"><h3>Vars</h3><p>Colors come from CSS custom properties.</p></div>
+</div>
+<table><tr><th>Name</th><th>Value</th><th>Notes</th></tr>
+<tr><td>width</td><td>100%</td><td>Auto table layout</td></tr>
+<tr><td>border</td><td>collapse</td><td>Long cell content that should wrap within the column when space runs out</td></tr></table>
+<p><span class="btn">Button</span> &nbsp; <input type="text" placeholder="Search..."> <input type="submit" value="Go"> <input type="checkbox" checked> check</p>
+<div class="rel">Positioned container<div class="abs">abs</div></div>
+<div class="calc">calc(50% - 20px)</div>
+<pre>pre   formatted
+    text</pre>
+<blockquote>A blockquote, indented.</blockquote>
+</div></body></html>
