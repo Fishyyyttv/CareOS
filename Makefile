@@ -26,18 +26,22 @@ endif
 ifeq ($(PERF_BENCH),1)
 BUILD_DEFS += -DCAREOS_PERF_BENCH_AT_BOOT
 endif
+QA_PIP_SHEET ?= 0
+ifeq ($(QA_PIP_SHEET),1)
+BUILD_DEFS += -DCAREOS_QA_PIP_SHEET
+endif
 ifeq ($(QA_LAYOUT),1)
 BUILD_DEFS += -DCAREOS_QA_LAYOUT
 endif
 
 KERN_CFLAGS := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
-               -Iinclude -Iinclude/libc -Igui -fno-builtin \
+               -Iinclude -Iinclude/libc -Igui -Igui/pip -fno-builtin \
                -mno-red-zone -mno-mmx -mno-sse -mno-sse2 $(BUILD_DEFS)
 
 APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
-               -Iinclude -Iinclude/libc -Igui -fno-builtin \
+               -Iinclude -Iinclude/libc -Igui -Igui/pip -fno-builtin \
                -mno-red-zone
 
 CFLAGS      := $(KERN_CFLAGS)
@@ -180,6 +184,11 @@ C_SRC     := kernel/kernel.c       \
              gui/notify.c          \
              gui/glass.c           \
              gui/spring.c          \
+             gui/pip/pip_raster.c  \
+             gui/pip/pip_art.c     \
+             gui/pip/pip_brain.c   \
+             gui/pip/pip_sprite.c  \
+             gui/pip/pip.c         \
              gui/session/common.c \
              gui/session/boot.c \
              gui/session/login.c \
