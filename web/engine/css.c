@@ -426,10 +426,11 @@ static void rewrite_decls(rw_t *rw, const char *p, const char *e, u32 *seq, char
             bool imp = false;
             const char *bang = find_top(vs, ve, "!");
             if (bang < ve && w_istr(bang, (size_t)(ve - bang), "important")) { imp = true; ve = bang; trim(&vs, &ve); }
-            if (ne > ns && ve > vs && (size_t)(ne - ns) < 64) {
-                char hdr[128];
+            if (ne > ns && ve > vs && (size_t)(ne - ns) < 160) {
+                char hdr[200];
                 int hl = snprintf(hdr, sizeof hdr, "--%c-%.*s:%u ", kind, (int)(ne - ns), ns, (*seq)++);
-                for (int i = 4; i < hl && hdr[i] != ':'; i++)
+                bool custom_prop = (ne - ns) > 2 && ns[0] == '-' && ns[1] == '-';   /* case-sensitive */
+                for (int i = 4; !custom_prop && i < hl && hdr[i] != ':'; i++)
                     if (hdr[i] >= 'A' && hdr[i] <= 'Z') hdr[i] = (char)(hdr[i] + 32);
                 sb_put(&rw->out, hdr, (size_t)hl);
                 sb_put(&rw->out, vs, (size_t)(ve - vs));
@@ -596,6 +597,7 @@ static void attach_sheet_text(page_t *pg, const char *css, size_t len, const cha
         t_parse += t2 - t1;
         pg->sheets[pg->nsheets++] = sst;
     } else if (sst) {
+        web_log("css parse failed: %s (%zu bytes rewritten)", base, rw.out.n);
         lxb_css_stylesheet_destroy(sst, true);
     }
     free(rw.out.s);
@@ -673,7 +675,7 @@ void css_load_document_styles(page_t *pg) {
     if (lxb_dom_interface_document(pg->doc)->compat_mode == LXB_DOM_DOCUMENT_CMODE_QUIRKS)
         attach_sheet_text(pg, UA_QUIRKS_CSS, sizeof UA_QUIRKS_CSS - 1, pg->url, &seq);
     seq = AUTHOR_SEQ;
-    int budget = 24;
+    int budget = 48;
     collect_sheets(pg, lxb_dom_interface_node(pg->doc), &seq, &budget);
     uint64_t ti = ms_now();
     apply_inline_styles(pg, lxb_dom_interface_node(pg->doc), &seq);

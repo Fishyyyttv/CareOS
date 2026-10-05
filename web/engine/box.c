@@ -495,6 +495,69 @@ static void wrap_inline_runs(page_t *pg, box_t *b) {
 }
 
 /* Block container: wrap inline runs when mixed with block-level children. */
+static bool is_table_part(const box_t *b) {
+    if (b->kind != K_ELEM || b->is_abs || b->is_float) return false;
+    u8 d = b->st->display;
+    return d == D_TABLE_ROW || d == D_TABLE_ROW_GROUP || d == D_TABLE_CELL || d == D_TABLE_CAPTION;
+}
+
+/* Move [start, after) under a new anonymous box of the given display. */
+static box_t *wrap_run(page_t *pg, box_t *parent, box_t *start, box_t *after, u8 display, u8 inner) {
+    style_t *as = css_anon_style(pg, parent->st, display);
+    box_t *w = new_box(pg, K_ELEM, as, NULL);
+    if (!w) return NULL;
+    w->anon = 1; w->inner = inner;
+    w->parent = parent; w->prev = start->prev; w->next = after;
+    if (start->prev) start->prev->next = w; else parent->first = w;
+    if (after) after->prev = w; else parent->last = w;
+    for (box_t *k = start; k != after; ) {
+        box_t *nx = k->next;
+        k->parent = w; k->prev = w->last; k->next = NULL;
+        if (w->last) w->last->next = k; else w->first = k;
+        w->last = k;
+        k = nx;
+    }
+    return w;
+}
+
+static void fix_container(page_t *pg, box_t *b);
+
+/* Inside tables: drop whitespace, group stray cells into rows and wrap
+ * non-cell content of rows into cells (CSS 2.1 §17.2.1, simplified). */
+static void fix_table_parts(page_t *pg, box_t *b) {
+    box_t *c = b->first;
+    while (c) { box_t *nx = c->next; if (is_ws_text(c)) unlink_box(c); c = nx; }
+    if (b->inner == IN_TABLE || b->inner == IN_ROWGROUP) {
+        c = b->first;
+        while (c) {
+            bool rowish = c->kind == K_ELEM && (c->inner == IN_ROW || c->inner == IN_ROWGROUP ||
+                          c->st->display == D_TABLE_CAPTION || c->st->display == D_TABLE_COLUMN);
+            if (rowish || c->is_abs) { c = c->next; continue; }
+            box_t *end = c;
+            while (end->next && !(end->next->kind == K_ELEM && (end->next->inner == IN_ROW || end->next->inner == IN_ROWGROUP ||
+                   end->next->st->display == D_TABLE_CAPTION))) end = end->next;
+            box_t *after = end->next;
+            box_t *row = wrap_run(pg, b, c, after, D_TABLE_ROW, IN_ROW);
+            if (!row) return;
+            fix_table_parts(pg, row);
+            c = after;
+        }
+    } else if (b->inner == IN_ROW) {
+        c = b->first;
+        while (c) {
+            if ((c->kind == K_ELEM && c->inner == IN_CELL) || c->is_abs) { c = c->next; continue; }
+            box_t *end = c;
+            while (end->next && !(end->next->kind == K_ELEM && end->next->inner == IN_CELL)) end = end->next;
+            box_t *after = end->next;
+            box_t *cell = wrap_run(pg, b, c, after, D_TABLE_CELL, IN_CELL);
+            if (!cell) return;
+            cell->colspan = cell->rowspan = 1;
+            fix_container(pg, cell);
+            c = after;
+        }
+    }
+}
+
 static void fix_container(page_t *pg, box_t *b) {
     bool any_block = false, any_inline = false;
     for (box_t *c = b->first; c; c = c->next) {
@@ -503,7 +566,7 @@ static void fix_container(page_t *pg, box_t *b) {
     if (any_block && any_inline) wrap_inline_runs(pg, b);
     if (!any_block && any_inline) b->has_inline_kids = 1;
     for (box_t *c = b->first; c; c = c->next)
-        if (c->anon) c->has_inline_kids = 1;
+        if (c->anon && c->inner == IN_FLOW) c->has_inline_kids = 1;
 }
 
 static void fix_tree(page_t *pg, box_t *b, int depth) {
@@ -542,10 +605,23 @@ static void fix_tree(page_t *pg, box_t *b, int depth) {
         return;
     }
     if (b->inner == IN_TABLE || b->inner == IN_ROW || b->inner == IN_ROWGROUP) {
-        /* drop whitespace text; table.c tolerates loose structure */
-        box_t *c = b->first;
-        while (c) { box_t *nx = c->next; if (is_ws_text(c)) unlink_box(c); c = nx; }
+        fix_table_parts(pg, b);
         return;
+    }
+    /* table parts outside a table (e.g. `table{display:block}` in markdown CSS)
+     * get an anonymous table around each consecutive run */
+    {
+        box_t *c = b->first;
+        while (c) {
+            if (!is_table_part(c)) { c = c->next; continue; }
+            box_t *end = c;
+            while (end->next && (is_table_part(end->next) || is_ws_text(end->next))) end = end->next;
+            box_t *after = end->next;
+            box_t *t = wrap_run(pg, b, c, after, D_TABLE, IN_TABLE);
+            if (!t) break;
+            fix_table_parts(pg, t);
+            c = after;
+        }
     }
     if (b->outer_inline && b->inner == IN_FLOW && b->st->display == D_INLINE) return;
     fix_container(pg, b);
