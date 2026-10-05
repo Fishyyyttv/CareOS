@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
     else { html = read_file(src, &len); snprintf(final_url, sizeof final_url, "file://%s", src); }
     if (!html) { fprintf(stderr, "cannot load %s\n", src); return 1; }
     double t1 = now();
-    web_page_t *pg = web_page_load(final_url, (const char *)html, len, w, vh);
+    web_page_t *pg = web_page_load_ex(final_url, (const char *)html, len, w, vh, getenv("WEB_NOJS") ? WEB_LOAD_NO_SCRIPTS : 0);
     double t2 = now();
     int pending = web_page_load_images(pg, 0);
     double t3 = now();
@@ -107,6 +107,18 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "key:tab")) r = web_page_key(pg, WEB_KEY_TAB, nav, sizeof nav);
         else if (!strcmp(a, "key:esc")) r = web_page_key(pg, WEB_KEY_ESCAPE, nav, sizeof nav);
         else if (!strcmp(a, "key:bs")) r = web_page_key(pg, WEB_KEY_BACKSPACE, nav, sizeof nav);
+        else if (!strncmp(a, "wait:", 5)) {
+            int ms = atoi(a + 5);
+            uint64_t end_t = h_now(NULL) + (uint64_t)ms;
+            while (h_now(NULL) < end_t) {
+                struct timespec ts = { 0, 10000000 };
+                nanosleep(&ts, NULL);
+                if (web_page_step(pg)) r = WEB_ACT_REPAINT;
+            }
+        }
+        else if (!strcmp(a, "step")) {
+            if (web_page_step(pg)) r = WEB_ACT_REPAINT;
+        }
         fprintf(stderr, "action %s -> %s%s%s\n", a, r == WEB_ACT_NAVIGATE ? "NAVIGATE " : r == WEB_ACT_REPAINT ? "repaint" : "none",
                 r == WEB_ACT_NAVIGATE ? nav : "", web_page_focused(pg) ? " [focused]" : "");
         acts = end ? end + 1 : NULL;

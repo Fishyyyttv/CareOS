@@ -406,6 +406,7 @@ double atof(const char *nptr) {
 
 void *malloc(size_t size) { return kmalloc(size); }
 void free(void *ptr) { kfree(ptr); }
+void abort(void) { kernel_panic(0xAB07, "C runtime abort"); }
 int abs(int j) { return (j < 0) ? -j : j; }
 int system(const char *command) { return -1; }
 
@@ -475,7 +476,7 @@ char *strdup(const char *s) {
     return new;
 }
 
-double fabs(double x) { return (x < 0) ? -x : x; }
+/* Floating-point functions are provided by the musl math subset. */
 
 void *memset(void *s, int c, size_t n) { return kmemset(s, c, n); }
 

@@ -60,6 +60,29 @@ static void browser_engine_load(window_t *w, const char *url, const char *html, 
         kstrncpy(w->browser_title, web_page_title(w->browser_page), 127);
 }
 
+/* Anything that can run page JavaScript (timers, event handlers) goes
+ * through browser_js_call(): the GUI task's own stack is too small. */
+typedef struct { web_page_t *pg; int x, y; u32 key; char *url; size_t cap; int r; } js_input_t;
+static void js_step_cb(void *p)  { web_page_step((web_page_t *)p); }
+static void js_click_cb(void *a) { js_input_t *in = a; in->r = web_page_click(in->pg, in->x, in->y, in->url, in->cap); }
+static void js_key_cb(void *a)   { js_input_t *in = a; in->r = web_page_key(in->pg, in->key, in->url, in->cap); }
+
+static void relayout_cb(void *a) { js_input_t *in = a; web_page_relayout_if_needed(in->pg, in->x, in->y); }
+typedef struct { web_page_t *pg; u32 *px; int w, h, scroll; } paint_req_t;
+static void paint_cb(void *a) { paint_req_t *p = a; web_page_paint(p->pg, p->px, p->w, p->h, p->w, 0, p->scroll); }
+
+static int engine_click(web_page_t *pg, int x, int y, char *url, size_t cap) {
+    js_input_t in = { pg, x, y, 0, url, cap, WEB_ACT_NONE };
+    browser_js_call(js_click_cb, &in);
+    return in.r;
+}
+
+static int engine_key(web_page_t *pg, u32 key, char *url, size_t cap) {
+    js_input_t in = { pg, 0, 0, key, url, cap, WEB_ACT_NONE };
+    browser_js_call(js_key_cb, &in);
+    return in.r;
+}
+
 /* ── Forward declarations ────────────────────────────────────────── */
 static void app_browser_navigate(window_t *w, const char *url);
 static void browser_save_tab(window_t *w);
@@ -1223,7 +1246,8 @@ static void browser_draw_impl(window_t *w) {
      * the cached pixels are blitted. Images load in the fetch task. */
     if (w->browser_page) {
         web_page_t *pg = w->browser_page;
-        web_page_relayout_if_needed(pg, cr.w, cont_h);
+        js_input_t lay = { pg, (int)cr.w, (int)cont_h, 0, NULL, 0, 0 };
+        browser_js_call(relayout_cb, &lay);              /* deep recursion: big stack */
         i32 total_h = web_page_height(pg);
         i32 max_sc = total_h > cont_h ? total_h - cont_h : 0;
         if (w->browser_scroll > max_sc) w->browser_scroll = max_sc;
@@ -1239,7 +1263,8 @@ static void browser_draw_impl(window_t *w) {
             if (w->bview_px) {
                 u32 gen = web_page_generation(pg) ^ (u32)(uintptr_t)pg;
                 if (!w->bview_valid || w->bview_scroll != w->browser_scroll || w->bview_ver != gen) {
-                    web_page_paint(pg, w->bview_px, cr.w, cont_h, cr.w, 0, w->browser_scroll);
+                    paint_req_t pr = { pg, w->bview_px, (int)cr.w, (int)cont_h, (int)w->browser_scroll };
+                    browser_js_call(paint_cb, &pr);
                     w->bview_w = cr.w; w->bview_h = cont_h;
                     w->bview_scroll = w->browser_scroll; w->bview_ver = gen;
                     w->bview_valid = true;
@@ -1485,7 +1510,7 @@ void app_browser_key(window_t *w, char c) {
         else if ((u8)c >= 32 && (u8)c < 127) k = (u8)c;
         if (k) {
             char abs[1024];
-            if (web_page_key(w->browser_page, k, abs, sizeof abs) == WEB_ACT_NAVIGATE) {
+            if (engine_key(w->browser_page, k, abs, sizeof abs) == WEB_ACT_NAVIGATE) {
                 w->browser_push_history = true;
                 w->browser_autohttps = false;
                 app_browser_navigate(w, abs);
@@ -1593,7 +1618,7 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
     if (w->browser_page) {
         /* links, buttons, form controls (focus / toggle / submit) */
         char abs[1024];
-        int r = web_page_click(w->browser_page, x - cr.x, y - cont_y + w->browser_scroll,
+        int r = engine_click(w->browser_page, x - cr.x, y - cont_y + w->browser_scroll,
                                abs, sizeof(abs));
         if (r == WEB_ACT_NAVIGATE) {
             w->browser_push_history = true;
@@ -1606,6 +1631,26 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
 /* Called every GUI loop iteration for a browser window that is loading:
  * applies the finished fetch, or notices the fetch was superseded. */
 void app_browser_tick(window_t *w) {
+    if (w->browser_page && !w->browser_loading) {
+        /* Progressive load: the scripted build of this page is ready. */
+        web_page_t *up = NULL;
+        if (browser_fetch_take_update(w->instance_id, w->browser_tab_sel, &up)) {
+            browser_fetch_release_page(w->browser_page);
+            w->browser_page = up;
+            w->bview_valid = false;
+        }
+        browser_js_call(js_step_cb, w->browser_page);   /* timers; may restyle */
+        int sy = web_page_take_scroll(w->browser_page);
+        if (sy >= 0) w->browser_scroll = sy;
+        const char *title = web_page_title(w->browser_page);
+        if (title[0]) kstrncpy(w->browser_title, title, 127);
+        char dest[1024];
+        if (web_page_take_navigation(w->browser_page, dest, sizeof dest)) {
+            w->browser_push_history = true;
+            w->browser_autohttps = false;
+            app_browser_navigate(w, dest);
+        }
+    }
     if (!w->browser_loading) return;
     char url[512]; int n = 0;
     web_page_t *pg = NULL;

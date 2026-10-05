@@ -231,12 +231,19 @@ ASM_OBJ   := $(ASM_SRC:.asm=.o)
 C_OBJ     := $(C_SRC:.c=.o)
 DOOM_OBJ  := $(DOOM_SRC:.c=.o)
 WEB_SRC   := $(wildcard web/engine/*.c) $(shell find web/third_party/lexbor -name '*.c')
+WEB_SRC   += $(addprefix web/third_party/quickjs/,quickjs.c libregexp.c libunicode.c dtoa.c)
+WEB_SRC   := $(filter-out web/engine/math.c,$(WEB_SRC)) $(wildcard web/third_party/musl-math/*.c)
 WEB_OBJ   := $(WEB_SRC:.c=.o)
 WEB_FONT_SRC := fonts/IBMPlexSans-Regular.ttf fonts/IBMPlexSans-Bold.ttf \
                 fonts/IBMPlexMono-Regular.ttf fonts/IBMPlexMono-Bold.ttf
 WEB_FONT_OBJ := web/font_sans.o web/font_sans_bold.o web/font_mono.o web/font_mono_bold.o
 
 
+ASM_OBJ   := $(ASM_SRC:.asm=.o)
+C_OBJ     := $(C_SRC:.c=.o)
+C_OBJ     += kernel/quickjs_platform.o
+C_OBJ     += tests/web_smoke.o
+DOOM_OBJ  := $(DOOM_SRC:.c=.o)
 # Baked GUI assets. The icon theme is rendered offline by tools/gen-icons.py
 # into one .cra archive and linked in with objcopy, exactly like DOOM1.WAD --
 # /system is an in-memory VFS rebuilt every boot, so system artwork cannot live
@@ -248,9 +255,15 @@ ICON_ARCHIVE := assets/careos-icons.cra
 FP_OBJ    := $(patsubst %.c,%.o,$(filter apps/%.c,$(C_SRC)))
 $(FP_OBJ): CFLAGS := $(FP_CFLAGS)
 
+tests/web_smoke.o: CFLAGS := $(FP_CFLAGS) -DLEXBOR_STATIC
+$(WEB_OBJ): CFLAGS := $(FP_CFLAGS) -Iweb/engine -Iweb/third_party -DLEXBOR_STATIC -DNDEBUG
+$(filter web/third_party/quickjs/%,$(WEB_OBJ)): CFLAGS += -DCAREOS -D__STDC_NO_ATOMICS__=1
+$(filter web/third_party/musl-math/%,$(WEB_OBJ)): CFLAGS += -Iweb/third_party/musl-math -Dhidden= -ffp-contract=off
+web/engine/js.o: web/engine/js_prelude.h
+web/engine/js_prelude.h: web/engine/prelude.js web/host/gen_prelude.sh
+	bash web/host/gen_prelude.sh
 ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(WEB_OBJ) $(WEB_FONT_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o $(ICON_ARCHIVE).o
 
-$(WEB_OBJ): CFLAGS := $(FP_CFLAGS) -Iweb/engine -Iweb/third_party -DLEXBOR_STATIC -DNDEBUG
 .PHONY: all run run-1080p run-kvm run-whpx run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk host-test
 
 all: $(DISK) careos.iso

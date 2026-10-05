@@ -43,6 +43,15 @@ void web_init(const web_platform_t *p);
 web_page_t *web_page_load(const char *url, const char *html, size_t len,
                           int viewport_w, int viewport_h);
 
+/* Progressive loading: build with WEB_LOAD_NO_SCRIPTS to show the page fast,
+ * then -- if web_page_has_scripts() -- build it again with scripts and swap.
+ * Scripts (and the stylesheets/images they need) run inside the load call. */
+enum { WEB_LOAD_NO_SCRIPTS = 1 };
+web_page_t *web_page_load_ex(const char *url, const char *html, size_t len,
+                             int viewport_w, int viewport_h, unsigned flags);
+/* True for a page loaded with WEB_LOAD_NO_SCRIPTS whose document has scripts. */
+bool web_page_has_scripts(web_page_t *pg);
+
 /* Fetch up to `max_images` pending images (0 = all). Returns how many are still
  * pending. Safe to call from a background task while the UI thread paints, as
  * long as the UI thread calls web_page_relayout_if_needed() before painting. */
@@ -77,6 +86,12 @@ int  web_page_click(web_page_t *pg, int x, int y, char *url, size_t cap);
 int  web_page_key(web_page_t *pg, uint32_t key, char *url, size_t cap);
 bool web_page_focused(web_page_t *pg);
 void web_page_blur(web_page_t *pg);
+
+/* JavaScript timer/mutation step; returns true if canvas changed. */
+bool web_page_step(web_page_t *pg);
+int web_page_take_scroll(web_page_t *pg); /* requested document Y, or -1 */
+/* Takes pending script navigation (location.href = ...); writes destination. */
+bool web_page_take_navigation(web_page_t *pg, char *url, size_t cap);
 
 /* Document y of an element id (for #fragment navigation), or -1. */
 int  web_page_anchor_y(web_page_t *pg, const char *id);

@@ -312,6 +312,8 @@ void kernel_main(u64 magic, u64 mbi_addr){
     carepkg_init();      slog_ok("CarePackage manager");
     serial_write("[boot] Initializing scheduler...\n");
     scheduler_init();    slog_ok("Scheduler");
+    extern void web_selftest(u64 mbi);
+    web_selftest(mbi_addr);
 
 #if !defined(CAREOS_SKIP_SMOKE_TESTS)
     /* ── Ring-3 smoke tests: must run after scheduler_init(), which resets

@@ -328,11 +328,29 @@ static uint64_t name_hash(char kind, const char *s, size_t n) {
     return h ? h : 1;
 }
 
+#define NAME_SET_SLOTS (1u << 17)     /* ~65k names before filtering gives up */
+
+static void set_disable(page_t *pg) {
+    free(pg->sel_set);
+    pg->sel_set = NULL; pg->sel_cap = 0; pg->sel_used = 0;
+    pg->sel_disabled = 1;              /* selector_present() then keeps everything */
+}
+
+static bool set_alloc(page_t *pg) {
+    if (pg->sel_disabled) return false;
+    if (pg->sel_set) return true;
+    pg->sel_set = (uint64_t *)calloc(NAME_SET_SLOTS, sizeof(uint64_t));
+    if (!pg->sel_set) { set_disable(pg); return false; }
+    pg->sel_cap = NAME_SET_SLOTS; pg->sel_used = 0;
+    return true;
+}
+
 static void set_add(page_t *pg, uint64_t h) {
     if (!pg->sel_cap) return;
+    if (pg->sel_used > pg->sel_cap / 2) { set_disable(pg); return; }   /* too full: imprecise and slow */
     u32 m = pg->sel_cap - 1, i = (u32)h & m;
     while (pg->sel_set[i] && pg->sel_set[i] != h) i = (i + 1) & m;
-    pg->sel_set[i] = h;
+    if (!pg->sel_set[i]) { pg->sel_set[i] = h; pg->sel_used++; }
 }
 
 static bool set_has(page_t *pg, uint64_t h) {
@@ -398,15 +416,29 @@ static void collect_names(page_t *pg, lxb_dom_node_t *n, int depth) {
     }
 }
 
+/* Names the selector filter keeps rules for: every class/id in the DOM plus
+ * (added earlier by css_note_script_names) every identifier-like word in the
+ * page's scripts, so classes a script toggles later ("is-open") keep their
+ * rules. Rules for names mentioned nowhere are dropped before lexbor sees
+ * them. Adds to the existing set; never clears it. */
 static void build_name_set(page_t *pg) {
-    pg->sel_cap = 1u << 15;            /* 32768 slots; ~16k names before saturation */
-    pg->sel_set = (uint64_t *)calloc(pg->sel_cap, sizeof(uint64_t));
-    if (!pg->sel_set) { pg->sel_cap = 0; return; }
+    if (!set_alloc(pg)) return;
     collect_names(pg, lxb_dom_interface_node(pg->doc), 0);
-    /* nearly full: filtering would be slow and imprecise -- disable */
-    u32 used = 0;
-    for (u32 i = 0; i < pg->sel_cap; i++) used += pg->sel_set[i] != 0;
-    if (used > pg->sel_cap / 2) { free(pg->sel_set); pg->sel_set = NULL; pg->sel_cap = 0; }
+}
+
+void css_note_script_names(page_t *pg, const char *s, size_t n) {
+    if (!set_alloc(pg)) return;
+    const char *e = s + n;
+    while (s < e && pg->sel_cap) {
+        while (s < e && !((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '_' || *s == '-')) s++;
+        const char *w = s;
+        while (s < e && ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '_' || *s == '-')) s++;
+        size_t l = (size_t)(s - w);
+        if (l >= 2 && l <= 64) {
+            set_add(pg, name_hash('.', w, l));
+            set_add(pg, name_hash('#', w, l));
+        }
+    }
 }
 
 /* Rewrite a declaration block body (between braces) into rw->out. */
@@ -682,6 +714,38 @@ void css_load_document_styles(page_t *pg) {
     web_log("css: fetch %ums rewrite %ums parse %ums attach %ums inline %ums", (unsigned)t_fetch,
             (unsigned)(t_rewrite - t_fetch > t_rewrite ? 0 : t_rewrite), (unsigned)t_parse, (unsigned)t_attach, (unsigned)(ms_now() - ti));
     t_fetch = t_rewrite = t_attach = t_parse = 0;
+}
+
+bool css_media_matches(page_t *pg, const char *s) {
+    if (!pg || !s) return false;
+    media_env_t env = { pg->vw, pg->vh };
+    return media_matches(s, s + strlen(s), &env);
+}
+
+static void clear_element_styles(lxb_dom_node_t *n, int depth) {
+    if (!n || depth > 500) return;
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(n);
+        el->style = NULL;
+        el->list = NULL;
+    }
+    for (lxb_dom_node_t *c = n->first_child; c; c = c->next) {
+        clear_element_styles(c, depth + 1);
+    }
+}
+
+void css_restyle(page_t *pg) {
+    if (!pg || !pg->doc) return;
+    build_name_set(pg);
+    if (pg->js) js_clear_detached_styles(pg->js);
+    lxb_html_document_css_destroy(pg->doc);
+    clear_element_styles(lxb_dom_interface_node(pg->doc), 0);
+    lxb_html_document_css_init(pg->doc, false);
+    for (int i = 0; i < pg->nsheets; i++) {
+        lxb_html_document_stylesheet_attach(pg->doc, pg->sheets[i]);
+    }
+    u32 seq = AUTHOR_SEQ + 100000;
+    apply_inline_styles(pg, lxb_dom_interface_node(pg->doc), &seq);
 }
 
 /* =================================================================== */
@@ -1034,21 +1098,38 @@ static bool parse_px(cctx_t *c, const char *s, const char *e, float *out) {
 /*  var() substitution                                                  */
 /* =================================================================== */
 
-/* Custom property blob: sequence of "name\0value\0" pairs ending with "\0". */
-static const char *custom_lookup(const char *blob, const char *name, size_t nl) {
-    if (!blob) return NULL;
-    const char *p = blob;
-    while (*p) {
-        size_t l = strlen(p);
-        const char *v = p + l + 1;
-        if (l == nl && memcmp(p, name, nl) == 0) return v;
-        p = v + strlen(v) + 1;
+/* Custom properties in scope for an element: the ones it declares itself (a
+ * small open-addressed table) chained to its parent's scope. Elements that
+ * declare none share their parent's scope object, so building is linear in
+ * the declarations and a lookup costs one probe per ancestor that declares
+ * custom properties. (A flat copied blob was quadratic: GitHub declares
+ * thousands of theme variables.) */
+typedef struct { uint64_t h; const char *name; const char *val; u32 nl; } cpent_t;
+typedef struct cprops {
+    const struct cprops *parent;
+    cpent_t *tab;
+    u32 mask;                    /* table size - 1 (power of two) */
+} cprops_t;
+
+static uint64_t cp_hash(const char *s, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; i++) { h ^= (u8)s[i]; h *= 1099511628211ull; }
+    return h ? h : 1;
+}
+
+static const char *custom_lookup(const cprops_t *cp, const char *name, size_t nl) {
+    uint64_t h = cp_hash(name, nl);
+    for (; cp; cp = cp->parent) {
+        for (u32 i = (u32)h & cp->mask; cp->tab[i].h; i = (i + 1) & cp->mask) {
+            const cpent_t *e = &cp->tab[i];
+            if (e->h == h && e->nl == nl && memcmp(e->name, name, nl) == 0) return e->val;
+        }
     }
     return NULL;
 }
 
 /* Expand var() references into a malloc'd string, or NULL if no var() used. */
-static char *expand_vars(const char *blob, const char *s, size_t n, int depth) {
+static char *expand_vars(const cprops_t *blob, const char *s, size_t n, int depth) {
     const char *e = s + n;
     if (!w_istr(s, n, "var(")) return NULL;
     sbuf_t out = {0};
@@ -2050,48 +2131,39 @@ static void apply_presentational(cctx_t *c) {
 #undef ATTR
 }
 
-/* Build the custom-property blob for this element from declared --vars. */
-static const char *build_customs(page_t *pg, const char *parent_blob, decl_t *d, int n) {
+/* Scope for an element: its own declared --vars over the parent's scope. */
+static const cprops_t *build_customs(page_t *pg, const cprops_t *parent, decl_t *d, int n) {
     int count = 0;
     for (int i = 0; i < n; i++) if (d[i].nl > 2 && d[i].name[0] == '-' && d[i].name[1] == '-') count++;
-    if (!count) return parent_blob;
-    sbuf_t b = {0};
-    /* winners are later in the sorted array; emit highest priority first so
-     * lookups find them first */
+    if (!count) return parent;
+    u32 size = 8;
+    while (size < (u32)count * 2) size <<= 1;
+    cprops_t *cp = (cprops_t *)pg_alloc(pg, sizeof(cprops_t));
+    cpent_t *tab = (cpent_t *)pg_alloc(pg, size * sizeof(cpent_t));
+    if (!cp || !tab) return parent;
+    cp->parent = parent; cp->tab = tab; cp->mask = size - 1;
+    /* declarations are sorted lowest priority first: walk from the end so the
+     * winning declaration of each name is the one inserted */
     for (int i = n - 1; i >= 0; i--) {
         if (!(d[i].nl > 2 && d[i].name[0] == '-' && d[i].name[1] == '-')) continue;
+        uint64_t h = cp_hash(d[i].name, d[i].nl);
+        u32 k = (u32)h & cp->mask;
         bool dup = false;
-        for (int j = n - 1; j > i; j--)
-            if (d[j].nl == d[i].nl && memcmp(d[j].name, d[i].name, d[i].nl) == 0) { dup = true; break; }
+        for (; tab[k].h; k = (k + 1) & cp->mask)
+            if (tab[k].h == h && tab[k].nl == d[i].nl && memcmp(tab[k].name, d[i].name, d[i].nl) == 0) { dup = true; break; }
         if (dup) continue;
-        /* values may themselves reference vars (resolved against the parent) */
-        char *exp = expand_vars(parent_blob, d[i].val, d[i].vl, 0);
-        sb_put(&b, d[i].name, d[i].nl); sb_put(&b, "", 1);
-        if (b.s) b.s[b.n - 1] = 0;
-        const char *vv = exp ? exp : d[i].val; size_t vl = exp ? strlen(exp) : d[i].vl;
-        while (vl && (*vv == ' ')) { vv++; vl--; }
-        sb_put(&b, vv, vl); sb_put(&b, "", 1);
-        if (b.s) b.s[b.n - 1] = 0;
+        /* values may reference other vars: resolve against the parent scope */
+        char *exp = expand_vars(parent, d[i].val, d[i].vl, 0);
+        const char *vv = exp ? exp : d[i].val;
+        size_t vl = exp ? strlen(exp) : d[i].vl;
+        while (vl && *vv == ' ') { vv++; vl--; }
+        char *val = (char *)pg_alloc(pg, vl + 1);
+        if (val) memcpy(val, vv, vl);
         free(exp);
+        tab[k].h = h; tab[k].name = d[i].name; tab[k].nl = (u32)d[i].nl;
+        tab[k].val = val ? val : "";
     }
-    /* append parent entries not overridden */
-    if (parent_blob) {
-        const char *p = parent_blob;
-        while (*p) {
-            size_t l = strlen(p);
-            const char *v = p + l + 1;
-            size_t vl = strlen(v);
-            if (!custom_lookup(b.s, p, l)) { sb_put(&b, p, l + 1); if (b.s) b.s[b.n - 1] = 0; sb_put(&b, v, vl + 1); if (b.s) b.s[b.n - 1] = 0; }
-            p = v + vl + 1;
-        }
-    }
-    sb_put(&b, "", 1);
-    if (!b.s) return parent_blob;
-    b.s[b.n - 1] = 0;
-    char *out = (char *)pg_alloc(pg, b.n + 1);
-    if (out) memcpy(out, b.s, b.n);
-    free(b.s);
-    return out ? out : parent_blob;
+    return cp;
 }
 
 static bool is_font_prop(const decl_t *d) {

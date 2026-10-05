@@ -100,7 +100,7 @@ static void sync_box(page_t *pg, box_t *b) {
     if (l) {
         if (lxb_dom_element_tag_id(el) == LXB_TAG_INPUT && type_is(el, "password")) {
             char *s = (char *)pg_alloc(pg, l + 1);
-            if (s) memset(s, '*', l);
+            if (s) { memset(s, '*', l); s[l] = 0; }
             b->alt = s;
         } else b->alt = dup_arena(pg, v, l);
         b->colspan = 0;
@@ -200,6 +200,15 @@ static void collect_fields(lxb_dom_node_t *n, lxb_dom_element_t *submitter, qbuf
 
 static int submit(page_t *pg, lxb_dom_element_t *form, lxb_dom_element_t *submitter, char *url, size_t cap) {
     if (!form) return WEB_ACT_NONE;
+    if (pg->js) {
+        bool prevented = js_dispatch(pg->js, lxb_dom_interface_node(form), "submit");
+        if (pg->js_dirty) {
+            pg->js_dirty = 0;
+            web_page_restyle_and_relayout(pg);
+        }
+        if (js_take_navigation(pg->js, url, cap)) return WEB_ACT_NAVIGATE;
+        if (prevented) return WEB_ACT_REPAINT;
+    }
     size_t al; const char *action = attr(form, "action", &al);
     if (submitter) {
         size_t fl; const char *fa = attr(submitter, "formaction", &fl);
@@ -241,6 +250,19 @@ static void collect_text_boxes(box_t *b, box_t **out, int *n, int max, int depth
 
 /* ---- public entry points ---- */
 
+static int control_changed(page_t *pg, lxb_dom_element_t *el, char *url, size_t cap) {
+    if (pg->js) {
+        js_dispatch(pg->js, lxb_dom_interface_node(el), "input");
+        js_dispatch(pg->js, lxb_dom_interface_node(el), "change");
+        if (pg->js_dirty) {
+            pg->js_dirty = 0;
+            web_page_restyle_and_relayout(pg);
+        }
+        if (js_take_navigation(pg->js, url, cap)) return WEB_ACT_NAVIGATE;
+    }
+    return WEB_ACT_REPAINT;
+}
+
 int web_page_click(web_page_t *pg, int x, int y, char *url, size_t cap) {
     if (!pg || !pg->root) return WEB_ACT_NONE;
     box_t *hit = page_hit_box(pg, (float)x, (float)y);
@@ -249,7 +271,18 @@ int web_page_click(web_page_t *pg, int x, int y, char *url, size_t cap) {
     box_t *b = hit;
     while (b && !b->el) b = b->parent;
     if (!b) return act;
-    for (lxb_dom_node_t *n = lxb_dom_interface_node(b->el); n; n = n->parent) {
+    lxb_dom_element_t *target_el = b->el;
+    if (pg->js && target_el) {
+        bool prevent = js_dispatch(pg->js, lxb_dom_interface_node(target_el), "click");
+        if (js_take_navigation(pg->js, url, cap)) return WEB_ACT_NAVIGATE;
+        if (pg->js_dirty) {
+            pg->js_dirty = 0;
+            web_page_restyle_and_relayout(pg);
+            act = WEB_ACT_REPAINT;
+        }
+        if (prevent) return act;
+    }
+    for (lxb_dom_node_t *n = lxb_dom_interface_node(target_el); n; n = n->parent) {
         if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         uintptr_t tag = lxb_dom_node_tag_id(n);
@@ -277,7 +310,7 @@ int web_page_click(web_page_t *pg, int x, int y, char *url, size_t cap) {
                 box_t *cb = box_for_el(pg->root, el, 0);
                 if (cb) sync_box(pg, cb);
                 pg->generation++;
-                return WEB_ACT_REPAINT;
+                return control_changed(pg, el, url, cap);
             }
             if (type_is(el, "radio")) {
                 size_t nl; const char *name = attr(el, "name", &nl);
@@ -303,10 +336,12 @@ int web_page_click(web_page_t *pg, int x, int y, char *url, size_t cap) {
                 box_t *rb = box_for_el(pg->root, el, 0);
                 if (rb) sync_box(pg, rb);
                 pg->generation++;
-                return WEB_ACT_REPAINT;
+                return control_changed(pg, el, url, cap);
             }
-            if (type_is(el, "submit") || type_is(el, "image"))
-                return submit(pg, closest(el, LXB_TAG_FORM), el, url, cap);
+            if (type_is(el, "submit") || type_is(el, "image")) {
+                int result = submit(pg, closest(el, LXB_TAG_FORM), el, url, cap);
+                return result == WEB_ACT_NONE ? act : result;
+            }
             if (type_is(el, "button") || type_is(el, "reset") || type_is(el, "hidden")) return act;
             box_t *tb = box_for_el(pg->root, el, 0);
             if (tb) return focus_box(pg, tb);
@@ -340,14 +375,15 @@ int web_page_click(web_page_t *pg, int x, int y, char *url, size_t cap) {
                              lxb_dom_document_destroy_text(lxb_dom_interface_node(opts[nx])->owner_document, t); }
                 }
                 pg->generation++;
-                return WEB_ACT_REPAINT;
+                return control_changed(pg, el, url, cap);
             }
             return act;
         }
         if (tag == LXB_TAG_BUTTON) {
             size_t tl; const char *t = attr(el, "type", &tl);
             if (t && (w_ieqn(t, tl, "button") || w_ieqn(t, tl, "reset"))) return act;
-            return submit(pg, closest(el, LXB_TAG_FORM), el, url, cap);
+            int result = submit(pg, closest(el, LXB_TAG_FORM), el, url, cap);
+            return result == WEB_ACT_NONE ? act : result;
         }
         if (tag == LXB_TAG_A) {
             size_t l = 0;
@@ -386,6 +422,7 @@ int web_page_key(web_page_t *pg, uint32_t key, char *url, size_t cap) {
     }
     if (key == WEB_KEY_ENTER && !area)
         return submit(pg, closest(el, LXB_TAG_FORM), NULL, url, cap);
+    if (has_attr(el, "readonly") || has_attr(el, "disabled")) return WEB_ACT_NONE;
     size_t len = 0;
     char *v = control_value(el, &len);
     if (!v) return WEB_ACT_NONE;
@@ -407,5 +444,14 @@ int web_page_key(web_page_t *pg, uint32_t key, char *url, size_t cap) {
     free(v); free(nv);
     sync_box(pg, f);
     pg->generation++;
+    if (pg->js && el) {
+        js_dispatch(pg->js, lxb_dom_interface_node(el), "input");
+        if (key == WEB_KEY_ENTER) js_dispatch(pg->js, lxb_dom_interface_node(el), "change");
+        if (pg->js_dirty) {
+            pg->js_dirty = 0;
+            web_page_restyle_and_relayout(pg);
+        }
+        if (js_take_navigation(pg->js, url, cap)) return WEB_ACT_NAVIGATE;
+    }
     return WEB_ACT_REPAINT;
 }

@@ -13,6 +13,7 @@ int abs(int j);
 int system(const char *command);
 double atof(const char *nptr);
 void exit(int status);
+__attribute__((noreturn)) void abort(void);
 char *getenv(const char *name);
 int atoi(const char *nptr);
 long atol(const char *nptr);

@@ -26,6 +26,11 @@ void  browser_fetch_cancel(u32 owner);
  * BUFFER_SIZE bytes of the body are in browser_fetch_buffer(). */
 bool  browser_fetch_take(u32 owner, u32 tab, char *url_out, u32 url_max, int *n_out,
                          web_page_t **page_out);
+/* After take(): the scripted rebuild of that page, once, when ready. Swap it
+ * in and release the old page. */
+bool  browser_fetch_take_update(u32 owner, u32 tab, web_page_t **page_out);
+/* Run fn(arg) on a dedicated large stack (JavaScript from the GUI task). */
+void  browser_js_call(void (*fn)(void *), void *arg);
 /* Free a page obtained from take() (safe while its images still load). */
 void  browser_fetch_release_page(web_page_t *pg);
 /* Is a request for this owner/tab pending, running or waiting to be taken? */

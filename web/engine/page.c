@@ -31,7 +31,29 @@ static void pick_canvas_bg(page_t *pg) {
         }
 }
 
+/* Any <script> that would run (no type, or a JavaScript type)? */
+static bool doc_has_scripts(lxb_dom_node_t *n, int depth) {
+    if (depth > 400) return false;
+    for (lxb_dom_node_t *c = n->first_child; c; c = c->next) {
+        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (lxb_dom_node_tag_id(c) == LXB_TAG_SCRIPT) {
+            size_t l = 0;
+            const char *t = (const char *)lxb_dom_element_get_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"type", 4, &l);
+            if (!t || !l || w_istr(t, l, "javascript") || w_istr(t, l, "ecmascript")) return true;
+            continue;
+        }
+        if (doc_has_scripts(c, depth + 1)) return true;
+    }
+    return false;
+}
+
+bool web_page_has_scripts(web_page_t *pg) { return pg && pg->has_scripts && !pg->js; }
+
 web_page_t *web_page_load(const char *url, const char *html, size_t len, int vw, int vh) {
+    return web_page_load_ex(url, html, len, vw, vh, 0);
+}
+
+web_page_t *web_page_load_ex(const char *url, const char *html, size_t len, int vw, int vh, unsigned flags) {
     page_t *pg = (page_t *)calloc(1, sizeof(page_t));
     if (!pg) return NULL;
     snprintf(pg->url, sizeof pg->url, "%s", url ? url : "about:blank");
@@ -57,6 +79,11 @@ web_page_t *web_page_load(const char *url, const char *html, size_t len, int vw,
         lxb_dom_collection_destroy(col, true);
     }
     read_title(pg);
+    pg->has_scripts = doc_has_scripts(lxb_dom_interface_node(pg->doc), 0);
+    if (!(flags & WEB_LOAD_NO_SCRIPTS) && pg->has_scripts) {
+        pg->js = js_create(pg);
+        if (pg->js) js_run_scripts(pg->js);
+    }
     uint64_t t0 = g_web.now_ms ? g_web.now_ms(g_web.ctx) : 0;
     css_load_document_styles(pg);
     uint64_t t1 = g_web.now_ms ? g_web.now_ms(g_web.ctx) : 0;
@@ -65,6 +92,7 @@ web_page_t *web_page_load(const char *url, const char *html, size_t len, int vw,
     if (pg->root) request_bg_images(pg, pg->root, 0);
     pick_canvas_bg(pg);
     layout_document(pg);
+    pg->js_dirty = 0;
     if (g_web.now_ms) {
         uint64_t t3 = g_web.now_ms(g_web.ctx);
         web_log("load %s: styles %ums, boxes %ums, layout %ums (%d sheets)", pg->url,
@@ -73,6 +101,62 @@ web_page_t *web_page_load(const char *url, const char *html, size_t len, int vw,
     pg->need_layout = 0;
     if (url) snprintf(pg->url, sizeof pg->url, "%s", url);
     return pg;
+}
+
+static void free_box_arrays(box_t *b, int depth);
+
+static box_t *find_focus(box_t *b, lxb_dom_element_t *el, int depth) {
+    if (!b || !el || depth > 500) return NULL;
+    if (b->el == el && b->kind == K_REPLACED) return b;
+    for (box_t *c = b->first; c; c = c->next) {
+        box_t *r = find_focus(c, el, depth + 1);
+        if (r) return r;
+    }
+    return NULL;
+}
+
+void web_page_restyle_and_relayout(page_t *pg) {
+    if (!pg || !pg->doc) return;
+    lxb_dom_element_t *focused = pg->focus ? pg->focus->el : NULL;
+    if (pg->root) free_box_arrays(pg->root, 0);
+    pg->root = NULL;
+    pg->root_style = NULL;
+    pg->focus = NULL;
+    for (size_t i = 0; i < pg->nblocks; i++) free(pg->blocks[i]);
+    free(pg->blocks);
+    pg->blocks = NULL;
+    pg->nblocks = pg->capblocks = 0;
+    pg->arena = NULL;
+    pg->arena_used = pg->arena_cap = 0;
+
+    css_restyle(pg);
+    pg->root = box_build(pg);
+    pg->focus = find_focus(pg->root, focused, 0);
+    if (pg->root) request_bg_images(pg, pg->root, 0);
+    pick_canvas_bg(pg);
+    layout_document(pg);
+    pg->generation++;
+    pg->need_layout = 0;
+}
+
+bool web_page_step(web_page_t *pg) {
+    if (!pg || !pg->js) return false;
+    int ran = js_run_timers(pg->js);
+    if (pg->js_dirty) {
+        pg->js_dirty = 0;
+        web_page_restyle_and_relayout(pg);
+        return true;
+    }
+    return ran > 0;
+}
+
+int web_page_take_scroll(web_page_t *pg) {
+    return pg && pg->js ? js_take_scroll(pg->js) : -1;
+}
+
+bool web_page_take_navigation(web_page_t *pg, char *url, size_t cap) {
+    if (!pg || !pg->js) return false;
+    return js_take_navigation(pg->js, url, cap);
 }
 
 int web_page_load_images(web_page_t *pg, int max_images) {
@@ -91,6 +175,12 @@ bool web_page_relayout_if_needed(web_page_t *pg, int vw, int vh) {
     if (!pg) return false;
     if (vw <= 0) vw = pg->vw;
     if (vh <= 0) vh = pg->vh;
+    if (pg->js_dirty) {
+        pg->vw = vw; pg->vh = vh;
+        pg->js_dirty = 0;
+        web_page_restyle_and_relayout(pg);
+        return true;
+    }
     if (!pg->need_layout && vw == pg->vw && vh == pg->vh) return false;
     pg->vw = vw; pg->vh = vh;
     pg->need_layout = 0;
@@ -105,6 +195,7 @@ const char *web_page_title(web_page_t *pg) { return pg ? pg->title : ""; }
 const char *web_page_url(web_page_t *pg) { return pg ? pg->url : ""; }
 
 void web_page_paint(web_page_t *pg, uint32_t *px, int cw, int ch, int stride, int sx, int sy) {
+    if (pg) pg->scroll_y = sy;
     canvas_t c = { px, cw, ch, stride, sx, sy, { 0, 0, cw, ch }, 1.0f };
     paint_page(pg, &c);
 }
@@ -211,6 +302,7 @@ static void free_box_arrays(box_t *b, int depth) {
 
 void web_page_free(web_page_t *pg) {
     if (!pg) return;
+    if (pg->js) js_destroy(pg->js);
     if (pg->root) free_box_arrays(pg->root, 0);
     img_free_all(pg);
     free(pg->sel_set);

@@ -40,6 +40,8 @@ static web_page_t *volatile s_page;            /* built, not yet taken */
 static web_page_t *volatile s_img_page;        /* taken page whose images we load */
 static volatile bool s_img_busy;               /* worker is inside an image load */
 static web_page_t *volatile s_free_after;      /* released while busy: worker frees */
+static web_page_t *volatile s_update;          /* scripted rebuild of the taken page */
+static fetch_token_t s_update_tok;
 
 static inline u64 irq_off(void) {
     u64 f; __asm__ volatile ("pushfq; pop %0; cli" : "=r"(f) :: "memory"); return f;
@@ -179,11 +181,12 @@ static void worker(void) {
         kmemcpy(s_run_url, s_req_url, BF_URL_MAX);
         s_run = s_req;
         s_pending = false; s_done = false; s_running = true;
-        web_page_t *stale = s_page;             /* superseded, never taken */
-        s_page = NULL;
+        web_page_t *stale = s_page, *stale_up = s_update;   /* superseded, never taken */
+        s_page = NULL; s_update = NULL;
         int vw = s_vw, vh = s_vh;
         irq_on(f);
         if (stale) web_page_free(stale);
+        if (stale_up) web_page_free(stale_up);
         s_t0 = timer_ms();
 
         size_t len = 0;
@@ -196,9 +199,9 @@ static void worker(void) {
             /* keep a copy for the source view / legacy renderer */
             u32 keep = len < BF_RESP_SZ - 1 ? (u32)len : BF_RESP_SZ - 1;
             kmemcpy(s_resp, body, keep); s_resp[keep] = '\0';
-            if (!s_pending) pg = web_page_load(final_url, (const char *)body, len, vw, vh);
-            kfree(body);
             if (final_url[0]) kstrncpy(s_run_url, final_url, BF_URL_MAX - 1);
+            /* Progressive load, step 1: the page without scripts, shown at once. */
+            if (!s_pending) pg = web_page_load_ex(s_run_url, (const char *)body, len, vw, vh, WEB_LOAD_NO_SCRIPTS);
         }
 
         f = irq_off();
@@ -207,8 +210,48 @@ static void worker(void) {
         s_n = n; s_running = false; s_done = true;
         irq_on(f);
         if (!wanted && pg) web_page_free(pg);
+
+        /* Step 2: run the scripts in a second build of the same document and
+         * hand it over as an update. Separate page objects mean the GUI
+         * never paints a page whose DOM a script is mutating. */
+        if (wanted && pg && body && web_page_has_scripts(pg)) {
+            web_page_t *full = web_page_load_ex(s_run_url, (const char *)body, len, vw, vh, 0);
+            web_page_t *drop = full;
+            f = irq_off();
+            if (full && s_cur.gen == s_run.gen && !s_pending) {   /* nothing newer requested */
+                if (s_page) { drop = s_page; s_page = full; }     /* preview untaken: replace */
+                else { drop = s_update; s_update = full; s_update_tok = s_run; }
+            }
+            irq_on(f);
+            if (drop) web_page_free(drop);
+        }
+        if (body) kfree(body);
     }
 }
+
+/* Run fn(arg) on a dedicated 2 MB stack. The GUI task lives on the 64 KB
+ * boot stack, too small for QuickJS (scripts recurse deeply; the engine's
+ * stack limit is 1 MB). Never re-entered: only the GUI task calls it. */
+#define BF_JS_STACK (2u << 20)
+static u8 *s_js_stack;
+
+void browser_js_call(void (*fn)(void *), void *arg) {
+    if (!s_js_stack) s_js_stack = (u8 *)kmalloc(BF_JS_STACK);
+    if (!s_js_stack) { fn(arg); return; }
+    u64 top = ((u64)(uintptr_t)(s_js_stack + BF_JS_STACK)) & ~(u64)15;
+    __asm__ volatile(
+        "mov %%rsp, %%rbx\n\t"
+        "mov %0, %%rsp\n\t"
+        "call *%1\n\t"
+        "mov %%rbx, %%rsp\n\t"
+        :
+        : "r"(top), "r"(fn), "D"(arg)
+        : "rbx", "rax", "rcx", "rdx", "rsi", "r8", "r9", "r10", "r11", "memory", "cc",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+          "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15");
+}
+
+static void free_page_cb(void *p) { web_page_free((web_page_t *)p); }
 
 void browser_fetch_set_viewport(int w, int h) {
     if (w > 64) s_vw = w;
@@ -254,6 +297,20 @@ bool browser_fetch_take(u32 owner, u32 tab, char *url_out, u32 url_max, int *n_o
     return mine;
 }
 
+bool browser_fetch_take_update(u32 owner, u32 tab, web_page_t **page_out) {
+    u64 f = irq_off();
+    bool mine = s_update && s_update_tok.owner == owner && s_update_tok.tab == tab &&
+                s_update_tok.gen == s_cur.gen;
+    if (mine) {
+        *page_out = s_update;
+        s_update = NULL;
+        s_img_page = *page_out;                 /* images now load for this one */
+    }
+    irq_on(f);
+    if (mine && s_task >= 0) task_wake(s_task);
+    return mine;
+}
+
 void browser_fetch_release_page(web_page_t *pg) {
     if (!pg) return;
     u64 f = irq_off();
@@ -263,7 +320,7 @@ void browser_fetch_release_page(web_page_t *pg) {
         if (s_img_busy) { s_free_after = pg; defer = true; }
     }
     irq_on(f);
-    if (!defer) web_page_free(pg);
+    if (!defer) browser_js_call(free_page_cb, pg);   /* frees a JS runtime: big stack */
 }
 
 bool  browser_fetch_busy(u32 owner, u32 tab) { return s_cur.owner == owner && s_cur.tab == tab; }

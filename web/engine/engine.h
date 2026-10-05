@@ -113,7 +113,7 @@ typedef struct style {
     const char *content;                    /* raw `content` value (pseudo-elements) */
     struct style *pseudo[2];                /* ::before / ::after styles, or NULL */
     const char *pseudo_text[2];             /* their generated text ("" allowed) */
-    const char *custom_props;               /* "--a:..;--b:.." inherited blob */
+    const struct cprops *custom_props;      /* custom properties in scope (css.c) */
 } style_t;
 
 /* ---------- images (image.c) ---------- */
@@ -195,18 +195,38 @@ struct web_page {
     char  *arena; size_t arena_used, arena_cap;
     u32   bg;                    /* canvas background */
     uint64_t *sel_set; u32 sel_cap;   /* hashes of classes/ids present in the DOM */
+    u32   sel_used; u8 sel_disabled;  /* entries in sel_set; filtering turned off */
     box_t *focus;                 /* focused form control (replaced box) */
+    struct jsctx *js;
+    bool  has_scripts;            /* document contains runnable <script>s */
+    int   js_dirty;
+    int   scroll_y;
 };
 typedef struct web_page page_t;
+typedef struct jsctx   jsctx_t;
+void js_clear_detached_styles(jsctx_t *j);
 
 void *pg_alloc(page_t *pg, size_t n);       /* zeroed, freed with the page */
 
 /* css.c */
 void   css_load_document_styles(page_t *pg);
+void   css_restyle(page_t *pg);
+bool   css_media_matches(page_t *pg, const char *s);
+void   css_note_script_names(page_t *pg, const char *src, size_t len);
 style_t *css_compute(page_t *pg, lxb_dom_element_t *el, const style_t *parent);
 style_t *css_anon_style(page_t *pg, const style_t *parent, u8 display);
 style_t *css_initial_root(page_t *pg);
 bool   css_parse_color(const char *s, size_t n, u32 *out, u32 current);
+
+/* js.c */
+jsctx_t *js_create(page_t *pg);
+void     js_destroy(jsctx_t *j);
+void     js_run_scripts(jsctx_t *j);
+bool     js_dispatch(jsctx_t *j, lxb_dom_node_t *node, const char *type);
+int      js_run_timers(jsctx_t *j);
+bool     js_has_timers(jsctx_t *j);
+bool     js_take_navigation(jsctx_t *j, char *url, size_t cap);
+int      js_take_scroll(jsctx_t *j);
 
 /* box.c */
 box_t *box_build(page_t *pg);
@@ -257,6 +277,7 @@ void cv_fill_rrect(canvas_t *c, float x, float y, float w, float h,
 
 /* page.c */
 box_t *page_hit_box(page_t *pg, float x, float y);
+void   web_page_restyle_and_relayout(page_t *pg);
 
 /* image.c */
 web_img_t *img_request(page_t *pg, const char *url);

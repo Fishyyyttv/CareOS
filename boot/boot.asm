@@ -49,7 +49,9 @@ pd3:
 pd4:
     resb 4096
 stack_bottom:
-    resb 65536
+    ; The desktop runs on this stack, including bounded QuickJS event calls.
+    ; Match TASK_STACK_SIZE (2 MiB); QuickJS itself is limited to 1 MiB.
+    resb 2097152
 stack_top:
 
 ; -- Entry -----------------------------------------------------------------
