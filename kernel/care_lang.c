@@ -2,6 +2,7 @@
  * Syntax: var x = expr;  print expr;  if (cond) { } else { }  while (cond) { }
  * Comments: // or #   Strings: "..."   Numbers: integers
  * Operators: + - * /  Comparisons: == != < > <= >= */
+#include "../gui/pip/pip.h"
 #include "kernel.h"
 #include "../gui/gui.h"
 
@@ -139,7 +140,7 @@ static cl_val_t vstr(const char *s) {
 
 /* ── Environment ─────────────────────────────────────────────────────────── */
 #define CL_MAX_VARS 32
-#define CL_MAX_FUNCS 24  /* 11 natives (4 existing + 7 rc.care) + headroom for user-defined funcs in scripts */
+#define CL_MAX_FUNCS 24  /* 13 natives (11 sys_* + 2 pip_*) + headroom for user-defined funcs in scripts */
 #define CL_MAX_ARGS 4
 typedef struct { char name[32]; bool is_str; i32 num; char str[64]; } cl_var_t;
 typedef struct { 
@@ -463,8 +464,15 @@ static void cl_stmt(cl_env_t *e, lexer_t *l) {
 
     /* name = expr; */
     if (l->cur.type == T_IDENT) {
+        lexer_t at_ident = *l;               /* to re-read a call statement as an expression */
         char name[32]; kstrncpy(name,l->cur.str,31); name[31]='\0';
         lex_next(l);
+        if (l->cur.type==T_LPAREN) {        /* f(...);  -- a call for its effect */
+            *l = at_ident;
+            (void)cl_expr(e,l);
+            if (l->cur.type==T_SEMI) lex_next(l);
+            return;
+        }
         if (l->cur.type==T_EQ) {
             lex_next(l);
             cl_val_t v=cl_expr(e,l);
@@ -590,6 +598,20 @@ static cl_val_t nat_sys_first_run(cl_val_t *args, u32 nargs) {
     return vnum(1);
 }
 
+/* Counts script calls to Pip, so the Editor's own run reaction never
+ * talks over what the script asked him to do. */
+static u32 s_pip_calls;
+u32 care_lang_pip_calls(void) { return s_pip_calls; }
+static cl_val_t nat_pip_mood(cl_val_t *args, u32 nargs) {
+    s_pip_calls++;
+    return vnum(nargs >= 1 && args[0].is_str && pip_script_mood(args[0].str) ? 1 : 0);
+}
+static cl_val_t nat_pip_say(cl_val_t *args, u32 nargs) {
+    s_pip_calls++;
+    if (nargs >= 1 && args[0].is_str) pip_say(args[0].str, 4000);
+    return vnum(0);
+}
+
 /* The built-ins, in one table: registered for every run and listed by the
  * Editor's docs panel (care_lang_builtin_name), so the two can't drift. */
 static const struct { const char *name; cl_val_t (*fn)(cl_val_t *, u32); const char *sig; } CL_NATIVES[] = {
@@ -604,6 +626,8 @@ static const struct { const char *name; cl_val_t (*fn)(cl_val_t *, u32); const c
     { "sys_username",      nat_sys_username,      "sys_username()" },
     { "sys_is_root",       nat_sys_is_root,       "sys_is_root()" },
     { "sys_first_run",     nat_sys_first_run,     "sys_first_run()" },
+    { "pip_mood",          nat_pip_mood,          "pip_mood(\"happy\")" },
+    { "pip_say",           nat_pip_say,           "pip_say(\"hi!\")" },
 };
 #define CL_NATIVE_COUNT ((u32)(sizeof(CL_NATIVES) / sizeof(CL_NATIVES[0])))
 

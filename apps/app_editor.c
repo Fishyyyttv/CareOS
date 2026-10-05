@@ -229,13 +229,14 @@ static void tab_close(window_t *w, estate_t *s, u32 i) {
 /* -- Run --------------------------------------------------------------------------- */
 static void editor_run(window_t *w, estate_t *s) {
     if (tab_lang(&s->tabs[s->cur]) != CS_LANG_CARE) { notify_push("Editor", "Only Care scripts (.cl) can run", g_theme->warning); return; }
-    u32 t0 = timer_ms();
+    u32 t0 = timer_ms(), pip0 = care_lang_pip_calls();
     int rc = w->text_len ? care_lang_exec_buf(w->text_buf, w->text_len, s->out, EOUT) : -1;
     if (!w->text_len) kstrcpy(s->out, "(the file is empty)\n");
     s->run_ms = timer_ms() - t0;
     s->ok = rc == 0;
     s->err_line = s->ok ? 0 : care_lang_last_error_line();
-    pip_event(s->ok ? PE_RUN_OK : PE_RUN_FAIL);
+    if (!s->ok || care_lang_pip_calls() == pip0)   /* the script may have spoken to Pip itself */
+        pip_event(s->ok ? PE_RUN_OK : PE_RUN_FAIL);
     s->ran = true; s->out_open = true;
     kstrcpy(s->ran_path, s->tabs[s->cur].path);
 }
@@ -443,22 +444,23 @@ static void draw_docs(estate_t *s, const epal_t *p, i32 x, i32 y, i32 wd, i32 h)
     i32 ix = x + 16, iw = wd - 32, iy = y + 16;
     gfx_str_role(ix, iy, "CARE LANGUAGE DOCS", p->muted, FONT_ROLE_UI, 0, FONT_W_BOLD);
     iy += lh(0) + 12;
-    static const char *const cards[3][2] = {
+    static const char *const cards[4][2] = {
         { "Basics",       "var x = 10;\nvar who = \"Pip\";\nprint who + \"!\";" },
         { "Functions",    "func add(a, b) {\n  return a + b;\n}" },
         { "Control flow", "if (x > 5) { ... }\nelse { ... }\nwhile (x > 0) { ... }" },
+        { "Talk to Pip",  "pip_mood(\"happy\");\npip_say(\"hi!\");" },
     };
     i32 mlh = gfx_role_line_h(FONT_ROLE_MONO, 0) + 3;
     gfx_set_clip(x, y, wd, h);
-    for (u32 c = 0; c < 4 && iy < y + h - 40; c++) {
+    for (u32 c = 0; c < 5 && iy < y + h - 40; c++) {
         u32 lines = 0;
-        if (c < 3) { lines = 1; for (const char *q = cards[c][1]; *q; q++) if (*q == '\n') lines++; }
+        if (c < 4) { lines = 1; for (const char *q = cards[c][1]; *q; q++) if (*q == '\n') lines++; }
         else lines = care_lang_builtin_count();
         i32 chh = 14 + lh(2) + 6 + (i32)lines * mlh + 12;
         gfx_rect_rounded(ix, iy, iw, chh, 14, p->card);
-        gfx_str_role(ix + 14, iy + 14, c < 3 ? cards[c][0] : "Built-ins", p->ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
+        gfx_str_role(ix + 14, iy + 14, c < 4 ? cards[c][0] : "Built-ins", p->ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
         i32 ty = iy + 14 + lh(2) + 6;
-        if (c < 3) {
+        if (c < 4) {
             const char *q = cards[c][1];
             while (*q) {
                 const char *e = q; while (*e && *e != '\n') e++;
