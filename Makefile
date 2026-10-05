@@ -436,7 +436,7 @@ test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_
 # adding HT_SRC_<name> := <sources under test> and appending <name> to
 # HOST_TESTS; the test file is tests/host/test_<name>.c.
 HOST_TEST_DIR := build/host
-HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -Ikernel -DHOST_TEST \
+HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Igui/pip -Iapps -Ikernel -DHOST_TEST \
                  -fsanitize=address,undefined -fno-sanitize-recover=undefined \
                  -fno-omit-frame-pointer
 HT_SRC_qoi    := gui/image_qoi.c
@@ -456,6 +456,9 @@ HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
 HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring account_rules
 HOST_TESTS    += term_cmds settings_index care_syntax notes_md store_model
+HOST_TESTS    += pip_raster
+HT_SRC_pip_raster := gui/pip/pip_raster.c
+$(HOST_TEST_DIR)/test_pip_raster: gui/pip/pip_raster.h
 HT_SRC_store_model := apps/store_model.c
 $(HOST_TEST_DIR)/test_store_model: apps/store_model.h
 HT_SRC_notes_md := apps/notes_md.c
