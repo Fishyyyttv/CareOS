@@ -11,6 +11,7 @@
 #include "apps_common.h"
 #include "ui.h"
 #include "care_syntax.h"
+#include "pip/pip.h"
 
 #define ETABS  4
 #define EHITS  96
@@ -234,6 +235,7 @@ static void editor_run(window_t *w, estate_t *s) {
     s->run_ms = timer_ms() - t0;
     s->ok = rc == 0;
     s->err_line = s->ok ? 0 : care_lang_last_error_line();
+    pip_event(s->ok ? PE_RUN_OK : PE_RUN_FAIL);
     s->ran = true; s->out_open = true;
     kstrcpy(s->ran_path, s->tabs[s->cur].path);
 }

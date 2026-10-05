@@ -5,6 +5,7 @@
  * the sending app (for its icon and name), a title, a body and up to two
  * action buttons. Do Not Disturb keeps notifications in the history but
  * suppresses their toasts. Glide-in motion arrives with phase 5. */
+#include "pip/pip.h"
 #include "kernel.h"
 #include "gui.h"
 #include "ui.h"
@@ -78,7 +79,7 @@ void notify_push_ex(app_id_t app, const char *title, const char *body,
 
 /* Legacy entry point: CareOS-wide notifications without an app or actions. */
 void notify_push(const char *title, const char *body, u32 icon_color) {
-    (void)icon_color;
+    if (icon_color == g_theme->error) pip_event(PE_CONFUSED);   /* an error: Pip is puzzled */
     notify_push_ex(APP_NONE, title, body, NULL, NULL, NULL);
 }
 

@@ -24,6 +24,7 @@
 #include "icon.h"
 #include "font.h"
 #include "window_chrome.h"
+#include "pip/pip.h"
 #include "shadow.h"
 
 static window_t windows[MAX_WINDOWS];
@@ -490,6 +491,7 @@ window_t *wm_open(app_id_t app, const char *title,
         default: break;
         }
 
+        if (app != APP_PIP) pip_event(PE_LOADING);   /* Pip thinks while it opens */
         return win;
     }
 

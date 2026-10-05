@@ -189,6 +189,7 @@ C_SRC     := kernel/kernel.c       \
              gui/pip/pip_brain.c   \
              gui/pip/pip_sprite.c  \
              gui/pip/pip.c         \
+             gui/pip/pip_desktop.c \
              gui/session/common.c \
              gui/session/boot.c \
              gui/session/login.c \

@@ -4,6 +4,7 @@
 #include "browser_fetch.h"
 #include "font.h"
 #include "ui.h"
+#include "pip/pip.h"
 
 /* ── Layout ──────────────────────────────────────────────────────── */
 #define BROW_BAR_H    56
@@ -602,6 +603,7 @@ static void app_browser_navigate(window_t *w, const char *url) {
     ksprintf(g_status, "Connecting to %s...", host);
     w->browser_loading = true;
     browser_fetch_submit(w->instance_id, w->browser_tab_sel, url);
+    pip_event(PE_LOADING);
 }
 
 /* smart dispatch: detect domain vs search query */
@@ -1425,7 +1427,7 @@ void app_browser_key(window_t *w, char c) {
             return;
         }
         if (c >= 32 && c < 127) {
-            if (!kstrncmp(w->browser_url, "about:", 6)) w->browser_url[0] = ' ';   /* typing replaces about:home */
+            if (!kstrncmp(w->browser_url, "about:", 6)) w->browser_url[0] = '\0';   /* typing replaces about:home */
             u32 l = kstrlen(w->browser_url);
             if (l < 254) { w->browser_url[l]=c; w->browser_url[l+1]='\0'; }
         }

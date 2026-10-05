@@ -25,6 +25,12 @@ u32         pip_today(void);                         /* yyyymmdd (local) */
 void        pip_draw(i32 x, i32 y, u32 size, u32 mood, bool still);
 /* Lock (kind 0) / power (kind 1) cameo inside r. */
 void        pip_cameo(rect_t r, u32 kind);
+/* On the desktop (pip_desktop.c). */
+void        pip_desktop_draw(void);           /* after the dock, before the menu bar */
+bool        pip_desktop_mouse(mouse_t *m);    /* true = consumed */
+bool        pip_desktop_hidden(void);         /* a fullscreen game is in front */
+void        pip_desktop_go_play(void);
+void        pip_desktop_come_back(void);
 /* Cursor position used for "watching", set by pip_desktop. */
 void        pip_set_anchor(i32 cx, i32 cy);
 

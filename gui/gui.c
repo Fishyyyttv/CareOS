@@ -1094,6 +1094,9 @@ void gui_run(void) {
                     taskbar_handle_mouse(&mouse);       /* tracks the pointer; acts only inside the dock */
                     if (wm_busy()) {
                         wm_handle_mouse(&mouse);
+                    } else if (pip_desktop_mouse(&mouse)) {
+                        desktop_clear_hover();             /* Pip is above the dock and windows */
+                        needs_redraw = true;
                     } else if (taskbar_contains(mouse.x, mouse.y)) {
                         desktop_clear_hover();
                     } else if (wm_pointer_owner(mouse.x, mouse.y)) {
@@ -1108,6 +1111,11 @@ void gui_run(void) {
                 }
             }
             if (activity) needs_redraw = true;
+            pip_tick(mouse.x, mouse.y, (u32)(timer_ms() - g_last_activity_tick));
+            {   /* Pip animates at 12 fps */
+                static u32 s_pip_frame;
+                if (!pip_desktop_hidden() && timer_ms() - s_pip_frame >= 83) { s_pip_frame = timer_ms(); needs_redraw = true; }
+            }
 
             static u32 s_last_frame_start = 0;
             u32 frame_now = timer_ms();
@@ -1151,6 +1159,7 @@ void gui_run(void) {
 
                 wm_draw_all();
                 taskbar_draw();
+                pip_desktop_draw();
                 draw_top_bar(&mouse);
                 launcher_draw(&mouse);              /* also plays the close animation */
                 if (launcher_visible()) taskbar_draw();   /* the dock stays crisp above it */

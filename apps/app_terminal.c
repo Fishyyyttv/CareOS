@@ -12,6 +12,7 @@
 #include "font.h"
 #include "perf.h"
 #include "ui.h"
+#include "pip/pip.h"
 
 /* -- Terminal Themes & Customization --------------------------------------
  * Each theme carries its own foreground so text stays legible on its own
@@ -858,6 +859,7 @@ static void term_exec(window_t *w,char *line){
         } else {
             term_out(w,cmd); term_out(w,": command not found\n");
         }
+        pip_event(PE_CONFUSED);              /* Pip: unknown command */
     }
 }
 
