@@ -85,7 +85,7 @@ typedef struct style {
     u8    border_style[4];
     u8    flex_dir, flex_wrap, justify, align_items, align_self, align_content;
     u8    bg_repeat, bg_size_mode, bg_grad, nowrap_ellipsis, border_collapse;
-    u8    is_link, cursor_pointer, deco_owner, valign_set, break_word, object_fit;
+    u8    is_link, cursor_pointer, deco_owner, valign_set, break_word, object_fit, masked;
     u16   font_weight;
     i32   z_index;  bool z_auto;
     i32   order;
@@ -106,7 +106,12 @@ typedef struct style {
     u32   shadow_color; float shadow_blur, shadow_x, shadow_y;
     char *bg_image;                         /* resolved URL or NULL */
     grid_tracks_t grid_cols;
-    i32   grid_col_span, grid_col_start, grid_row_span;
+    i32   grid_col_span, grid_col_start, grid_row_span, grid_row_start;
+    const char *grid_areas;                 /* area rows, '|'-separated: "a a|b c" */
+    const char *grid_area;                  /* this item's named area */
+    const char *content;                    /* raw `content` value (pseudo-elements) */
+    struct style *pseudo[2];                /* ::before / ::after styles, or NULL */
+    const char *pseudo_text[2];             /* their generated text ("" allowed) */
     const char *custom_props;               /* "--a:..;--b:.." inherited blob */
 } style_t;
 
@@ -186,6 +191,7 @@ struct web_page {
     void **blocks; size_t nblocks, capblocks;
     char  *arena; size_t arena_used, arena_cap;
     u32   bg;                    /* canvas background */
+    uint64_t *sel_set; u32 sel_cap;   /* hashes of classes/ids present in the DOM */
 };
 typedef struct web_page page_t;
 

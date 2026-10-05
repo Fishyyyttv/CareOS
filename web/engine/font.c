@@ -2,6 +2,7 @@
 #include "engine.h"
 
 #define STBTT_STATIC
+#define STBTT_assert(x) ((void)0)
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "../third_party/stb_truetype.h"
 

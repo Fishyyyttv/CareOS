@@ -292,7 +292,7 @@ static void inline_intrinsic(page_t *pg, box_t *b, float *mn, float *mx, float *
                     if (!pre) while (s < e && is_ws((u8)*s)) s++;
                 }
             }
-            if (nowrap && *line > *mn) *mn = *line;
+            if (nowrap && word > *mn) *mn = word;
         } else if (c->kind == K_BR) {
             if (*line > *mx) *mx = *line;
             *line = 0;

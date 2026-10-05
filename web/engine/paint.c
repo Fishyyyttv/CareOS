@@ -198,6 +198,9 @@ static u32 lerp_color(u32 a, u32 b, float t) {
 static void paint_box_decor(page_t *pg, canvas_t *c, box_t *b, float x, float y) {
     const style_t *st = b->st;
     if (st->visibility) return;
+    /* masked boxes are icon glyphs cut out of their background by an (SVG)
+     * mask we cannot decode: painting the bare background gives a black blob */
+    if (st->masked) return;
     float r[4]; radii(b, r);
     float w = b->w, h = b->h;
     if (w <= 0 || h <= 0) return;

@@ -67,6 +67,8 @@ static const unsigned char *h_font(void *ctx, int face, size_t *len) {
 
 static void h_log(void *ctx, const char *m) { (void)ctx; fprintf(stderr, "[web] %s\n", m); }
 
+static uint64_t h_now(void *ctx) { (void)ctx; struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+static void dump_line(const char *l) { puts(l); }
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
 int main(int argc, char **argv) {
@@ -75,7 +77,7 @@ int main(int argc, char **argv) {
     int w = argc > 3 ? atoi(argv[3]) : 1024, vh = argc > 4 ? atoi(argv[4]) : 768;
     int maxh = argc > 5 ? atoi(argv[5]) : 4000;
     const char *fd = getenv("WEB_FONT_DIR"); if (fd) g_font_dir = fd;
-    web_platform_t p = { NULL, h_fetch, h_font, NULL, h_log };
+    web_platform_t p = { NULL, h_fetch, h_font, h_now, h_log };
     web_init(&p);
     size_t len = 0;
     char final_url[4096];
@@ -91,6 +93,7 @@ int main(int argc, char **argv) {
     double t3 = now();
     web_page_relayout_if_needed(pg, w, vh);
     double t4 = now();
+    if (getenv("WEB_DUMP")) web_page_dump(pg, dump_line);
     int H = web_page_height(pg);
     int h = H < maxh ? H : maxh;
     if (h < 1) h = 1;

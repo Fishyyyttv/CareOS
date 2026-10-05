@@ -70,4 +70,7 @@ int  web_page_anchor_y(web_page_t *pg, const char *id);
 
 void web_page_free(web_page_t *pg);
 
+/* Debug: one line per box (tag, display, document geometry). */
+void web_page_dump(web_page_t *pg, void (*out)(const char *line));
+
 #endif

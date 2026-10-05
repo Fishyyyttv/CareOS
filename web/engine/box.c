@@ -249,6 +249,7 @@ static box_t *make_replaced(page_t *pg, lxb_dom_element_t *el, style_t *st, uint
 typedef struct { page_t *pg; int depth; } bctx_t;
 
 static void build_children(bctx_t *bc, lxb_dom_node_t *n, box_t *parent);
+static box_t *make_pseudo(bctx_t *bc, style_t *ps, const char *txt);
 
 
 static void add_marker(bctx_t *bc, box_t *li, int idx) {
@@ -349,6 +350,44 @@ static box_t *build_element(bctx_t *bc, lxb_dom_element_t *el, const style_t *ps
         bc->depth++;
         build_children(bc, lxb_dom_interface_node(el), b);
         bc->depth--;
+    }
+    /* generated content */
+    for (int k = 0; k < 2; k++) {
+        if (!st->pseudo[k]) continue;
+        box_t *pb = make_pseudo(bc, st->pseudo[k], st->pseudo_text[k]);
+        if (!pb) continue;
+        if (k == 1) { append(b, pb); continue; }
+        /* ::before goes first, after a list marker */
+        box_t *after = (b->first && b->first->kind == K_MARKER) ? b->first : NULL;
+        pb->parent = b;
+        pb->prev = after;
+        pb->next = after ? after->next : b->first;
+        if (pb->next) pb->next->prev = pb; else b->last = pb;
+        if (after) after->next = pb; else b->first = pb;
+    }
+    return b;
+}
+
+static box_t *make_pseudo(bctx_t *bc, style_t *ps, const char *txt) {
+    box_t *b = new_box(bc->pg, K_ELEM, ps, NULL);
+    if (!b) return NULL;
+    b->inner = inner_of(ps->display);
+    b->outer_inline = display_inline_level(ps->display);
+    b->is_float = ps->float_ != FL_NONE;
+    b->is_abs = ps->position == POS_ABSOLUTE || ps->position == POS_FIXED;
+    b->is_fixed = ps->position == POS_FIXED;
+    if (b->is_float || b->is_abs) b->outer_inline = 0;
+    size_t n = txt ? strlen(txt) : 0;
+    if (n) {
+        box_t *t = new_box(bc->pg, K_TEXT, ps, NULL);
+        if (t) {
+            t->text = arena_str(bc->pg, txt, n);
+            t->tlen = (u32)n;
+            bool ws = true;
+            if (ps->text_transform && t->text) apply_transform(t->text, t->tlen, ps->text_transform, &ws);
+            t->outer_inline = 1;
+            append(b, t);
+        }
     }
     return b;
 }

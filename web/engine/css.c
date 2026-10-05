@@ -18,6 +18,50 @@
 #define AUTHOR_SEQ  1000000u
 #define CUR_COLOR   0x00FFFFFEu      /* sentinel: currentColor, resolved late */
 
+static uint64_t t_fetch, t_rewrite, t_attach, t_parse;
+static uint64_t ms_now(void) { return g_web.now_ms ? g_web.now_ms(g_web.ctx) : 0; }
+/* Stylesheets are shared across pages of a site; keep recent ones in memory
+ * (most-recent first, bounded total size). Returns a malloc'd copy. */
+typedef struct css_cache { char *url; unsigned char *body; size_t len; struct css_cache *next; } css_cache_t;
+static css_cache_t *g_css_cache;
+#define CSS_CACHE_BYTES (8u << 20)
+
+static unsigned char *dup_bytes(const unsigned char *b, size_t n) {
+    unsigned char *d = (unsigned char *)malloc(n + 1);
+    if (d) { memcpy(d, b, n); d[n] = 0; }
+    return d;
+}
+
+static unsigned char *css_fetch(const char *url, size_t *len) {
+    css_cache_t **pp = &g_css_cache;
+    for (css_cache_t *c = g_css_cache; c; pp = &c->next, c = c->next) {
+        if (strcmp(c->url, url) == 0) {
+            *pp = c->next; c->next = g_css_cache; g_css_cache = c;   /* move to front */
+            *len = c->len;
+            return dup_bytes(c->body, c->len);
+        }
+    }
+    uint64_t t = ms_now();
+    unsigned char *b = g_web.fetch(g_web.ctx, url, len, NULL, 0);
+    t_fetch += ms_now() - t;
+    if (!b || *len == 0 || *len > CSS_CACHE_BYTES / 2) return b;
+    css_cache_t *c = (css_cache_t *)malloc(sizeof *c);
+    if (!c) return b;
+    c->url = w_strdup(url); c->body = dup_bytes(b, *len); c->len = *len;
+    if (!c->url || !c->body) { free(c->url); free(c->body); free(c); return b; }
+    c->next = g_css_cache; g_css_cache = c;
+    /* evict from the tail beyond the budget */
+    size_t total = 0;
+    for (css_cache_t **q = &g_css_cache; *q; ) {
+        total += (*q)->len;
+        if (total > CSS_CACHE_BYTES) {
+            css_cache_t *dead = *q; *q = dead->next;
+            free(dead->url); free(dead->body); free(dead);
+        } else q = &(*q)->next;
+    }
+    return b;
+}
+
 /* =================================================================== */
 /*  Small text scanning helpers                                         */
 /* =================================================================== */
@@ -249,8 +293,124 @@ static bool selector_part_ok(const char *s, const char *e) {
     return n > 0;
 }
 
+/* Remove pseudo-classes that are always true in a static, unfocused page
+ * (":not(:hover)" etc.), so rules like skip-link hiding still apply. Returns
+ * the cleaned length, 0 if it does not fit. */
+static size_t clean_selector(const char *s, const char *e, char *out, size_t cap) {
+    static const char *always[] = { ":not(:focus)", ":not(:focus-visible)", ":not(:focus-within)",
+        ":not(:hover)", ":not(:active)", ":not(:target)", ":not(:visited)", ":not(:checked)",
+        ":not(:placeholder-shown)", ":not(:disabled)", ":enabled", ":link", ":any-link", NULL };
+    size_t o = 0;
+    while (s < e) {
+        bool skipped = false;
+        if (*s == ':') {
+            for (int i = 0; always[i]; i++) {
+                size_t l = strlen(always[i]);
+                if ((size_t)(e - s) >= l && w_ieqn(s, l, always[i])) {
+                    /* keep ":link" etc. from swallowing a longer name */
+                    char nx = (size_t)(e - s) > l ? s[l] : 0;
+                    if ((nx >= 'a' && nx <= 'z') || nx == '-') continue;
+                    s += l; skipped = true; break;
+                }
+            }
+        }
+        if (skipped) continue;
+        if (o + 1 >= cap) return 0;
+        out[o++] = *s++;
+    }
+    out[o] = 0;
+    return o;
+}
+
+static uint64_t name_hash(char kind, const char *s, size_t n) {
+    uint64_t h = 1469598103934665603ull ^ (u8)kind;
+    for (size_t i = 0; i < n; i++) { h ^= (u8)s[i]; h *= 1099511628211ull; }
+    return h ? h : 1;
+}
+
+static void set_add(page_t *pg, uint64_t h) {
+    if (!pg->sel_cap) return;
+    u32 m = pg->sel_cap - 1, i = (u32)h & m;
+    while (pg->sel_set[i] && pg->sel_set[i] != h) i = (i + 1) & m;
+    pg->sel_set[i] = h;
+}
+
+static bool set_has(page_t *pg, uint64_t h) {
+    if (!pg->sel_cap) return true;
+    u32 m = pg->sel_cap - 1, i = (u32)h & m;
+    while (pg->sel_set[i]) { if (pg->sel_set[i] == h) return true; i = (i + 1) & m; }
+    return false;
+}
+
+/* False when the selector requires a class or id that no element has.
+ * Only top-level compounds are checked (:not()/:is() contents are skipped). */
+static bool selector_present(page_t *pg, const char *s, const char *e) {
+    if (!pg->sel_cap) return true;
+    int depth = 0;
+    while (s < e) {
+        char c = *s;
+        if (c == '"' || c == '\'') { s = skip_string(s, e); continue; }
+        if (c == '(' || c == '[') { depth++; s++; continue; }
+        if (c == ')' || c == ']') { if (depth) depth--; s++; continue; }
+        if (depth == 0 && (c == '.' || c == '#')) {
+            char name[256]; size_t n = 0; bool unsure = false;
+            const char *p = s + 1;
+            while (p < e) {
+                char d = *p;
+                if (d == '\\' && p + 1 < e) {
+                    char x = p[1];
+                    if ((x >= '0' && x <= '9') || (x >= 'a' && x <= 'f') || (x >= 'A' && x <= 'F')) unsure = true;
+                    if (n < sizeof name) name[n++] = x;
+                    p += 2; continue;
+                }
+                if ((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z') || (d >= '0' && d <= '9') ||
+                    d == '-' || d == '_' || (u8)d >= 0x80) { if (n < sizeof name) name[n++] = d; p++; continue; }
+                break;
+            }
+            if (n && !unsure && n < sizeof name && !set_has(pg, name_hash(c, name, n))) return false;
+            s = p;
+            continue;
+        }
+        s++;
+    }
+    return true;
+}
+
+static void collect_names(page_t *pg, lxb_dom_node_t *n, int depth) {
+    if (depth > 600) return;
+    for (lxb_dom_node_t *c = n->first_child; c; c = c->next) {
+        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        lxb_dom_element_t *el = lxb_dom_interface_element(c);
+        size_t l = 0;
+        const char *v = (const char *)lxb_dom_element_get_attribute(el, (const lxb_char_t *)"class", 5, &l);
+        if (v) {
+            const char *p = v, *ve = v + l;
+            while (p < ve) {
+                while (p < ve && (u8)*p <= ' ') p++;
+                const char *w = p;
+                while (p < ve && (u8)*p > ' ') p++;
+                if (p > w) set_add(pg, name_hash('.', w, (size_t)(p - w)));
+            }
+        }
+        v = (const char *)lxb_dom_element_get_attribute(el, (const lxb_char_t *)"id", 2, &l);
+        if (v && l) set_add(pg, name_hash('#', v, l));
+        collect_names(pg, c, depth + 1);
+    }
+}
+
+static void build_name_set(page_t *pg) {
+    pg->sel_cap = 1u << 15;            /* 32768 slots; ~16k names before saturation */
+    pg->sel_set = (uint64_t *)calloc(pg->sel_cap, sizeof(uint64_t));
+    if (!pg->sel_set) { pg->sel_cap = 0; return; }
+    collect_names(pg, lxb_dom_interface_node(pg->doc), 0);
+    /* nearly full: filtering would be slow and imprecise -- disable */
+    u32 used = 0;
+    for (u32 i = 0; i < pg->sel_cap; i++) used += pg->sel_set[i] != 0;
+    if (used > pg->sel_cap / 2) { free(pg->sel_set); pg->sel_set = NULL; pg->sel_cap = 0; }
+}
+
 /* Rewrite a declaration block body (between braces) into rw->out. */
-static void rewrite_decls(rw_t *rw, const char *p, const char *e, u32 *seq) {
+static void rewrite_decls(rw_t *rw, const char *p, const char *e, u32 *seq, char kind) {
     while (p < e) {
         p = skip_ws_comments(p, e);
         if (p >= e) break;
@@ -268,7 +428,7 @@ static void rewrite_decls(rw_t *rw, const char *p, const char *e, u32 *seq) {
             if (bang < ve && w_istr(bang, (size_t)(ve - bang), "important")) { imp = true; ve = bang; trim(&vs, &ve); }
             if (ne > ns && ve > vs && (size_t)(ne - ns) < 64) {
                 char hdr[128];
-                int hl = snprintf(hdr, sizeof hdr, "--x-%.*s:%u ", (int)(ne - ns), ns, (*seq)++);
+                int hl = snprintf(hdr, sizeof hdr, "--%c-%.*s:%u ", kind, (int)(ne - ns), ns, (*seq)++);
                 for (int i = 4; i < hl && hdr[i] != ':'; i++)
                     if (hdr[i] >= 'A' && hdr[i] <= 'Z') hdr[i] = (char)(hdr[i] + 32);
                 sb_put(&rw->out, hdr, (size_t)hl);
@@ -306,7 +466,7 @@ static void do_import(rw_t *rw, const char *s, const char *e) {
     char url[1024];
     url_resolve(rw->base_url, ref, url, sizeof url);
     size_t len = 0;
-    unsigned char *body = g_web.fetch(g_web.ctx, url, &len, NULL, 0);
+    unsigned char *body = css_fetch(url, &len);
     if (!body) return;
     const char *saved = rw->base_url;
     rw->base_url = url;
@@ -374,28 +534,46 @@ static void rewrite_sheet(rw_t *rw, const char *p, const char *e) {
         if (brace >= e) return;
         const char *bend = skip_block(brace, e);
         const char *inner = brace + 1, *inner_e = bend > inner ? bend - 1 : inner;
-        /* filter the selector list */
-        sbuf_t sel = {0};
+        /* filter the selector list; ::before / ::after parts become their own
+         * rules whose declarations carry the --b- / --a- prefix */
+        sbuf_t sel[3] = {{0}};             /* element, before, after */
+        static const char kinds[3] = { 'x', 'b', 'a' };
         const char *s = p;
         while (s < brace) {
             const char *c = find_top(s, brace, ",");
             const char *a = s, *b = c; trim(&a, &b);
-            if (selector_part_ok(a, b)) {
-                if (sel.n) sb_puts(&sel, ",");
-                sb_put(&sel, a, (size_t)(b - a));
+            char clean[1024];
+            size_t cl = clean_selector(a, b, clean, sizeof clean);
+            int which = 0;
+            static const char *pseudo[4] = { "::before", ":before", "::after", ":after" };
+            for (int q = 0; q < 4; q++) {
+                size_t pl = strlen(pseudo[q]);
+                if (cl > pl && w_ieqn(clean + cl - pl, pl, pseudo[q])) { cl -= pl; which = q < 2 ? 1 : 2; break; }
+            }
+            if (which && (cl == 0 || clean[cl - 1] == ' ' || clean[cl - 1] == '>')) {
+                /* "::before" alone or after a combinator means "*::before" */
+                if (cl + 1 < sizeof clean) clean[cl++] = '*';
+            }
+            clean[cl] = 0;
+            if (cl && selector_part_ok(clean, clean + cl) && selector_present(rw->pg, clean, clean + cl)) {
+                if (sel[which].n) sb_puts(&sel[which], ",");
+                sb_put(&sel[which], clean, cl);
             }
             s = c < brace ? c + 1 : brace;
         }
-        if (sel.n) {
+        if (sel[0].n || sel[1].n || sel[2].n) {
             sbuf_t decl = {0};
             absolutize_urls(rw, inner, inner_e, &decl);
-            sb_put(&rw->out, sel.s, sel.n);
-            sb_puts(&rw->out, "{");
-            if (decl.s) rewrite_decls(rw, decl.s, decl.s + decl.n, rw->seq);
-            sb_puts(&rw->out, "}\n");
+            for (int w = 0; w < 3; w++) {
+                if (!sel[w].n) continue;
+                sb_put(&rw->out, sel[w].s, sel[w].n);
+                sb_puts(&rw->out, "{");
+                if (decl.s) rewrite_decls(rw, decl.s, decl.s + decl.n, rw->seq, kinds[w]);
+                sb_puts(&rw->out, "}\n");
+            }
             free(decl.s);
         }
-        free(sel.s);
+        for (int w = 0; w < 3; w++) free(sel[w].s);
         p = bend;
     }
 }
@@ -404,11 +582,18 @@ static void attach_sheet_text(page_t *pg, const char *css, size_t len, const cha
                               u32 *seq) {
     if (pg->nsheets >= (int)(sizeof pg->sheets / sizeof pg->sheets[0])) return;
     rw_t rw = { .pg = pg, .env = { pg->vw, pg->vh }, .seq = seq, .base_url = base };
+    uint64_t t0 = ms_now();
     rewrite_sheet(&rw, css, css + len);
+    uint64_t t1 = ms_now();
+    t_rewrite += t1 - t0;
     if (!rw.out.s) return;
     lxb_css_stylesheet_t *sst = lxb_css_stylesheet_create(NULL);
     if (sst && lxb_css_stylesheet_parse(sst, pg->css_parser, (const lxb_char_t *)rw.out.s, rw.out.n) == LXB_STATUS_OK) {
+        uint64_t t2 = ms_now();
+        t_rewrite += 0;
         lxb_html_document_stylesheet_attach(pg->doc, sst);
+        t_attach += ms_now() - t2;
+        t_parse += t2 - t1;
         pg->sheets[pg->nsheets++] = sst;
     } else if (sst) {
         lxb_css_stylesheet_destroy(sst, true);
@@ -451,7 +636,7 @@ static void collect_sheets(page_t *pg, lxb_dom_node_t *n, u32 *seq, int *budget)
             snprintf(ref, sizeof ref, "%.*s", (int)hl, href);
             url_resolve(pg->url, ref, url, sizeof url);
             size_t len = 0;
-            unsigned char *body = g_web.fetch(g_web.ctx, url, &len, NULL, 0);
+            unsigned char *body = css_fetch(url, &len);
             if (body) { attach_sheet_text(pg, (const char *)body, len, url, seq); free(body); }
             continue;
         }
@@ -470,7 +655,7 @@ static void apply_inline_styles(page_t *pg, lxb_dom_node_t *n, u32 *seq) {
             rw_t rw = { .pg = pg, .env = { pg->vw, pg->vh }, .seq = seq, .base_url = pg->url };
             sbuf_t abs_ = {0};
             absolutize_urls(&rw, s, s + sl, &abs_);
-            if (abs_.s) rewrite_decls(&rw, abs_.s, abs_.s + abs_.n, seq);
+            if (abs_.s) rewrite_decls(&rw, abs_.s, abs_.s + abs_.n, seq, 'x');
             if (rw.out.s) lxb_dom_element_style_parse(el, (const lxb_char_t *)rw.out.s, rw.out.n);
             free(rw.out.s); free(abs_.s);
         }
@@ -482,12 +667,19 @@ void css_load_document_styles(page_t *pg) {
     pg->css_parser = lxb_css_parser_create();
     lxb_css_parser_init(pg->css_parser, NULL);
     lxb_html_document_css_init(pg->doc, false);
+    build_name_set(pg);
     u32 seq = 1;
     attach_sheet_text(pg, UA_CSS, sizeof UA_CSS - 1, pg->url, &seq);
+    if (lxb_dom_interface_document(pg->doc)->compat_mode == LXB_DOM_DOCUMENT_CMODE_QUIRKS)
+        attach_sheet_text(pg, UA_QUIRKS_CSS, sizeof UA_QUIRKS_CSS - 1, pg->url, &seq);
     seq = AUTHOR_SEQ;
     int budget = 24;
     collect_sheets(pg, lxb_dom_interface_node(pg->doc), &seq, &budget);
+    uint64_t ti = ms_now();
     apply_inline_styles(pg, lxb_dom_interface_node(pg->doc), &seq);
+    web_log("css: fetch %ums rewrite %ums parse %ums attach %ums inline %ums", (unsigned)t_fetch,
+            (unsigned)(t_rewrite - t_fetch > t_rewrite ? 0 : t_rewrite), (unsigned)t_parse, (unsigned)t_attach, (unsigned)(ms_now() - ti));
+    t_fetch = t_rewrite = t_attach = t_parse = 0;
 }
 
 /* =================================================================== */
@@ -1197,6 +1389,30 @@ static void parse_grid_template(cctx_t *c, const char *s, const char *e, grid_tr
     }
 }
 
+/* "a a" "b c" -> "a a|b c" (arena), or NULL for none. */
+static const char *parse_areas(page_t *pg, const char *s, const char *e) {
+    if (tok_is(s, e, "none")) return NULL;
+    char *out = (char *)pg_alloc(pg, (size_t)(e - s) + 1);
+    if (!out) return NULL;
+    size_t o = 0;
+    const char *p = s;
+    while (p < e) {
+        if (*p != '"' && *p != '\'') { p++; continue; }
+        const char *q = skip_string(p, e);
+        const char *a = p + 1, *b = q - 1;
+        if (o) out[o++] = '|';
+        bool sp = true;
+        for (; a < b; a++) {
+            if ((u8)*a <= ' ') { if (!sp) { out[o++] = ' '; sp = true; } continue; }
+            out[o++] = *a; sp = false;
+        }
+        if (o && out[o - 1] == ' ') o--;
+        p = q;
+    }
+    out[o] = 0;
+    return o ? out : NULL;
+}
+
 static void parse_grid_line(const char *s, const char *e, i32 *start, i32 *span) {
     /* "span 2" | "1 / 3" | "1 / -1" | "2" | "auto" */
     const char *slash = find_top(s, e, "/");
@@ -1297,6 +1513,10 @@ static void apply_prop(cctx_t *c, const char *name, size_t nl, const char *s, co
     u32 col; len_t l; float f;
 #define IS(x) w_ieqn(name, nl, x)
     switch (name[0]) {
+    case '-':
+        if (IS("-webkit-mask") || IS("-webkit-mask-image") || IS("-webkit-mask-box-image"))
+            st->masked = (w_istr(s, n, "url(") || w_istr(s, n, "gradient(")) ? 1 : 0;
+        break;
     case 'a':
         if (IS("align-items")) { u8 a = parse_align(s, e); if (a < 254) st->align_items = a; }
         else if (IS("align-self")) { u8 a = parse_align(s, e); st->align_self = a == 254 ? 255 : a; }
@@ -1420,6 +1640,7 @@ static void apply_prop(cctx_t *c, const char *name, size_t nl, const char *s, co
         break;
     case 'c':
         if (IS("color")) { if (css_parse_color(s, n, &col, ps ? ps->color : 0xFF000000u)) st->color = col; }
+        else if (IS("content")) { char *v = (char *)pg_alloc(c->pg, n + 1); if (v) { memcpy(v, s, n); st->content = v; } }
         else if (IS("clear")) st->clear = tok_is(s, e, "left") ? CL_LEFT : tok_is(s, e, "right") ? CL_RIGHT : (tok_is(s, e, "both") || tok_is(s, e, "inline-start") || tok_is(s, e, "inline-end")) ? CL_BOTH : CL_NONE;
         else if (IS("column-gap") || IS("grid-column-gap")) { if (parse_len(c, s, e, &l)) st->col_gap = l.u == L_PX ? l.v : 0; }
         else if (IS("cursor")) st->cursor_pointer = tok_is(s, e, "pointer");
@@ -1459,11 +1680,37 @@ static void apply_prop(cctx_t *c, const char *name, size_t nl, const char *s, co
         }
         else if (IS("grid-row-gap")) { if (parse_px(c, s, e, &f)) st->row_gap = f; }
         else if (IS("grid-template-columns")) parse_grid_template(c, s, e, &st->grid_cols);
-        else if (IS("grid-template")) { const char *sl = find_top(s, e, "/"); if (sl < e) parse_grid_template(c, sl + 1, e, &st->grid_cols); }
+        else if (IS("grid-template-areas")) st->grid_areas = parse_areas(c->pg, s, e);
+        else if (IS("grid-template") || IS("grid")) {
+            const char *sl = find_top(s, e, "/");
+            if (memchr(s, '"', n) || memchr(s, '\'', n)) st->grid_areas = parse_areas(c->pg, s, sl);
+            if (sl < e && !w_istr(sl, (size_t)(e - sl), "auto-flow")) parse_grid_template(c, sl + 1, e, &st->grid_cols);
+        }
+        else if (IS("grid-row")) parse_grid_line(s, e, &st->grid_row_start, &st->grid_row_span);
+        else if (IS("grid-row-start")) { i32 sp; parse_grid_line(s, e, &st->grid_row_start, &sp); if (w_istr(s, n, "span")) st->grid_row_span = sp; }
+        else if (IS("grid-row-end")) { if (w_istr(s, n, "span")) st->grid_row_span = (i32)strtol(s + 4, NULL, 10); else { i32 en = (i32)strtol(s, NULL, 10); if (st->grid_row_start > 0 && en > st->grid_row_start) st->grid_row_span = en - st->grid_row_start; } }
         else if (IS("grid-column")) parse_grid_line(s, e, &st->grid_col_start, &st->grid_col_span);
         else if (IS("grid-column-start")) { i32 sp; parse_grid_line(s, e, &st->grid_col_start, &sp); if (w_istr(s, n, "span")) st->grid_col_span = sp; }
         else if (IS("grid-column-end")) { if (w_istr(s, n, "span")) st->grid_col_span = (i32)strtol(s + 4, NULL, 10); else { i32 en = (i32)strtol(s, NULL, 10); if (en == -1) st->grid_col_span = 999; else if (st->grid_col_start > 0 && en > st->grid_col_start) st->grid_col_span = en - st->grid_col_start; } }
-        else if (IS("grid-area")) { i32 sp; parse_grid_line(s, e, &sp, &sp); (void)sp; }
+        else if (IS("grid-area")) {
+            if ((*s >= '0' && *s <= '9') || *s == '-' || w_istr(s, n, "span") == s || memchr(s, '/', n)) {
+                /* row-start / column-start / row-end / column-end */
+                i32 v[4] = {0, 0, 0, 0}; int k = 0;
+                const char *p = s;
+                while (k < 4 && p < e) {
+                    const char *q = find_top(p, e, "/");
+                    const char *a = p, *b2 = q; trim(&a, &b2);
+                    v[k++] = (a < b2 && w_istr(a, (size_t)(b2 - a), "span") != a) ? (i32)strtol(a, NULL, 10) : 0;
+                    p = q < e ? q + 1 : e;
+                }
+                st->grid_row_start = v[0]; st->grid_col_start = v[1];
+                st->grid_row_span = (v[2] > v[0] && v[0] > 0) ? v[2] - v[0] : 1;
+                st->grid_col_span = (v[3] > v[1] && v[1] > 0) ? v[3] - v[1] : (v[3] == -1 ? 999 : 1);
+            } else if (!tok_is(s, e, "auto")) {
+                char *nm = (char *)pg_alloc(c->pg, n + 1);
+                if (nm) { memcpy(nm, s, n); st->grid_area = nm; }
+            }
+        }
         break;
     case 'h':
         if (IS("height")) parse_len(c, s, e, &st->height);
@@ -1503,7 +1750,8 @@ static void apply_prop(cctx_t *c, const char *name, size_t nl, const char *s, co
         else if (IS("list-style-position")) st->list_inside = tok_is(s, e, "inside");
         break;
     case 'm':
-        if (IS("margin")) apply_len4(c, s, e, st->margin);
+        if (IS("mask") || IS("mask-image")) st->masked = (w_istr(s, n, "url(") || w_istr(s, n, "gradient(")) ? 1 : 0;
+        else if (IS("margin")) apply_len4(c, s, e, st->margin);
         else if (IS("margin-top") || IS("margin-block-start")) parse_len(c, s, e, &st->margin[0]);
         else if (IS("margin-right") || IS("margin-inline-end")) parse_len(c, s, e, &st->margin[1]);
         else if (IS("margin-bottom") || IS("margin-block-end")) parse_len(c, s, e, &st->margin[2]);
@@ -1604,10 +1852,13 @@ typedef struct {
 static lxb_status_t walk_cb(lxb_dom_element_t *el, const lxb_css_rule_declaration_t *declr,
                             void *ctx, lxb_css_selector_specificity_t spec, bool is_weak) {
     (void)el; (void)is_weak;
-    dlist_t *dl = (dlist_t *)ctx;
+    dlist_t *lists = (dlist_t *)ctx;     /* [0] element, [1] ::before, [2] ::after */
     if (declr->type != LXB_CSS_PROPERTY__CUSTOM) return LXB_STATUS_OK;
     const lexbor_str_t *nm = &declr->u.custom->name, *vv = &declr->u.custom->value;
-    if (nm->length < 5 || memcmp(nm->data, "--x-", 4) != 0) return LXB_STATUS_OK;
+    if (nm->length < 5 || nm->data[0] != '-' || nm->data[1] != '-' || nm->data[3] != '-') return LXB_STATUS_OK;
+    char kind = (char)nm->data[2];
+    dlist_t *dl = kind == 'x' ? &lists[0] : kind == 'b' ? &lists[1] : kind == 'a' ? &lists[2] : NULL;
+    if (!dl) return LXB_STATUS_OK;
     const char *v = (const char *)vv->data, *ve = v + vv->length;
     while (v < ve && *v == ' ') v++;
     char *endp;
@@ -1846,6 +2097,82 @@ static bool is_font_prop(const decl_t *d) {
            w_ieqn(d->name, d->nl, "color");
 }
 
+/* Apply sorted declarations (lowest priority first) to c->st. */
+static void apply_decls(cctx_t *c, decl_t *d0, int n) {
+    style_t *st = c->st;
+    /* pass 1: font-size/font/color (lengths depend on em; colors on currentColor) */
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < n; i++) {
+            decl_t *d = &d0[i];
+            if (d->nl > 2 && d->name[0] == '-' && d->name[1] == '-') continue;
+            if (pass == 0 && !is_font_prop(d)) continue;
+            if (pass == 1 && is_font_prop(d) && !w_ieqn(d->name, d->nl, "font")) continue;
+            char *exp = expand_vars(st->custom_props, d->val, d->vl, 0);
+            if (exp) { apply_prop(c, d->name, d->nl, exp, exp + strlen(exp)); free(exp); }
+            else apply_prop(c, d->name, d->nl, d->val, d->val + d->vl);
+        }
+    }
+}
+
+static void put_utf8(sbuf_t *b, u32 cp) {
+    char u[4]; size_t n;
+    if (cp < 0x80) { u[0] = (char)cp; n = 1; }
+    else if (cp < 0x800) { u[0] = (char)(0xC0 | (cp >> 6)); u[1] = (char)(0x80 | (cp & 0x3F)); n = 2; }
+    else if (cp < 0x10000) { u[0] = (char)(0xE0 | (cp >> 12)); u[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); u[2] = (char)(0x80 | (cp & 0x3F)); n = 3; }
+    else { u[0] = (char)(0xF0 | (cp >> 18)); u[1] = (char)(0x80 | ((cp >> 12) & 0x3F)); u[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); u[3] = (char)(0x80 | (cp & 0x3F)); n = 4; }
+    sb_put(b, u, n);
+}
+
+/* Evaluate a `content` value into text: strings (with CSS escapes), attr(),
+ * quotes. Returns NULL for none/normal or anything we cannot produce. */
+static const char *content_text(page_t *pg, lxb_dom_element_t *el, const char *s) {
+    if (!s) return NULL;
+    const char *e = s + strlen(s);
+    trim(&s, &e);
+    if (s >= e || tok_is(s, e, "none") || tok_is(s, e, "normal")) return NULL;
+    sbuf_t out = {0};
+    bool any = false;
+    const char *p = s, *ts, *te;
+    while (next_tok(&p, e, &ts, &te)) {
+        if (*ts == '"' || *ts == '\'') {
+            any = true;
+            for (const char *q = ts + 1; q < te - 1; q++) {
+                if (*q == '\\' && q + 1 < te - 1) {
+                    q++;
+                    if (hexd(*q) >= 0) {
+                        u32 cp = 0; int k = 0;
+                        while (k < 6 && q < te - 1 && hexd(*q) >= 0) { cp = cp * 16 + (u32)hexd(*q); q++; k++; }
+                        if (q < te - 1 && *q == ' ') q++;
+                        q--;
+                        if (cp == 0xA) cp = '\n';
+                        put_utf8(&out, cp ? cp : 0xFFFD);
+                    } else sb_put(&out, q, 1);
+                    continue;
+                }
+                sb_put(&out, q, 1);
+            }
+        } else if (w_istr(ts, (size_t)(te - ts), "attr(") == ts) {
+            const char *a = ts + 5, *b = te - 1; trim(&a, &b);
+            size_t l = 0; char nm[64];
+            snprintf(nm, sizeof nm, "%.*s", (int)(b - a), a);
+            const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)nm, strlen(nm), &l);
+            if (v && l) sb_put(&out, (const char *)v, l);
+            any = true;
+        } else if (tok_is(ts, te, "open-quote")) { sb_puts(&out, "\xE2\x80\x9C"); any = true; }
+        else if (tok_is(ts, te, "close-quote")) { sb_puts(&out, "\xE2\x80\x9D"); any = true; }
+        else if (tok_is(ts, te, "no-open-quote") || tok_is(ts, te, "no-close-quote")) any = true;
+        else if (w_istr(ts, (size_t)(te - ts), "counter") == ts) any = true;   /* counters: unsupported, empty */
+        else if (*ts == '/') break;                                           /* alt text follows */
+    }
+    if (!any) { free(out.s); return NULL; }
+    char *r = (char *)pg_alloc(pg, out.n + 1);
+    if (r && out.s) memcpy(r, out.s, out.n);
+    free(out.s);
+    return r;
+}
+
+static void finish_style(style_t *st);
+
 style_t *css_compute(page_t *pg, lxb_dom_element_t *el, const style_t *ps) {
     style_t *st = (style_t *)pg_alloc(pg, sizeof(style_t));
     if (!st) return NULL;
@@ -1853,29 +2180,41 @@ style_t *css_compute(page_t *pg, lxb_dom_element_t *el, const style_t *ps) {
     inherit(st, ps);
     cctx_t c = { pg, st, ps, el, ps->font_size, pg->root_style ? pg->root_style->font_size : 16 };
 
-    dlist_t dl = {0};
-    lxb_dom_element_style_walk(el, walk_cb, &dl, true);
-    if (dl.n > 1) qsort(dl.d, (size_t)dl.n, sizeof(decl_t), decl_cmp);
+    dlist_t dl[3] = {{0}};
+    lxb_dom_element_style_walk(el, walk_cb, dl, true);
+    for (int k = 0; k < 3; k++)
+        if (dl[k].n > 1) qsort(dl[k].d, (size_t)dl[k].n, sizeof(decl_t), decl_cmp);
 
-    st->custom_props = build_customs(pg, ps->custom_props, dl.d, dl.n);
+    st->custom_props = build_customs(pg, ps->custom_props, dl[0].d, dl[0].n);
 
     /* presentational hints first: they lose against any author CSS */
     apply_presentational(&c);
+    apply_decls(&c, dl[0].d, dl[0].n);
+    finish_style(st);
 
-    /* pass 1: font-size/font/color (lengths depend on em; colors on currentColor) */
-    for (int pass = 0; pass < 2; pass++) {
-        for (int i = 0; i < dl.n; i++) {
-            decl_t *d = &dl.d[i];
-            if (d->nl > 2 && d->name[0] == '-' && d->name[1] == '-') continue;
-            if (pass == 0 && !is_font_prop(d)) continue;
-            if (pass == 1 && is_font_prop(d) && !w_ieqn(d->name, d->nl, "font")) continue;
-            char *exp = expand_vars(st->custom_props, d->val, d->vl, 0);
-            if (exp) { apply_prop(&c, d->name, d->nl, exp, exp + strlen(exp)); free(exp); }
-            else apply_prop(&c, d->name, d->nl, d->val, d->val + d->vl);
-        }
+    /* ::before / ::after */
+    for (int k = 0; k < 2; k++) {
+        if (!dl[k + 1].n || st->display == D_NONE) continue;
+        style_t *ps2 = (style_t *)pg_alloc(pg, sizeof(style_t));
+        if (!ps2) break;
+        set_initial(ps2);
+        inherit(ps2, st);
+        ps2->custom_props = build_customs(pg, st->custom_props, dl[k + 1].d, dl[k + 1].n);
+        cctx_t pc = { pg, ps2, st, el, st->font_size, c.rem };
+        apply_decls(&pc, dl[k + 1].d, dl[k + 1].n);
+        finish_style(ps2);
+        const char *txt = content_text(pg, el, ps2->content);
+        if (txt && ps2->display != D_NONE) { st->pseudo[k] = ps2; st->pseudo_text[k] = txt; }
     }
-    free(dl.d);
+    for (int k = 0; k < 3; k++) free(dl[k].d);
 
+    uintptr_t tag = lxb_dom_element_tag_id(el);
+    if (tag == LXB_TAG_A && lxb_dom_element_has_attribute(el, (const lxb_char_t *)"href", 4)) st->is_link = 1;
+    return st;
+}
+
+/* Resolve late-bound values and blockify floats/positioned boxes. */
+static void finish_style(style_t *st) {
     if (st->line_height == -2) st->line_height = st->lh_factor * st->font_size;
     for (int i = 0; i < 4; i++) {
         if (st->border_color[i] == CUR_COLOR) st->border_color[i] = st->color;
@@ -1883,9 +2222,6 @@ style_t *css_compute(page_t *pg, lxb_dom_element_t *el, const style_t *ps) {
     }
     if (st->deco_owner && (st->deco_color == CUR_COLOR || st->deco_color == 0)) st->deco_color = st->color;
     if (st->bg_color == CUR_COLOR) st->bg_color = st->color;
-
-    uintptr_t tag = lxb_dom_element_tag_id(el);
-    if (tag == LXB_TAG_A && lxb_dom_element_has_attribute(el, (const lxb_char_t *)"href", 4)) st->is_link = 1;
 
     /* blockification */
     if (st->float_ != FL_NONE || st->position == POS_ABSOLUTE || st->position == POS_FIXED) {
@@ -1896,8 +2232,4 @@ style_t *css_compute(page_t *pg, lxb_dom_element_t *el, const style_t *ps) {
         else if (st->display == D_INLINE_TABLE) st->display = D_TABLE;
     }
     if (st->position == POS_ABSOLUTE || st->position == POS_FIXED) st->float_ = FL_NONE;
-    if (st->display == D_FLEX || st->display == D_INLINE_FLEX || st->display == D_GRID || st->display == D_INLINE_GRID) {
-        /* nothing: children are blockified in box.c */
-    }
-    return st;
 }

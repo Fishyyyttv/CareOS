@@ -57,11 +57,19 @@ web_page_t *web_page_load(const char *url, const char *html, size_t len, int vw,
         lxb_dom_collection_destroy(col, true);
     }
     read_title(pg);
+    uint64_t t0 = g_web.now_ms ? g_web.now_ms(g_web.ctx) : 0;
     css_load_document_styles(pg);
+    uint64_t t1 = g_web.now_ms ? g_web.now_ms(g_web.ctx) : 0;
     pg->root = box_build(pg);
+    uint64_t t2 = g_web.now_ms ? g_web.now_ms(g_web.ctx) : 0;
     if (pg->root) request_bg_images(pg, pg->root, 0);
     pick_canvas_bg(pg);
     layout_document(pg);
+    if (g_web.now_ms) {
+        uint64_t t3 = g_web.now_ms(g_web.ctx);
+        web_log("load %s: styles %ums, boxes %ums, layout %ums (%d sheets)", pg->url,
+                (unsigned)(t1 - t0), (unsigned)(t2 - t1), (unsigned)(t3 - t2), pg->nsheets);
+    }
     pg->need_layout = 0;
     if (url) snprintf(pg->url, sizeof pg->url, "%s", url);
     return pg;
@@ -204,10 +212,43 @@ void web_page_free(web_page_t *pg) {
     if (!pg) return;
     if (pg->root) free_box_arrays(pg->root, 0);
     img_free_all(pg);
+    free(pg->sel_set);
     for (int i = 0; i < pg->nsheets; i++) lxb_css_stylesheet_destroy(pg->sheets[i], true);
     if (pg->doc) { lxb_html_document_css_destroy(pg->doc); lxb_html_document_destroy(pg->doc); }
     if (pg->css_parser) lxb_css_parser_destroy(pg->css_parser, true);
     for (size_t i = 0; i < pg->nblocks; i++) free(pg->blocks[i]);
     free(pg->blocks);
     free(pg);
+}
+
+/* ---- debugging: box tree dump ---- */
+static void dump_box(box_t *b, int depth, float ax, float ay, void (*out)(const char *)) {
+    if (depth > 60) return;
+    char line[512]; int o = 0;
+    for (int i = 0; i < depth && o < 120; i++) line[o++] = ' ';
+    const char *kind = b->kind == K_TEXT ? "#text" : b->kind == K_BR ? "br" : b->kind == K_MARKER ? "marker" : NULL;
+    char tag[32] = "anon", cls[64] = "";
+    if (b->el) {
+        size_t l = 0;
+        const lxb_char_t *t = lxb_dom_element_local_name(b->el, &l);
+        snprintf(tag, sizeof tag, "%.*s", (int)l, (const char *)t);
+        const lxb_char_t *c = lxb_dom_element_get_attribute(b->el, (const lxb_char_t *)"class", 5, &l);
+        if (c) snprintf(cls, sizeof cls, ".%.*s", (int)(l < 50 ? l : 50), (const char *)c);
+    }
+    if (b->kind == K_TEXT) {
+        snprintf(line + o, sizeof line - o, "%s \"%.*s\"", kind, (int)(b->tlen < 40 ? b->tlen : 40), b->text);
+    } else {
+        snprintf(line + o, sizeof line - o, "%s%s d=%d in=%d%s%s%s [%.0f,%.0f %.0fx%.0f] frags=%u",
+                 kind ? kind : tag, cls, b->st->display, b->inner, b->outer_inline ? " inl" : "",
+                 b->is_float ? " float" : "", b->is_abs ? " abs" : "", ax, ay, b->w, b->h, b->nfrag);
+    }
+    out(line);
+    for (box_t *c = b->first; c; c = c->next) {
+        bool via_owner = b->kind == K_ELEM && b->outer_inline && b->st->display == D_INLINE;
+        dump_box(c, depth + 1, (via_owner ? ax : ax) + c->x + c->rel_x, (via_owner ? ay : ay) + c->y + c->rel_y, out);
+    }
+}
+
+void web_page_dump(web_page_t *pg, void (*out)(const char *line)) {
+    if (pg && pg->root) dump_box(pg->root, 0, pg->root->x, pg->root->y, out);
 }

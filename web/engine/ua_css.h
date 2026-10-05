@@ -72,4 +72,10 @@ static const char UA_CSS[] =
 "q:before,q:after{content:'\"'}"
 ;
 
+
+/* Quirks mode: tables do not inherit font or alignment (Chrome quirks.css). */
+static const char UA_QUIRKS_CSS[] =
+"table{text-align:start;white-space:normal;line-height:normal;font-weight:normal;font-size:medium;font-style:normal}"
+"body{margin:8px}";
+
 #endif

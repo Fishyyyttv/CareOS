@@ -11,7 +11,8 @@ for f in $(cd "$ROOT/third_party" && find lexbor -name '*.c'); do
 done
 EF="-O2 -g -I$ROOT/third_party -DLEXBOR_STATIC -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-unused-function"
 for f in "$ROOT"/engine/*.c; do
+  case "$f" in */math.c) continue;; esac   # CareOS-only libm subset
   gcc $EF -c "$f" -o "$OUT/engine/$(basename $f .c).o"
 done
-gcc $EF -I"$ROOT/engine" "$ROOT/host/webrender.c" "$OUT"/engine/*.o "$OUT"/lexbor/*.o -lm -o "$OUT/webrender"
+gcc $EF -I"$ROOT/engine" "$ROOT/host/webrender.c" $(ls "$OUT"/engine/*.o | grep -v /math.o) "$OUT"/lexbor/*.o -lm -o "$OUT/webrender"
 echo built "$OUT/webrender"
