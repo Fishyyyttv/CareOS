@@ -711,6 +711,10 @@ void app_pkgmgr_key(window_t *w, char c);
 void app_doom_init(window_t *w);
 void app_doom_draw(window_t *w);
 void app_doom_key(window_t *w, char c);
+void app_pip_init(window_t *w);
+void app_pip_draw(window_t *w);
+void app_pip_click(window_t *w, i32 x, i32 y);
+void app_pip_key(window_t *w, char c);
 
 void app_editor_init(window_t *w);
 void app_editor_draw(window_t *w);

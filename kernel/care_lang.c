@@ -536,6 +536,7 @@ static cl_val_t nat_sys_launch(cl_val_t *args, u32 nargs) {
         { "maze",     APP_MAZE,     "Maze" },
         { "3d",       APP_3D,       "3D Demo" },
         { "doom",     APP_DOOM,     "DOOM" },
+        { "pip",      APP_PIP,      "Pip" },
     };
     for (u32 i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
         if (kstrcmp(args[0].str, table[i].name) == 0) {

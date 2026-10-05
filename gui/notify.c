@@ -45,6 +45,7 @@ static const char *app_label(app_id_t app) {
     case APP_CLOCK:    return "Clock";     case APP_NETMON:   return "NetMon";
     case APP_USERS:    return "Users";     case APP_MAZE:     return "Maze";
     case APP_3D:       return "Wolf3D";    case APP_DOOM:     return "Doom";
+    case APP_PIP:      return "Pip";
     default:           return "CareOS";
     }
 }

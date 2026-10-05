@@ -43,6 +43,7 @@ static const launcher_token_t launcher_apps[] = {
     { "paint",      APP_PAINT    }, { "about",    APP_ABOUT    },
     { "help",       APP_HELP     }, { "maze",     APP_MAZE     },
     { "3d",         APP_3D       }, { "doom",     APP_DOOM     },
+    { "pip",        APP_PIP      },
 };
 
 /* icon token -> glyph, for registry entries that are not builtins. */
@@ -55,6 +56,7 @@ static const launcher_token_t launcher_icons[] = {
     { "clock",    APP_CLOCK    }, { "notes",    APP_NOTES    },
     { "paint",    APP_PAINT    }, { "about",    APP_ABOUT    },
     { "help",     APP_HELP     }, { "generic",  APP_PKGMGR   },
+    { "pip",      APP_PIP      },
 };
 
 /* Categories (spec §11): a static table per app. */
@@ -65,7 +67,7 @@ static u32 app_category(app_id_t app) {
     switch (app) {
     case APP_NOTES: case APP_EDITOR: case APP_PAINT: case APP_TERMINAL: return CAT_MAKE;
     case APP_BROWSER: case APP_NETMON:                                  return CAT_INTERNET;
-    case APP_MAZE: case APP_3D: case APP_DOOM:                          return CAT_GAMES;
+    case APP_MAZE: case APP_3D: case APP_DOOM: case APP_PIP:            return CAT_GAMES;
     case APP_NONE:                                                      return CAT_ALL;
     default:                                                            return CAT_SYSTEM;
     }

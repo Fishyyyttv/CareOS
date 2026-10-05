@@ -234,6 +234,7 @@ C_SRC     := kernel/kernel.c       \
              apps/app_maze.c       \
              apps/app_3d.c         \
              apps/app_doom.c       \
+             apps/app_pip.c        \
              kernel/libc_shim.c
 
 ASM_OBJ   := $(ASM_SRC:.asm=.o)
