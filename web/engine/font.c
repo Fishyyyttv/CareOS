@@ -65,14 +65,22 @@ font_t *font_get(u8 family, u16 weight, u8 italic, float px) {
     int fi = pick_face(family, weight);
     for (int i = 0; i < g_nfonts; i++)
         if (g_fonts[i].face == fi && g_fonts[i].px == px) return &g_fonts[i];
-    font_t *f = &g_fonts[g_nfonts < FONT_SLOTS ? g_nfonts++ : (int)(px) % FONT_SLOTS];
+    /* The page-building task and the UI task both call this: fill the entry
+     * completely, then publish it by bumping the count. Slots are never
+     * reused (1024 distinct sizes is far beyond any page). */
+    if (g_nfonts >= FONT_SLOTS) return &g_fonts[0];
+    font_t *f = &g_fonts[g_nfonts];
     f->face = fi; f->px = px;
-    if (fi < 0) { f->scale = 0; f->asc = px * 0.8f; f->desc = px * 0.2f; f->lh = px * 1.2f; return f; }
-    face_t *fc = &g_faces[fi];
-    f->scale = stbtt_ScaleForMappingEmToPixels(&fc->info, px);
-    f->asc  = fc->ascent * f->scale;
-    f->desc = -fc->descent * f->scale;
-    f->lh   = (fc->ascent - fc->descent + fc->linegap) * f->scale;
+    if (fi < 0) { f->scale = 0; f->asc = px * 0.8f; f->desc = px * 0.2f; f->lh = px * 1.2f; }
+    else {
+        face_t *fc = &g_faces[fi];
+        f->scale = stbtt_ScaleForMappingEmToPixels(&fc->info, px);
+        f->asc  = fc->ascent * f->scale;
+        f->desc = -fc->descent * f->scale;
+        f->lh   = (fc->ascent - fc->descent + fc->linegap) * f->scale;
+    }
+    __sync_synchronize();
+    g_nfonts++;
     return f;
 }
 
@@ -86,7 +94,9 @@ static int glyph_of(face_t *fc, u32 cp, int *adv_unscaled) {
         if (fc->gidx[cp] < 0) {
             int g = stbtt_FindGlyphIndex(&fc->info, (int)cp);
             int a, lsb; stbtt_GetGlyphHMetrics(&fc->info, g, &a, &lsb);
-            fc->gidx[cp] = g; fc->adv[cp] = (i16)a;
+            fc->adv[cp] = (i16)a;               /* advance first: gidx publishes */
+            __sync_synchronize();
+            fc->gidx[cp] = g;
         }
         *adv_unscaled = fc->adv[cp];
         return fc->gidx[cp];
@@ -197,4 +207,10 @@ void font_draw(font_t *f, u32 *cv, int cw, int ch, int stride, const int clip[4]
 
 font_t *style_font(const style_t *st) {
     return font_get(st->font_family, st->font_weight, st->italic, st->font_size);
+}
+
+/* Load every face up front (from web_init) so lazy loading never races
+ * between the page-building task and the UI task. */
+void font_preload(void) {
+    for (int i = 0; i < WEB_FONT_COUNT; i++) face_load(i);
 }

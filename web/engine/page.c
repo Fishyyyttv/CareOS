@@ -2,7 +2,7 @@
 #include "engine.h"
 #include <stdio.h>
 
-void web_init(const web_platform_t *p) { g_web = *p; }
+void web_init(const web_platform_t *p) { g_web = *p; font_preload(); }
 
 static void request_bg_images(page_t *pg, box_t *b, int depth) {
     if (depth > 500) return;
@@ -95,6 +95,7 @@ bool web_page_relayout_if_needed(web_page_t *pg, int vw, int vh) {
     pg->vw = vw; pg->vh = vh;
     pg->need_layout = 0;
     layout_document(pg);
+    pg->generation++;
     return true;
 }
 
@@ -252,3 +253,5 @@ static void dump_box(box_t *b, int depth, float ax, float ay, void (*out)(const 
 void web_page_dump(web_page_t *pg, void (*out)(const char *line)) {
     if (pg && pg->root) dump_box(pg->root, 0, pg->root->x, pg->root->y, out);
 }
+
+uint32_t web_page_generation(web_page_t *pg) { return pg ? pg->generation : 0; }

@@ -208,3 +208,40 @@ unsigned char *data_url_decode(const char *url, size_t *len) {
     *len = o;
     return out;
 }
+
+/* ---- sorting ----
+ * Stable merge sort (the freestanding libc's qsort is an insertion sort,
+ * quadratic on the large declaration lists of framework-heavy pages). */
+static void msort_rec(char *a, char *tmp, size_t n, size_t sz, int (*cmp)(const void *, const void *)) {
+    if (n < 2) return;
+    if (n <= 8) {
+        for (size_t i = 1; i < n; i++)
+            for (size_t j = i; j > 0 && cmp(a + j * sz, a + (j - 1) * sz) < 0; j--) {
+                memcpy(tmp, a + j * sz, sz);
+                memcpy(a + j * sz, a + (j - 1) * sz, sz);
+                memcpy(a + (j - 1) * sz, tmp, sz);
+            }
+        return;
+    }
+    size_t h = n / 2;
+    msort_rec(a, tmp, h, sz, cmp);
+    msort_rec(a + h * sz, tmp, n - h, sz, cmp);
+    if (cmp(a + (h - 1) * sz, a + h * sz) <= 0) return;      /* already ordered */
+    size_t i = 0, j = h, k = 0;
+    while (i < h && j < n) {
+        if (cmp(a + j * sz, a + i * sz) < 0) { memcpy(tmp + k * sz, a + j * sz, sz); j++; }
+        else { memcpy(tmp + k * sz, a + i * sz, sz); i++; }
+        k++;
+    }
+    while (i < h) { memcpy(tmp + k * sz, a + i * sz, sz); i++; k++; }
+    while (j < n) { memcpy(tmp + k * sz, a + j * sz, sz); j++; k++; }
+    memcpy(a, tmp, n * sz);
+}
+
+void w_sort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void *)) {
+    if (n < 2) return;
+    char *tmp = (char *)malloc(n * sz);
+    if (!tmp) { qsort(base, n, sz, cmp); return; }
+    msort_rec((char *)base, tmp, n, sz, cmp);
+    free(tmp);
+}

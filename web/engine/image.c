@@ -15,6 +15,8 @@
 
 #define IMG_MAX_PIXELS (4096 * 4096)
 #define IMG_MAX_COUNT  160
+#define IMG_KEEP_PIXELS (1600 * 1200)      /* decoded copies are halved beyond this */
+#define IMG_PAGE_BUDGET (48u << 20)        /* decoded bytes per page */
 
 web_img_t *img_request(page_t *pg, const char *url) {
     if (!url || !*url) return NULL;
@@ -54,16 +56,34 @@ bool img_load(page_t *pg, web_img_t *im) {
     unsigned char *rgba = stbi_load_from_memory(data, (int)len, &w, &h, &comp, 4);
     free(data);
     if (!rgba) { im->state = 2; return false; }
-    u32 *px = (u32 *)malloc((size_t)w * h * 4);
+    /* Very large images are halved (box filter) until they fit the per-image
+     * cap; pages almost never display them at full resolution. */
+    int step = 1;
+    while ((size_t)(w / step) * (h / step) > IMG_KEEP_PIXELS && step < 16) step *= 2;
+    int ow = w / step, oh = h / step;
+    if (ow < 1) ow = 1;
+    if (oh < 1) oh = 1;
+    size_t bytes = (size_t)ow * oh * 4;
+    if (pg->img_bytes + bytes > IMG_PAGE_BUDGET) { stbi_image_free(rgba); im->state = 2; return false; }
+    u32 *px = (u32 *)malloc(bytes);
     if (!px) { stbi_image_free(rgba); im->state = 2; return false; }
-    for (size_t i = 0, n = (size_t)w * h; i < n; i++) {
-        const unsigned char *p = rgba + i * 4;
-        px[i] = ((u32)p[3] << 24) | ((u32)p[0] << 16) | ((u32)p[1] << 8) | p[2];
-    }
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < ow; x++) {
+            u32 a = 0, r = 0, g = 0, b = 0;
+            for (int dy = 0; dy < step; dy++)
+                for (int dx = 0; dx < step; dx++) {
+                    const unsigned char *p = rgba + ((size_t)(y * step + dy) * w + (x * step + dx)) * 4;
+                    r += p[0]; g += p[1]; b += p[2]; a += p[3];
+                }
+            u32 n = (u32)(step * step);
+            px[(size_t)y * ow + x] = ((a / n) << 24) | ((r / n) << 16) | ((g / n) << 8) | (b / n);
+        }
     stbi_image_free(rgba);
-    im->w = w; im->h = h; im->px = px;
+    pg->img_bytes += bytes;
+    im->w = ow; im->h = oh; im->px = px;
     __sync_synchronize();
     im->state = 1;
+    pg->generation++;
     return true;
 }
 

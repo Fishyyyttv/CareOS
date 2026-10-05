@@ -32,7 +32,7 @@ endif
 
 KERN_CFLAGS := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
-               -Iinclude -Iinclude/libc -Igui -fno-builtin \
+               -Iinclude -Iinclude/libc -Igui -Iweb/engine -Iweb/third_party -fno-builtin \
                -mno-red-zone -mno-mmx -mno-sse -mno-sse2 $(BUILD_DEFS)
 
 APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
@@ -230,6 +230,12 @@ C_SRC     := kernel/kernel.c       \
 ASM_OBJ   := $(ASM_SRC:.asm=.o)
 C_OBJ     := $(C_SRC:.c=.o)
 DOOM_OBJ  := $(DOOM_SRC:.c=.o)
+WEB_SRC   := $(wildcard web/engine/*.c) $(shell find web/third_party/lexbor -name '*.c')
+WEB_OBJ   := $(WEB_SRC:.c=.o)
+WEB_FONT_SRC := fonts/IBMPlexSans-Regular.ttf fonts/IBMPlexSans-Bold.ttf \
+                fonts/IBMPlexMono-Regular.ttf fonts/IBMPlexMono-Bold.ttf
+WEB_FONT_OBJ := web/font_sans.o web/font_sans_bold.o web/font_mono.o web/font_mono_bold.o
+
 
 # Baked GUI assets. The icon theme is rendered offline by tools/gen-icons.py
 # into one .cra archive and linked in with objcopy, exactly like DOOM1.WAD --
@@ -242,8 +248,9 @@ ICON_ARCHIVE := assets/careos-icons.cra
 FP_OBJ    := $(patsubst %.c,%.o,$(filter apps/%.c,$(C_SRC)))
 $(FP_OBJ): CFLAGS := $(FP_CFLAGS)
 
-ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o $(ICON_ARCHIVE).o
+ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(WEB_OBJ) $(WEB_FONT_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o $(ICON_ARCHIVE).o
 
+$(WEB_OBJ): CFLAGS := $(FP_CFLAGS) -Iweb/engine -Iweb/third_party -DLEXBOR_STATIC -DNDEBUG
 .PHONY: all run run-1080p run-kvm run-whpx run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk host-test
 
 all: $(DISK) careos.iso
@@ -269,6 +276,23 @@ kernel/libc_shim.o: kernel/libc_shim.c
 %.o: %.c
 	@echo "  CC    $<"
 	$(CC) $(CFLAGS) -c -o $@ $<
+web/font_sans.o: fonts/IBMPlexSans-Regular.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Regular_ttf_start=web_font_sans_start \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Regular_ttf_end=web_font_sans_end $< $@
+web/font_sans_bold.o: fonts/IBMPlexSans-Bold.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Bold_ttf_start=web_font_sans_bold_start \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Bold_ttf_end=web_font_sans_bold_end $< $@
+web/font_mono.o: fonts/IBMPlexMono-Regular.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Regular_ttf_start=web_font_mono_start \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Regular_ttf_end=web_font_mono_end $< $@
+web/font_mono_bold.o: fonts/IBMPlexMono-Bold.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Bold_ttf_start=web_font_mono_bold_start \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Bold_ttf_end=web_font_mono_bold_end $< $@
+
 
 # Rebuild objects that read BUILD_DEFS whenever the flag set changes.
 .build-defs: FORCE

@@ -33,6 +33,7 @@ const char *w_istr(const char *hay, size_t hlen, const char *needle);
 void   url_resolve(const char *base, const char *ref, char *out, size_t cap);
 u32    utf8_next(const char **p, const char *end);
 unsigned char *data_url_decode(const char *url, size_t *len);
+void   w_sort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void *));
 
 /* ---------- lengths ---------- */
 enum { L_AUTO = 0, L_PX, L_PCT, L_NONE, L_FR, L_EM_UNRESOLVED };
@@ -184,6 +185,8 @@ struct web_page {
     int   vw, vh;                /* viewport the layout was made for */
     float doc_h, doc_w;
     volatile int need_layout;
+    volatile u32 generation;      /* bumps when pixels may have changed */
+    size_t img_bytes;             /* decoded image memory (budgeted) */
     web_img_t *imgs; int nimg_pending;
     lxb_css_parser_t *css_parser;
     lxb_css_stylesheet_t *sheets[64]; int nsheets;
@@ -237,6 +240,7 @@ void    font_draw(font_t *f, u32 *canvas, int cw, int ch, int stride,
                   const char *s, u32 n, u32 color, float letter_sp, u8 italic,
                   float alpha);
 font_t *style_font(const style_t *st);
+void    font_preload(void);
 
 /* paint.c */
 typedef struct {

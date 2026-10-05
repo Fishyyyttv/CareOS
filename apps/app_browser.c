@@ -4,6 +4,7 @@
 #include "browser_fetch.h"
 #include "font.h"
 #include "ui.h"
+#include "../web/engine/web.h"
 
 /* ── Layout ──────────────────────────────────────────────────────── */
 #define BROW_BAR_H    56
@@ -29,6 +30,35 @@ static u32     g_nlinks;
 static char g_status[96] = "Ready";
 static bool s_redirecting = false;  /* navigate() called for a redirect or fallback */
 static char s_url_before_edit[256]; /* URL to restore if a Ctrl+L edit is cancelled */
+
+/* ── Native engine (Weave) glue ──────────────────────────────────────
+ * Pages are built by the fetch task (browser_fetch.c); the GUI only lays
+ * out (on resize / image arrival) and paints. Pages go back to the fetch
+ * module for freeing because its task may still be loading their images. */
+static void browser_engine_drop(window_t *w) {
+    if (w->browser_page) {
+        browser_fetch_release_page(w->browser_page);
+        w->browser_page = NULL;
+    }
+    w->bview_valid = false;
+}
+
+/* Viewport for page layout: the last painted content area, or a default. */
+static void browser_viewport(window_t *w, i32 *vw, i32 *vh) {
+    *vw = w->bview_w > 64 ? w->bview_w : 1024;
+    *vh = w->bview_h > 64 ? w->bview_h : 700;
+}
+
+/* Install a page built from local HTML (error pages). It must not reference
+ * external resources: this runs on the GUI task. */
+static void browser_engine_load(window_t *w, const char *url, const char *html, u32 len) {
+    browser_engine_drop(w);
+    browser_engine_init();
+    i32 vw, vh; browser_viewport(w, &vw, &vh);
+    w->browser_page = web_page_load(url, html, len, vw, vh);
+    if (w->browser_page && web_page_title(w->browser_page)[0])
+        kstrncpy(w->browser_title, web_page_title(w->browser_page), 127);
+}
 
 /* ── Forward declarations ────────────────────────────────────────── */
 static void app_browser_navigate(window_t *w, const char *url);
@@ -543,40 +573,8 @@ static i32 render_html(rctx_t *c, const char *html) {
 }
 
 /* ── Navigation ──────────────────────────────────────────────────── */
-/* Apply a raw HTTP(S) response to the window: redirects, chunked bodies (for
- * HTTPS too -- it was never de-chunked, so pages showed hex chunk sizes),
- * case-insensitive headers, title, content, status and history. */
-static void browser_apply_response(window_t *w, const char *url, const char *host, int n) {
-    g_resp[n] = '\0';
-    int code = http_status_code(g_resp, (u32)n);
-    if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) &&
-        w->browser_redirects < 6) {
-        char loc[512];
-        if (http_header(g_resp, (u32)n, "Location", loc, sizeof loc)) {
-            char next[512]; http_url_resolve(url, loc, next, sizeof next);
-            w->browser_redirects++;
-            s_redirecting = true; app_browser_navigate(w, next); s_redirecting = false;
-            return;                              /* still loading: the next hop */
-        }
-    }
-    u32 off = http_body_offset(g_resp, (u32)n);
-    char *body = g_resp + off;
-    u32 blen = (u32)n - off;
-    if (http_is_chunked(g_resp, (u32)n)) blen = http_dechunk(body, blen);
-    if (blen >= BROW_CONT_MAX) blen = BROW_CONT_MAX - 1;
-    extract_title(body, w->browser_title, 127);
-    if (!w->browser_title[0]) kstrncpy(w->browser_title, host, 127);
-    kmemcpy(w->browser_content, body, blen);
-    w->browser_content[blen] = '\0';
-    w->browser_content_ver++;
-    browser_save_tab(w);
-    ksprintf(g_status, "%s  %d bytes%s", host, (int)blen,
-             kstrncmp(url, "https://", 8) == 0 ? " (HTTPS)" : "");
-    if (w->browser_push_history) { history_push(w, url); w->browser_push_history = false; }
-    w->browser_loading = false;
-}
-
 static void app_browser_navigate(window_t *w, const char *url) {
+    browser_engine_drop(w);
     kstrncpy(w->browser_url, url, 255);
     w->browser_scroll = 0;
     if (!s_redirecting) { w->browser_redirects = 0; }
@@ -601,6 +599,8 @@ static void app_browser_navigate(window_t *w, const char *url) {
     for (u32 i = 0; i < 127 && h[i] && h[i] != '/'; i++) host[i] = h[i];
     ksprintf(g_status, "Connecting to %s...", host);
     w->browser_loading = true;
+    i32 vw, vh; browser_viewport(w, &vw, &vh);
+    browser_fetch_set_viewport(vw, vh);
     browser_fetch_submit(w->instance_id, w->browser_tab_sel, url);
 }
 
@@ -660,10 +660,9 @@ static void tab_show(window_t *w, u32 ts) {
     kstrncpy(w->browser_title, w->browser_tab_title[ts], 127);
     w->browser_scroll = w->browser_tab_scroll[ts];
     w->browser_content_ver++;
-    if (w->browser_tab_loaded[ts] && w->browser_tab_content[ts]) {
-        kmemcpy(w->browser_content, w->browser_tab_content[ts], w->browser_tab_len[ts] + 1);
-        w->browser_loading = false;
-    } else if (kstrncmp(w->browser_url, "about:", 6) != 0 && w->browser_url[0]) {
+    /* Pages are rebuilt by the fetch task (stylesheets come from its cache),
+     * never on the GUI task. */
+    if (kstrncmp(w->browser_url, "about:", 6) != 0 && w->browser_url[0]) {
         i32 keep_scroll = w->browser_scroll;
         app_browser_navigate(w, w->browser_url);
         w->browser_scroll = keep_scroll;
@@ -761,6 +760,7 @@ void app_browser_init(window_t *w) {
     kstrcpy(w->browser_url,   "about:home");
     kstrcpy(w->browser_title, "New Tab");
     w->browser_content[0]    = '\0';
+    w->browser_page         = NULL;
     w->browser_loading       = false;
     w->browser_url_active    = true;
     w->browser_scroll        = 0;
@@ -1199,7 +1199,7 @@ static void browser_draw_impl(window_t *w) {
         goto menu;
     }
 
-    if (kstrncmp(w->browser_url, "about:", 6)==0 || w->browser_content[0]=='\0') {
+    if (kstrncmp(w->browser_url, "about:", 6)==0 || (w->browser_content[0]=='\0' && !w->browser_page)) {
         draw_home(w, rect_make(cr.x, cont_y, cr.w, cont_h));
         gfx_clear_clip();
         goto menu;
@@ -1213,6 +1213,49 @@ static void browser_draw_impl(window_t *w) {
         ctx.rm = cr.x + cr.w - 8; ctx.ct = cont_y; ctx.cb = cont_y + cont_h;
         ctx.fg = COL_DIM; ctx.pre = true;
         render_html(&ctx, w->browser_content);
+        gfx_clear_clip();
+        goto menu;
+    }
+
+    /* Native Weave renderer. The page is painted into a window-owned canvas
+     * that is only repainted when the page, scroll position, viewport or the
+     * page's generation (layout change / image arrival) changes; otherwise
+     * the cached pixels are blitted. Images load in the fetch task. */
+    if (w->browser_page) {
+        web_page_t *pg = w->browser_page;
+        web_page_relayout_if_needed(pg, cr.w, cont_h);
+        i32 total_h = web_page_height(pg);
+        i32 max_sc = total_h > cont_h ? total_h - cont_h : 0;
+        if (w->browser_scroll > max_sc) w->browser_scroll = max_sc;
+        if (w->browser_scroll < 0) w->browser_scroll = 0;
+        if (cr.w > 0 && cont_h > 0) {
+            if (w->bview_px && (w->bview_w != cr.w || w->bview_h != cont_h)) {
+                kfree(w->bview_px); w->bview_px = NULL; w->bview_valid = false;
+            }
+            if (!w->bview_px) {
+                w->bview_px = (u32 *)kmalloc((size_t)cr.w * (size_t)cont_h * 4u);
+                w->bview_valid = false;
+            }
+            if (w->bview_px) {
+                u32 gen = web_page_generation(pg) ^ (u32)(uintptr_t)pg;
+                if (!w->bview_valid || w->bview_scroll != w->browser_scroll || w->bview_ver != gen) {
+                    web_page_paint(pg, w->bview_px, cr.w, cont_h, cr.w, 0, w->browser_scroll);
+                    w->bview_w = cr.w; w->bview_h = cont_h;
+                    w->bview_scroll = w->browser_scroll; w->bview_ver = gen;
+                    w->bview_valid = true;
+                }
+                gfx_blit_argb(cr.x, cont_y, w->bview_px, cr.w, cont_h, cr.x, cont_y, cr.w, cont_h);
+            }
+        }
+        if (max_sc > 0) {
+            i32 sb_x = cr.x + cr.w - 7;
+            i32 sb_h = (cont_h * cont_h) / (total_h > 1 ? total_h : 1);
+            if (sb_h < 24) sb_h = 24;
+            i32 rng = cont_h - sb_h;
+            i32 sb_y = cont_y + (i32)((i64)w->browser_scroll * rng / max_sc);
+            gfx_rect(sb_x, cont_y, 7, cont_h, COL_SURFACE2);
+            gfx_rect_rounded(sb_x + 1, sb_y, 5, sb_h, 3, COL_DIM);
+        }
         gfx_clear_clip();
         goto menu;
     }
@@ -1425,7 +1468,7 @@ void app_browser_key(window_t *w, char c) {
             return;
         }
         if (c >= 32 && c < 127) {
-            if (!kstrncmp(w->browser_url, "about:", 6)) w->browser_url[0] = ' ';   /* typing replaces about:home */
+            if (!kstrncmp(w->browser_url, "about:", 6)) w->browser_url[0] = '\0';   /* typing replaces about:home */
             u32 l = kstrlen(w->browser_url);
             if (l < 254) { w->browser_url[l]=c; w->browser_url[l+1]='\0'; }
         }
@@ -1528,6 +1571,15 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
             return;
         }
     }
+    if (w->browser_page) {
+        char abs[1024];
+        if (web_page_link_at(w->browser_page, x - cr.x, y - cont_y + w->browser_scroll,
+                             abs, sizeof(abs))) {
+            w->browser_push_history = true;
+            app_browser_navigate(w, abs);
+            return;
+        }
+    }
 }
 
 /* Called every GUI loop iteration for a browser window that is loading:
@@ -1535,7 +1587,8 @@ void app_browser_click(window_t *w, i32 x, i32 y) {
 void app_browser_tick(window_t *w) {
     if (!w->browser_loading) return;
     char url[512]; int n = 0;
-    if (!browser_fetch_take(w->instance_id, w->browser_tab_sel, url, sizeof url, &n)) {
+    web_page_t *pg = NULL;
+    if (!browser_fetch_take(w->instance_id, w->browser_tab_sel, url, sizeof url, &n, &pg)) {
         if (!browser_fetch_busy(w->instance_id, w->browser_tab_sel)) {
             w->browser_loading = false;          /* another window/tab took the worker */
             kstrcpy(g_status, "Stopped");
@@ -1548,6 +1601,7 @@ void app_browser_tick(window_t *w) {
     else if (!kstrncmp(url, "http://", 7)) h = url + 7;
     for (u32 i = 0; i < 127 && h[i] && h[i] != '/'; i++) host[i] = h[i];
     if (n <= 0) {
+        if (pg) browser_fetch_release_page(pg);
         if (w->browser_autohttps && !kstrncmp(url, "https://", 8)) {
             /* Typed a bare domain and HTTPS failed: try plain HTTP. */
             char alt[512]; ksprintf(alt, "http://%s", url + 8);
@@ -1562,17 +1616,46 @@ void app_browser_tick(window_t *w) {
         bool tls = !kstrncmp(url, "https://", 8);
         const char *why = (tls && g_net_diag[0]) ? g_net_diag
                         : (err && err[0]) ? err : "No response (timeout)";
-        ksprintf(w->browser_content, "<h1>Connection Failed</h1><p>Could not load %s.</p><p>%s</p>",
+        ksprintf(w->browser_content,
+                 "<html><body style='font-family:sans-serif;margin:48px;color:#333'>"
+                 "<h1 style='font-weight:600'>Can't reach this page</h1>"
+                 "<p>Could not load <b>%s</b>.</p><p style='color:#777'>%s</p></body></html>",
                  host, why);
         kstrcpy(w->browser_title, "Error");
         w->browser_content_ver++;
+        browser_engine_load(w, url, w->browser_content, (u32)kstrlen(w->browser_content));
         ksprintf(g_status, "Failed: %s", host);
         w->browser_loading = false;
         w->browser_push_history = false;
         return;
     }
-    if ((u32)n >= browser_fetch_buffer_size()) n = (int)browser_fetch_buffer_size() - 1;
-    browser_apply_response(w, url, host, n);
+    /* Success. The final URL may differ after redirects. */
+    kstrncpy(w->browser_url, url, 255);
+    const char *body = browser_fetch_buffer();
+    u32 blen = (u32)kstrlen(body);
+    if (blen >= BROW_CONT_MAX) blen = BROW_CONT_MAX - 1;
+    kmemcpy(w->browser_content, body, blen);       /* source view / legacy renderer */
+    w->browser_content[blen] = '\0';
+    w->browser_content_ver++;
+    browser_engine_drop(w);
+    w->browser_page = pg;                          /* NULL: legacy text renderer */
+    w->browser_title[0] = '\0';
+    if (pg && web_page_title(pg)[0]) kstrncpy(w->browser_title, web_page_title(pg), 127);
+    else extract_title(w->browser_content, w->browser_title, 127);
+    if (!w->browser_title[0]) kstrncpy(w->browser_title, host, 127);
+    /* #fragment: jump to the anchor */
+    const char *frag = kstrchr(url, '#');
+    if (pg && frag && frag[1]) {
+        int ay = web_page_anchor_y(pg, frag + 1);
+        if (ay >= 0) w->browser_scroll = ay;
+    }
+    browser_save_tab(w);
+    ksprintf(g_status, "%s  %d KB%s", host, n / 1024,
+             kstrncmp(url, "https://", 8) == 0 ? " (HTTPS)" : "");
+    if (w->browser_push_history) { history_push(w, url); w->browser_push_history = false; }
+    w->browser_loading = false;
 }
 
 void app_browser_open_url(window_t *w, const char *url) { smart_navigate(w, url); }
+
+void app_browser_close(window_t *w) { browser_engine_drop(w); }

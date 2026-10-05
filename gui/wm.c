@@ -352,6 +352,7 @@ static void wm_finish_close(window_t *w) {
     if (w->app_state) { kfree(w->app_state); w->app_state = NULL; }
     if (w->app == APP_BROWSER) {
         browser_fetch_cancel(w->instance_id);
+        app_browser_close(w);
         if (w->bview_px) { kfree(w->bview_px); w->bview_px = NULL; }
         if (w->browser_links) { kfree(w->browser_links); w->browser_links = NULL; }
         for (int t = 0; t < 4; t++)

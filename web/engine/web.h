@@ -53,6 +53,9 @@ int  web_page_load_images(web_page_t *pg, int max_images);
 bool web_page_relayout_if_needed(web_page_t *pg, int viewport_w, int viewport_h);
 
 int         web_page_height(web_page_t *pg);       /* document height, px */
+/* Changes whenever a repaint could produce different pixels (an image
+ * arrived, layout changed). Lets callers cache the painted viewport. */
+uint32_t    web_page_generation(web_page_t *pg);
 int         web_page_width(web_page_t *pg);        /* document width, px  */
 const char *web_page_title(web_page_t *pg);
 const char *web_page_url(web_page_t *pg);

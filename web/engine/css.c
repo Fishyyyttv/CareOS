@@ -2185,7 +2185,7 @@ style_t *css_compute(page_t *pg, lxb_dom_element_t *el, const style_t *ps) {
     dlist_t dl[3] = {{0}};
     lxb_dom_element_style_walk(el, walk_cb, dl, true);
     for (int k = 0; k < 3; k++)
-        if (dl[k].n > 1) qsort(dl[k].d, (size_t)dl[k].n, sizeof(decl_t), decl_cmp);
+        if (dl[k].n > 1) w_sort(dl[k].d, (size_t)dl[k].n, sizeof(decl_t), decl_cmp);
 
     st->custom_props = build_customs(pg, ps->custom_props, dl[0].d, dl[0].n);
 

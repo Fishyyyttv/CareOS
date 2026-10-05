@@ -68,7 +68,7 @@ void layout_flex(page_t *pg, box_t *b, float cw, float sh) {
         c->list_index = k;
         it[k++].b = c;
     }
-    qsort(it, (size_t)n, sizeof(fitem_t), cmp_order);
+    w_sort(it, (size_t)n, sizeof(fitem_t), cmp_order);
 
     /* base sizes */
     for (int i = 0; i < n; i++) {

@@ -16,6 +16,9 @@ void exit(int status);
 char *getenv(const char *name);
 int atoi(const char *nptr);
 long atol(const char *nptr);
+long strtol(const char *nptr, char **endptr, int base);
+unsigned long strtoul(const char *nptr, char **endptr, int base);
+float strtof(const char *nptr, char **endptr);
 
 void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
 

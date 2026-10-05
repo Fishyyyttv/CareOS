@@ -9,6 +9,8 @@
 #include "kernel.h"
 #include "window_chrome.h"
 
+typedef struct web_page web_page_t;
+
 /* -- Screen dimensions (set at runtime from multiboot) -------------------- */
 extern u32 SCREEN_W;
 extern u32 SCREEN_H;
@@ -341,6 +343,7 @@ typedef struct window {
     bool  browser_push_history;  /* record the URL once this load finishes */
     bool  browser_autohttps;     /* https:// was assumed; retry http:// on failure */
     u32   browser_content_ver;   /* bumped whenever the shown page changes */
+    web_page_t *browser_page;    /* native renderer page, when a document is loaded */
     /* This window's link hit-boxes (blink_t[], apps/app_browser.c) as drawn,
      * plus the window position they were drawn at. */
     void *browser_links;
@@ -858,6 +861,7 @@ void app_sysmon_click(window_t *w, i32 x, i32 y);
 void app_browser_click(window_t *w, i32 x, i32 y);
 void app_browser_scroll(window_t *w, i32 delta);
 void app_browser_tick(window_t *w);                  /* apply a finished background fetch */
+void app_browser_close(window_t *w);                 /* release native page resources */
 void app_browser_open_url(window_t *w, const char *url);
 void browser_fetch_cancel(u32 owner);   /* apps/browser_fetch.c */
 void app_terminal_scroll(window_t *w, i32 delta);   /* + = back in history */

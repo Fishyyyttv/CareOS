@@ -480,7 +480,24 @@ double fabs(double x) { return (x < 0) ? -x : x; }
 void *memset(void *s, int c, size_t n) { return kmemset(s, c, n); }
 
 void *memcpy(void *dest, const void *src, size_t n) { return kmemcpy(dest, src, n); }
+void *memmove(void *dest, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dest; const unsigned char *s = (const unsigned char *)src;
+    if (d == s) return dest;
+    if (d < s) for (size_t i = 0; i < n; i++) d[i] = s[i];
+    else for (size_t i = n; i-- > 0;) d[i] = s[i];
+    return dest;
+}
 int memcmp(const void *s1, const void *s2, size_t n) { return kmemcmp(s1, s2, n); }
+void *memchr(const void *s, int c, size_t n) {
+    const unsigned char *p = (const unsigned char *)s;
+    for (size_t i = 0; i < n; i++) if (p[i] == (unsigned char)c) return (void *)(p + i);
+    return NULL;
+}
+
+char *strpbrk(const char *s, const char *accept) {
+    for (; *s; s++) for (const char *a = accept; *a; a++) if (*s == *a) return (char *)s;
+    return NULL;
+}
 size_t strlen(const char *s) { return kstrlen(s); }
 int strcmp(const char *s1, const char *s2) { return kstrcmp(s1, s2); }
 int strncmp(const char *s1, const char *s2, size_t n) { return kstrncmp(s1, s2, n); }
@@ -492,6 +509,42 @@ char *strncpy(char *dest, const char *src, size_t n) {
     for (; i < n && src[i]; i++) dest[i] = src[i];
     for (; i < n; i++) dest[i] = '\0';
     return dest;
+}
+
+static unsigned long shim_strtoul(const char *s, char **end, int base) {
+    const char *p = s; while (isspace((unsigned char)*p)) p++;
+    bool neg = false; if (*p == '+' || *p == '-') { neg = *p++ == '-'; }
+    if (base == 0) { base = 10; if (p[0] == '0') { base = 8; if (p[1] == 'x' || p[1] == 'X') { base = 16; p += 2; } } }
+    unsigned long v = 0; const char *first = p;
+    for (;;) {
+        int d = (*p >= '0' && *p <= '9') ? *p - '0' : (*p >= 'a' && *p <= 'z') ? *p - 'a' + 10 : (*p >= 'A' && *p <= 'Z') ? *p - 'A' + 10 : -1;
+        if (d < 0 || d >= base) break;
+        v = v * (unsigned)base + (unsigned)d; p++;
+    }
+    if (end) *end = (char *)(p == first ? s : p);
+    return neg ? (unsigned long)(-(long)v) : v;
+}
+long strtol(const char *s, char **end, int base) { return (long)shim_strtoul(s, end, base); }
+unsigned long strtoul(const char *s, char **end, int base) { return shim_strtoul(s, end, base); }
+float strtof(const char *s, char **end) {
+    const char *p = s; while (isspace((unsigned char)*p)) p++;
+    bool neg = false; if (*p == '+' || *p == '-') { neg = *p++ == '-'; }
+    float v = 0; bool any = false;
+    while (*p >= '0' && *p <= '9') { v = v * 10.0f + (float)(*p++ - '0'); any = true; }
+    if (*p == '.') { p++; float q = 0.1f; while (*p >= '0' && *p <= '9') { v += (*p++ - '0') * q; q *= 0.1f; any = true; } }
+    if (end) *end = (char *)(any ? p : s);
+    return neg ? -v : v;
+}
+
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
+    unsigned char *a = (unsigned char *)base;
+    for (size_t i = 1; i < nmemb; i++) {
+        size_t j = i;
+        while (j > 0 && compar(a + j * size, a + (j - 1) * size) < 0) {
+            for (size_t k = 0; k < size; k++) { unsigned char t = a[j * size + k]; a[j * size + k] = a[(j - 1) * size + k]; a[(j - 1) * size + k] = t; }
+            j--;
+        }
+    }
 }
 
 /* -- ctype.h -- */

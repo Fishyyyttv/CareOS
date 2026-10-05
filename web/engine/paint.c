@@ -500,7 +500,7 @@ static void paint_context(page_t *pg, canvas_t *c, box_t *b, float x, float y, i
     float saved_alpha = c->alpha;
     paint_box(pg, c, b, x, y, &sl, depth);
     if (b->st->opacity < 1) c->alpha *= b->st->opacity;
-    if (sl.n > 1) qsort(sl.v, (size_t)sl.n, sizeof(stack_ent_t), cmp_stack);
+    if (sl.n > 1) w_sort(sl.v, (size_t)sl.n, sizeof(stack_ent_t), cmp_stack);
     for (int i = 0; i < sl.n; i++) {
         stack_ent_t *e = &sl.v[i];
         int saved[4]; memcpy(saved, c->clip, sizeof saved);
