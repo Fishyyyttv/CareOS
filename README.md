@@ -1,82 +1,84 @@
-# 🖥️ CareOS
+# CareOS
 
-A custom 64-bit operating system built from scratch — featuring a graphical environment, custom apps, and even DOOM running natively inside it. (No it will actually crash but oh well.)
+A 64-bit operating system written from scratch in C and assembly: its own kernel, window manager, desktop shell, apps, web browser engine, and a friendly desktop assistant called **Pip**.
 
----
-
-## ✨ About
-
-CareOS is a low-level operating system project focused on understanding how systems actually work — from the kernel to the UI.
-
-It combines core OS concepts (memory, multitasking, rendering) with higher-level features like a window manager and applications.
-
-This is not just a kernel demo — it's an evolving, full system.
+CareOS boots with GRUB (Multiboot2), draws everything itself on a linear framebuffer, and runs in QEMU or VirtualBox.
 
 ---
 
-## 🚀 Features
+## Highlights
 
-### 🧠 Kernel
-- 64-bit x86_64 architecture
-- Written in C + Assembly
-- Paging-based memory management
-- Basic multitasking
-- Custom libc implementation (headers + shim layer)
+**Desktop**
+- Glass-style shell with a menu bar, dock, launcher (tap `Super`), Control Center, notifications and widgets
+- Dark, light and auto themes, accent colours, wallpapers, real blurred glass
+- Window manager with snapping, four workspaces (`Ctrl+1`..`Ctrl+4`), animations and a lock screen
+- Accounts with sign-in, guest sessions and per-user settings
 
----
+**Pip, your desktop companion**
+- An animated character who lives by the dock: idles, wanders, naps, reacts to what you do
+- Click Pip to open his Home: chat with him, check his mood, dress him up
+- Pip can really do things: open apps, jump to a Settings page, find files, switch dark/light mode, lock the screen, report time, memory, network and open windows, and explain how CareOS features work
+- He asks before anything risky, never deletes files, and tells you when something is not supported yet
+- Turn him on or off, hide him, reduce animations or silence his tips in **Settings > Pip**; choices are saved per user
 
-### 🎨 Graphics / Window Manager
-- Custom window manager
-- 32-bit linear framebuffer rendering
-- Window focus + z-order system
-- Taskbar
-- Basic UI rendering + drawing routines
+**Apps**
 
----
+| App | What it does |
+|---|---|
+| Terminal | Shell with `ls`, `cd`, `cat`, `ping`, `carepkg`, `care`, history and Tab completion |
+| Files | Browse folders on the ext2 disk |
+| Notes | Markdown notes saved in your home folder |
+| Editor | Write and run scripts in the **Care** language |
+| Browser | Native engine with HTML, CSS, layout, forms and JavaScript (QuickJS) |
+| Packages | Install, update and remove `.care` packages |
+| Settings | Network, display, appearance, sound, notifications, date and time, accounts, storage, Pip |
+| System Monitor, Network Monitor, Calculator, Clock, Paint, Users | The everyday tools |
+| Maze, 3D demo, DOOM | Games and demos (DOOM needs your own `DOOM1.WAD`) |
 
-### 🎮 Applications
-
-| App        | Description |
-|------------|------------|
-| 🎮 DOOM    | DOOM port using doomgeneric, runs inside CareOS |
-| 🧱 3D Demo | Basic 3D rendering experiment |
-| 🧩 Maze    | Simple interactive demo application |
-
----
-
-### ⚙️ System
-- App launching system
-- Internal app framework
-- Modular structure for adding new programs
-
----
-
-## 🧱 Tech Stack
-
-| Layer        | Technology |
-|-------------|-----------|
-| Kernel       | C, x86_64 Assembly |
-| Bootloader   | GRUB (Multiboot2) |
-| Build System | GNU Make, GCC, NASM |
-| Runtime      | QEMU |
-| Graphics     | 32-bpp Linear Framebuffer |
+**Under the hood**
+- x86_64 long mode, paging, a scheduler, syscalls and ring 3 user programs
+- ATA disk driver, ext2 filesystem, VFS
+- e1000 network driver with an IP stack and TLS
+- Software-rendered UI: custom vector icons, runtime fonts, an integer rasterizer for Pip
+- Host-side unit tests for the pure logic (`make host-test`)
 
 ---
 
-## 🚀 Getting Started
+## Build and run
 
-### 📦 Requirements
-
-- `gcc` (cross-compiler recommended)
-- `nasm`
-- `make`
-- `qemu-system-x86_64`
-- `grub-mkrescue`
-
----
-
-### 🔧 Build & Run
+You need `gcc`, `nasm`, `make`, `grub-mkrescue` (with `xorriso`) and `qemu-system-x86_64`. On Windows, use WSL.
 
 ```bash
-make clean
-make run
+./setup.sh        # installs dependencies on Debian/Ubuntu, builds, and launches QEMU
+# or, by hand:
+make              # builds careos.iso and the disk image
+make run          # boots it in QEMU
+make host-test    # runs the unit tests on your host compiler
+```
+
+Other targets: `make run-1080p`, `make run-kvm`, `make run-whpx`, `make run-nowindow`.
+
+DOOM is optional. Put a `DOOM1.WAD` in the repository root before building if you want it; it is not included.
+
+To try it in VirtualBox, create a 64-bit "Other" VM, attach `careos.iso`, and use an Intel PRO/1000 network adapter.
+
+---
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `boot/`, `kernel/`, `drivers/`, `net/` | Boot code, kernel, hardware drivers, network stack |
+| `gui/` | Window manager, compositor, UI kit, fonts, icons, and `gui/pip/` (Pip) |
+| `apps/` | The built-in applications |
+| `web/` | The browser engine and its vendored third-party libraries |
+| `shell/`, `include/` | Text shell fallback, headers, minimal libc |
+| `tests/` | Host unit tests and ring 3 test programs |
+| `tools/` | Asset and font generators, QEMU helpers |
+| `iso/` | GRUB configuration for the boot image |
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under the terms in [LICENSE](LICENSE).

@@ -1,1 +1,0 @@
-﻿Snapshot (2026-10-03) of the CareOS Design canvas, https://claude.ai/artifact/PFBAuwUucbFqSAnw4ZidZ1 . Each *.dc.html is one artboard (HTML + inline styles; renderVals() holds list data). canvas.json lists titles and sizes. Reference only; not built.
