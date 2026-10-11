@@ -18,6 +18,7 @@ pip_mood_t  pip_mood(void);
 void        pip_set_look(pip_look_t look);
 void        pip_set_mode(pip_mode_t mode);
 void        pip_mark_dirty(void);
+void        pip_save_now(void);                      /* write ~/.pip right away */
 bool        pip_saved(void);                         /* false for guests */
 u32         pip_today(void);                         /* yyyymmdd (local) */
 /* Draw Pip with the 160-unit box's top-left at (x, y), size px wide.
@@ -31,6 +32,10 @@ bool        pip_desktop_mouse(mouse_t *m);    /* true = consumed */
 bool        pip_desktop_hidden(void);         /* a fullscreen game is in front */
 void        pip_desktop_go_play(void);
 void        pip_desktop_come_back(void);
+void        pip_desktop_enter(void);          /* slide in from the screen edge */
+u32         pip_desktop_frame_ms(void);       /* how often the desktop needs a redraw for Pip; 0 = never */
+void        pip_open_home(void);              /* open or focus Pip's Home */
+void        app_pip_request_aside(u32 aside); /* 0 chat, 1 dress up -- applied when Home draws */
 /* Cursor position used for "watching", set by pip_desktop. */
 void        pip_set_anchor(i32 cx, i32 cy);
 

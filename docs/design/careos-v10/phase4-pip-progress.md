@@ -87,3 +87,36 @@ was busy.
   `de55854`, so check that Pip hides behind full-screen DOOM after the merge.
 - **Merge overlap** with `feat/web-engine`: Makefile, `gui/gui.h`, `gui/gui.c`,
   `gui/wm.c`, `include/kernel.h`, `kernel/care_lang.c`, `apps/app_browser.c`.
+
+## Assistant pass (2026-10-11): Pip as the desktop AI helper
+
+Pip is now an assistant as well as a pet. All real: every action goes through an
+existing OS API, and anything CareOS can't do, he says so.
+
+- **`gui/pip/pip_assist.c`** (pure, host-tested, `test_pip_assist`): free text to one
+  intent. This is the swap point for a smarter backend later; it only has to fill
+  `pip_parsed_t`.
+- **`gui/pip/pip_chat.c`**: session history (40 messages), a short "typing" delay,
+  and the actions: open/focus any app, jump to a Settings page, find files (walks
+  the VFS), time/date/memory/uptime/user/system/network/windows/packages, dark/light/auto,
+  Do Not Disturb, lock, minimize all, close all (asks first), pat/play/nap/come back,
+  hide himself, turn himself off (asks first), tips on/off, and a how-to knowledge base
+  (packages, Terminal, Care, shortcuts, workspaces, snapping, accounts, ...).
+  He refuses deleting files and power actions, and says why. Weather, battery, music
+  and web search answer "CareOS doesn't have that yet".
+- **Pip's Home** has a Chat tab (conversation, quick-action chips, input) next to Dress up.
+  Clicking Pip on the desktop opens it; the right-click menu gained "Chat with me".
+- **Settings > Pip**: Enable Pip, Show on Desktop, Animations, Tips and Suggestions,
+  Open Home, Reset Pip (click twice). Saved per user in `~/.pip` (new keys on, show,
+  anim, tips, intro); guests get a note that nothing is saved.
+- **Off means off**: disabled Pip draws nothing, takes no events, shows no tips, and the
+  GUI loop stops waking for him (`pip_desktop_frame_ms()` returns 0).
+- **Animations**: slide in at sign-in and when re-enabled, slide out when hidden; new
+  moods for greeting, opening/closing Home, thinking, acting, success and "oops".
+  With Animations off he stands still in a calm pose and never wanders.
+- **Tips**: at most one every four minutes, only after 25 s of no input, never during
+  Do Not Disturb, a maximized window, or a fullscreen game; contextual to the focused app.
+- Verified: `make host-test` passes (new `pip_assist` test, extended `pip_brain`);
+  full build clean; QEMU QA (`qa/v10-shell/pip-chat-qa*.sh`) shows chat replies, real
+  Settings navigation, the close-all confirmation, the unknown-command reply, the Settings
+  > Pip page, toggles hiding him, and the turned-off Home.

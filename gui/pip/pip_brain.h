@@ -6,7 +6,8 @@
 #define CAREOS_PIP_BRAIN_H
 #include "pip_art.h"
 
-typedef enum { PE_PAT = 0, PE_RUN_OK, PE_RUN_FAIL, PE_CONFUSED, PE_LOADING, PE_WELCOME_BACK, PE_SCRIPT } pip_event_t;
+typedef enum { PE_PAT = 0, PE_RUN_OK, PE_RUN_FAIL, PE_CONFUSED, PE_LOADING, PE_WELCOME_BACK, PE_SCRIPT,
+               PE_GREET, PE_OPEN_HOME, PE_CLOSE_HOME, PE_ACTION, PE_THINK, PE_DONE, PE_OOPS } pip_event_t;
 typedef enum { PIP_PERCH = 0, PIP_ROAM, PIP_NAP } pip_mode_t;
 
 typedef struct {
@@ -22,6 +23,8 @@ typedef struct {
     u8         pat_gain_hour;        /* happiness from pats in that window */
     u16        happy_carry, energy_carry;   /* minutes toward the next point */
     bool       roam, follow, nap;
+    /* assistant settings (Settings > Pip), saved per user in ~/.pip */
+    bool       enabled, show, anim, tips, intro_seen;
     u8         mode;                 /* pip_mode_t */
     /* not saved */
     u8         event_mood;
@@ -33,6 +36,7 @@ typedef struct { u32 idle_ms; u8 hour; bool cursor_near; } pip_ctx_t;
 u32  pip_day_number(u32 yyyymmdd);
 u32  pip_minutes(u32 yyyymmdd, u32 hour, u32 minute);
 
+void pip_brain_defaults(pip_brain_t *b);   /* the Settings > Pip toggles and roam/follow/nap */
 void pip_brain_new(pip_brain_t *b, u32 today, u32 now_min);
 u32  pip_brain_signin(pip_brain_t *b, u32 today, u32 now_min);
 void pip_brain_advance(pip_brain_t *b, u32 now_min);

@@ -10,6 +10,7 @@ const settings_section_t SETTINGS_SECTIONS[SET_COUNT] = {
     { "Date & Time",   "clock 24-hour hour time zone region utc" },
     { "Accounts",      "user password avatar display name administrator profile sign" },
     { "Storage",       "disk space ext2 free used drive" },
+    { "Pip",           "assistant companion helper pet tips suggestions animations character show hide reset enable disable"  },
     { "About CareOS",  "version cpu processor memory ram hardware system fast boot startup uptime" },
 };
 

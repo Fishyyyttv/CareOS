@@ -190,6 +190,8 @@ C_SRC     := kernel/kernel.c       \
              gui/pip/pip_sprite.c  \
              gui/pip/pip.c         \
              gui/pip/pip_desktop.c \
+             gui/pip/pip_assist.c  \
+             gui/pip/pip_chat.c    \
              gui/session/common.c \
              gui/session/boot.c \
              gui/session/login.c \
@@ -467,7 +469,9 @@ HT_SRC_netrate :=
 HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
 HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring account_rules
 HOST_TESTS    += term_cmds settings_index care_syntax notes_md store_model
-HOST_TESTS    += pip_raster pip_art pip_brain
+HOST_TESTS    += pip_raster pip_art pip_brain pip_assist
+HT_SRC_pip_assist := gui/pip/pip_assist.c apps/settings_index.c
+$(HOST_TEST_DIR)/test_pip_assist: gui/pip/pip_assist.h apps/settings_index.h
 HT_SRC_pip_brain := gui/pip/pip_brain.c
 $(HOST_TEST_DIR)/test_pip_brain: gui/pip/pip_brain.h gui/pip/pip_art.h
 HT_SRC_pip_art := gui/pip/pip_art.c gui/pip/pip_raster.c

@@ -506,6 +506,7 @@ window_t *wm_open(app_id_t app, const char *title,
 void wm_close(window_t *w) {
     if (!w) return;
     if (w->anim_kind == WM_ANIM_CLOSE) return;  /* already closing */
+    if (w->app == APP_PIP) { pip_event(PE_CLOSE_HOME); pip_say("See you soon!", 1800); }   /* he waves goodbye */
 
     /* Start the close transition: shrink to ~95% about centre + fade out. The
      * window stays active/drawn until the animation finishes; the real teardown

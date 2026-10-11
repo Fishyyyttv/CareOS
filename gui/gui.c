@@ -1114,7 +1114,8 @@ void gui_run(void) {
             pip_tick(mouse.x, mouse.y, (u32)(timer_ms() - g_last_activity_tick));
             {   /* Pip animates at 12 fps */
                 static u32 s_pip_frame;
-                if (!pip_desktop_hidden() && timer_ms() - s_pip_frame >= 83) { s_pip_frame = timer_ms(); needs_redraw = true; }
+                u32 fm = pip_desktop_frame_ms();
+                if (fm && !pip_desktop_hidden() && timer_ms() - s_pip_frame >= fm) { s_pip_frame = timer_ms(); needs_redraw = true; }
             }
 
             static u32 s_last_frame_start = 0;

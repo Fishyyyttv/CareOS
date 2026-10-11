@@ -40,7 +40,12 @@ void pip_brain_new(pip_brain_t *b, u32 today, u32 now_min) {
     b->happy = 70; b->energy = 80;
     b->born_day = today; b->last_day = today; b->days = 1;
     b->seen_min = now_min; b->hour_start_min = now_min;
+    pip_brain_defaults(b);
+}
+
+void pip_brain_defaults(pip_brain_t *b) {
     b->roam = b->follow = b->nap = true;
+    b->enabled = b->show = b->anim = b->tips = true;
     b->mode = PIP_PERCH;
 }
 
@@ -105,6 +110,13 @@ void pip_brain_event(pip_brain_t *b, pip_event_t ev, u32 now_ms, u8 script_mood)
     case PE_CONFUSED:     mood = PM_CONFUSED; ms = 4000; break;
     case PE_LOADING:      mood = PM_THINKING; ms = 4000; break;
     case PE_WELCOME_BACK: mood = PM_EXCITED;  ms = 6000; break;
+    case PE_GREET:        mood = PM_HAPPY;    ms = 4500; break;
+    case PE_OPEN_HOME:    mood = PM_EXCITED;  ms = 2500; break;
+    case PE_CLOSE_HOME:   mood = PM_HAPPY;    ms = 2000; break;
+    case PE_ACTION:       mood = PM_PLAYING;  ms = 1800; break;
+    case PE_THINK:        mood = PM_THINKING; ms = 1500; break;
+    case PE_DONE:         mood = PM_EXCITED;  ms = 3500; break;
+    case PE_OOPS:         mood = PM_CONFUSED; ms = 3500; break;
     default:              mood = script_mood < PM_COUNT ? script_mood : PM_IDLE; ms = 6000; break;
     }
     b->event_mood = mood;
@@ -164,6 +176,11 @@ u32 pip_brain_save(const pip_brain_t *b, char *o, u32 cap) {
     n = put_kv(o, cap, n, "follow", b->follow);
     n = put_kv(o, cap, n, "nap", b->nap);
     n = put_kv(o, cap, n, "mode", b->mode);
+    n = put_kv(o, cap, n, "on", b->enabled);
+    n = put_kv(o, cap, n, "show", b->show);
+    n = put_kv(o, cap, n, "anim", b->anim);
+    n = put_kv(o, cap, n, "tips", b->tips);
+    n = put_kv(o, cap, n, "intro", b->intro_seen);
     return n;
 }
 
@@ -211,6 +228,11 @@ bool pip_brain_load(pip_brain_t *b, const char *t, u32 len) {
         else if (key_eq(l, eq, "follow"))  b->follow = x != 0;
         else if (key_eq(l, eq, "nap"))     b->nap = x != 0;
         else if (key_eq(l, eq, "mode"))    b->mode = (u8)clampu(x, 0, 2);
+        else if (key_eq(l, eq, "on"))      b->enabled = x != 0;
+        else if (key_eq(l, eq, "show"))    b->show = x != 0;
+        else if (key_eq(l, eq, "anim"))    b->anim = x != 0;
+        else if (key_eq(l, eq, "tips"))    b->tips = x != 0;
+        else if (key_eq(l, eq, "intro"))   b->intro_seen = x != 0;
     }
     b->hour_start_min = b->seen_min;
     return true;

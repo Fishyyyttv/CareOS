@@ -117,6 +117,21 @@ int main(void) {
     assert(strlen(r.name) <= 14);
     const char *empty_name = "PIP 1\nname=\n";
     assert(pip_brain_load(&r, empty_name, (u32)strlen(empty_name)) && !strcmp(r.name, "Pip"));
+    /* assistant settings: defaults, round trip, old files without them */
+    assert(s.enabled && s.show && s.anim && s.tips && !s.intro_seen);
+    s.enabled = false; s.show = false; s.anim = false; s.tips = false; s.intro_seen = true;
+    n = pip_brain_save(&s, buf, sizeof buf);
+    assert(pip_brain_load(&r, buf, n));
+    assert(!r.enabled && !r.show && !r.anim && !r.tips && r.intro_seen);
+    const char *old = "PIP 1\nname=Old\nhappy=40\n";
+    assert(pip_brain_load(&r, old, (u32)strlen(old)) && r.enabled && r.show && r.anim && r.tips && !r.intro_seen);
+    r.roam = false; r.enabled = false; r.mode = PIP_ROAM;
+    pip_brain_defaults(&r);
+    assert(r.roam && r.follow && r.nap && r.enabled && r.show && r.anim && r.tips && r.mode == PIP_PERCH);
+    /* the new assistant events set a mood */
+    pip_brain_event(&r, PE_OOPS, 1000, 0);  assert(r.event_mood == PM_CONFUSED);
+    pip_brain_event(&r, PE_DONE, 1000, 0);  assert(r.event_mood == PM_EXCITED);
+    pip_brain_event(&r, PE_THINK, 1000, 0); assert(r.event_mood == PM_THINKING);
     puts("pip_brain OK");
     return 0;
 }

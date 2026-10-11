@@ -712,6 +712,7 @@ void app_doom_init(window_t *w);
 void app_doom_draw(window_t *w);
 void app_doom_key(window_t *w, char c);
 void app_pip_init(window_t *w);
+void app_settings_apply_theme(u32 mode);   /* 0 dark, 1 light, 2 auto: the Settings switch, for Pip too */
 void app_pip_draw(window_t *w);
 void app_pip_click(window_t *w, i32 x, i32 y);
 void app_pip_key(window_t *w, char c);

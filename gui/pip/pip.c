@@ -2,6 +2,8 @@
  * docs/superpowers/specs/2026-10-04-careos-pip-design.md. */
 #include "pip.h"
 #include "pip_sprite.h"
+#include "pip_chat.h"
+#include "pip_assist.h"
 #include "../../apps/apps_common.h"
 
 static pip_brain_t g_b;
@@ -9,7 +11,7 @@ static bool g_ready, g_saved, g_dirty;
 static u32  g_last_save_ms, g_last_tick_min;
 static pip_mood_t g_mood = PM_IDLE;
 static u32  g_mood_start_ms;
-static char g_bubble[64];
+static char g_bubble[96];
 static u32  g_bubble_until;
 static i32  g_anchor_x = -100000, g_anchor_y = -100000;
 static i32  g_mx, g_my;
@@ -26,10 +28,12 @@ static u32 now_min(void) {
     return pip_minutes((u32)t.year * 10000u + (u32)t.month * 100u + t.day, t.hour, t.minute);
 }
 
+static u32 g_next_tip_ms;
+
 static void save_now(void) {
     if (!g_saved) return;
     char path[80]; pip_path(path);
-    char buf[512];
+    char buf[640];
     u32 n = pip_brain_save(&g_b, buf, sizeof buf);
     fs_node_t *f = vfs_resolve_path(path);
     if (!f) {
@@ -57,16 +61,25 @@ void pip_session_start(void) {
 #ifdef CAREOS_PERF_BENCH_AT_BOOT
     pip_desktop_go_play();                   /* bench with Pip roaming the whole run */
 #endif
-    if (away >= 60) {
-        pip_brain_event(&g_b, PE_WELCOME_BACK, timer_ms(), 0);
-        pip_say("You're back!", 3000);
+    pip_chat_reset();
+    g_next_tip_ms = timer_ms() + 120000;           /* the first tip, after two quiet minutes */
+    pip_desktop_enter();                           /* he slides in from the screen edge */
+    if (g_b.enabled) {
+        if (away >= 60) {
+            pip_brain_event(&g_b, PE_WELCOME_BACK, timer_ms(), 0);
+            pip_say("You're back!", 3000);
+        } else if (!g_b.intro_seen) {
+            pip_brain_event(&g_b, PE_GREET, timer_ms(), 0);
+            pip_say("Hi! I'm Pip. Click me and ask for anything.", 6000);
+        }
     }
     g_dirty = true;
     save_now();
 }
 
-void pip_session_end(void) { if (g_ready) save_now(); g_ready = false; pip_sprite_flush(); }
+void pip_session_end(void) { if (g_ready) save_now(); g_ready = false; pip_chat_reset(); pip_sprite_flush(); }
 
+void pip_save_now(void) { if (g_ready) save_now(); }
 pip_brain_t *pip_brain(void) { return &g_b; }
 pip_mood_t pip_mood(void) { return g_mood; }
 bool pip_saved(void) { return g_saved; }
@@ -77,6 +90,7 @@ void pip_set_look(pip_look_t look) { g_b.look = look; g_dirty = true; }
 void pip_set_mode(pip_mode_t mode) { g_b.mode = (u8)mode; g_dirty = true; }
 
 void pip_say(const char *text, u32 ms) {
+    if (!g_ready || !g_b.enabled) return;
     if (!text) return;
     kstrncpy(g_bubble, text, sizeof g_bubble - 1);
     g_bubble[sizeof g_bubble - 1] = '\0';
@@ -90,7 +104,7 @@ static const char *const EVENT_LINES[] = {
 };
 
 void pip_event(pip_event_t ev) {
-    if (!g_ready) return;
+    if (!g_ready || !g_b.enabled) return;
     u32 now = timer_ms();
     if (ev == PE_PAT) { pip_brain_pat(&g_b, now_min()); g_dirty = true; }
     pip_brain_event(&g_b, ev, now, 0);
@@ -108,15 +122,29 @@ bool pip_script_mood(const char *name) {
             if (a != b) { eq = false; break; }
         }
         if (eq || (m == PM_IDLE && !kstrcmp(name, "idle"))) {
-            pip_brain_event(&g_b, PE_SCRIPT, timer_ms(), (u8)m);
+            if (g_b.enabled) pip_brain_event(&g_b, PE_SCRIPT, timer_ms(), (u8)m);
             return true;
         }
     }
     return false;
 }
 
+/* A short tip now and then: only when he is shown, tips are on, nothing is
+ * happening (idle 25 s+), no fullscreen app, and not during Do Not Disturb. */
+static void maybe_tip(u32 idle_ms) {
+    u32 now = timer_ms();
+    if (!g_b.tips || !g_b.show || now < g_next_tip_ms || idle_ms < 25000 || pip_bubble_text() || notify_dnd() || pip_desktop_hidden()) return;
+    window_t *f = wm_focused();
+    if (f && f->maximized) { g_next_tip_ms = now + 60000; return; }
+    pip_say(pip_tip_for(f ? pip_app_of_window(f) : -1, now >> 10), 7000);
+    g_next_tip_ms = now + 240000;
+}
+
 void pip_tick(i32 mx, i32 my, u32 idle_ms) {
     if (!g_ready) return;
+    if (!g_b.enabled) return;                       /* turned off: no tips, no chat, no mood */
+    pip_chat_tick();
+    maybe_tip(idle_ms);
     g_mx = mx; g_my = my;
     u32 nm = now_min();
     if (nm != g_last_tick_min) { pip_brain_advance(&g_b, nm); g_last_tick_min = nm; g_dirty = true; }
@@ -129,6 +157,7 @@ void pip_tick(i32 mx, i32 my, u32 idle_ms) {
 }
 
 void pip_draw(i32 x, i32 y, u32 size, u32 mood, bool still) {
+    if (!g_b.anim) still = true;                    /* reduced animation: a calm still pose */
     pip_pose_t p;
     p.mood = (u8)(mood < PM_COUNT ? mood : g_mood);
     u32 cyc = pip_mood_cycle_ms(p.mood);

@@ -1,7 +1,7 @@
 /* gui/pip/pip_desktop.c -- Pip on the desktop (spec §4): perched by the
  * dock, roaming along the dock edge and window tops, napping on the dock.
- * Click = pat; right-click = menu; while hovered a status pill shows mode
- * buttons. Only Pip's own rectangles are damaged. */
+ * Click = open his Home to chat; right-click = menu (chat, pat, ...); while hovered a
+ * status pill shows. Only Pip's own rectangles are damaged. */
 #include "pip.h"
 #include "ui.h"
 #include "spring.h"
@@ -18,7 +18,16 @@ static bool g_menu;
 static i32  g_menu_x, g_menu_y;
 static rect_t g_last;                 /* last drawn area, for damage */
 static bool g_hover;
-static u32  g_last_pat_ms;
+static i32  g_presence;               /* 0 = off screen .. 256 = standing by the dock */
+
+static bool wants_visible(void) { const pip_brain_t *b = pip_brain(); return b->enabled && b->show; }
+void pip_desktop_enter(void) { g_presence = 0; g_x = g_y = 0; }
+u32 pip_desktop_frame_ms(void) {
+    const pip_brain_t *b = pip_brain();
+    bool moving = g_presence != (wants_visible() ? 256 : 0);
+    if (!wants_visible() && g_presence == 0) return 0;
+    return b->anim ? 83u : (moving || pip_bubble_text() ? 250u : 500u);
+}
 
 extern bool taskbar_contains(i32 x, i32 y);
 
@@ -90,6 +99,11 @@ static void step_motion(void) {
 
 static void step_motion_once(void) {
     pip_brain_t *b = pip_brain();
+    i32 tgt = wants_visible() ? 256 : 0;                       /* enter / leave the desktop */
+    if (!b->anim) g_presence = tgt;
+    else if (g_presence < tgt) g_presence = g_presence + 32 > tgt ? tgt : g_presence + 32;
+    else if (g_presence > tgt) g_presence = g_presence - 32 < tgt ? tgt : g_presence - 32;
+    if (!b->anim && b->mode == PIP_ROAM) pip_desktop_come_back();   /* reduced animation: no wandering */
     if (b->mode == PIP_ROAM) {
 #ifdef CAREOS_PERF_BENCH_AT_BOOT
         if (timer_ms() > g_roam_until) { pip_desktop_come_back(); return; }
@@ -137,13 +151,26 @@ static const char *status_text(void) {
     }
 }
 
-static const char *const MENU_L[4] = { "Give a pat", "Ask what he's thinking", "Go play", "Dress up..." };
+#define MENU_N 5
+static const char *const MENU_L[MENU_N] = { "Chat with me", "Give a pat", "Ask what I am thinking", "Go play", "Dress up..." };
 static rect_t menu_item(u32 i) { return rect_make(g_menu_x, g_menu_y + 8 + (i32)i * 38, 240, 38); }
 
 void pip_desktop_draw(void) {
-    if (!pip_brain() || pip_desktop_hidden()) return;
+    if (pip_desktop_hidden()) return;
+    if (!wants_visible() && g_presence == 0) {                  /* turned off or hidden: draw nothing */
+        if (g_last.w) { ui_damage(g_last); g_last = rect_make(0, 0, 0, 0); }
+        g_menu = false; g_hover = false;
+        return;
+    }
     if (!g_x && !g_y) home_spot(&g_x, &g_y);
     step_motion();
+    if (!wants_visible()) { g_menu = false; g_hover = false; }
+    /* sliding in or out: ease from below the screen edge */
+    i32 slide_save = g_y;
+    if (g_presence < 256) {
+        i32 p = g_presence, e = (p * p / 256) * (768 - 2 * p) / 256;
+        g_y += (256 - e) * ((i32)SCREEN_H - g_y) / 256;
+    }
     rect_t pr = pip_rect();
     pip_set_anchor(pr.x + pr.w / 2, pr.y + pr.h / 3);
     u32 s = cur_size();
@@ -158,17 +185,18 @@ void pip_desktop_draw(void) {
         if (px + pw > (i32)SCREEN_W - 8) px = (i32)SCREEN_W - 8 - pw;
         ui_glass(0x9100, rect_make(px, py, pw, ph), 18, g_theme->panel_tint, g_theme->panel_alpha, 24, UI_GLASS_HAIRLINE | UI_GLASS_SHADOW_S);
         gfx_str_role(px + 14, py + 10, pip_brain()->name, g_theme->ink, FONT_ROLE_UI, 2, FONT_W_BOLD);
+        { const char *hint = "Click to chat"; gfx_str_role(px + pw - 14 - gfx_str_role_width(hint, FONT_ROLE_UI, 0, FONT_W_REGULAR), py + 14, hint, g_theme->muted, FONT_ROLE_UI, 0, FONT_W_REGULAR); }
         gfx_circle_fill(px + 18, py + 42, 4, pip_mood_bulb(pip_mood()));
         gfx_str_role_fit(px + 28, py + 34, pw - 40, status_text(), g_theme->ink2, FONT_ROLE_UI, 0, FONT_W_REGULAR);
         area = rect_make(px < area.x ? px : area.x, area.y, (px + pw > area.x + area.w ? px + pw : area.x + area.w) - (px < area.x ? px : area.x), (py + ph > area.y + area.h ? py + ph : area.y + area.h) - area.y);
     }
     if (g_menu) {
-        i32 mh = 8 + 4 * 38 + 8;
+        i32 mh = 8 + MENU_N * 38 + 8;
         gfx_shadow_soft(g_menu_x, g_menu_y, 240, mh, 16);
         gfx_rect_rounded(g_menu_x, g_menu_y, 240, mh, 16, g_theme->is_dark ? rgb(0x1C, 0x24, 0x40) : rgb(0xFF, 0xFF, 0xFF));
-        for (u32 i = 0; i < 4; i++) {
+        for (u32 i = 0; i < MENU_N; i++) {
             rect_t r = menu_item(i);
-            const char *l = (i == 2 && pip_brain()->mode == PIP_ROAM) ? "Come back" : MENU_L[i];
+            const char *l = (i == 3 && pip_brain()->mode == PIP_ROAM) ? "Come back" : MENU_L[i];
             gfx_str_role(r.x + 16, r.y + (38 - gfx_role_line_h(FONT_ROLE_UI, 2)) / 2, l, g_theme->ink, FONT_ROLE_UI, 2, FONT_W_REGULAR);
         }
         ui_damage(rect_make(g_menu_x - 20, g_menu_y - 20, 280, mh + 40));
@@ -176,6 +204,7 @@ void pip_desktop_draw(void) {
     ui_damage(g_last);
     ui_damage(area);
     g_last = area;
+    g_y = slide_save;
 }
 
 static void think_line(void) {
@@ -193,28 +222,28 @@ static void think_line(void) {
 }
 
 bool pip_desktop_mouse(mouse_t *m) {
-    if (!pip_brain() || pip_desktop_hidden()) { g_hover = false; return false; }
+    if (!pip_brain()->enabled || !pip_brain()->show || g_presence < 256 || pip_desktop_hidden()) { g_hover = false; g_menu = false; return false; }
     rect_t pr = pip_rect();
     g_hover = rect_contains(pr, m->x, m->y);
     if (g_menu && (m->left_clicked || m->right_clicked)) {
-        for (u32 i = 0; i < 4; i++) {
+        for (u32 i = 0; i < MENU_N; i++) {
             if (!rect_contains(menu_item(i), m->x, m->y)) continue;
             g_menu = false;
-            if (i == 0) pip_event(PE_PAT);
-            else if (i == 1) think_line();
-            else if (i == 2) { if (pip_brain()->mode == PIP_ROAM) pip_desktop_come_back(); else pip_desktop_go_play(); }
-            else wm_open(APP_PIP, "Pip's Home", 120, 70, (i32)SCREEN_W * 70 / 100, (i32)SCREEN_H * 78 / 100);
+            if (i == 0) pip_open_home();
+            else if (i == 1) pip_event(PE_PAT);
+            else if (i == 2) think_line();
+            else if (i == 3) { if (pip_brain()->mode == PIP_ROAM) pip_desktop_come_back(); else pip_desktop_go_play(); }
+            else { pip_open_home(); app_pip_request_aside(1); }
             return true;
         }
         g_menu = false;
         return rect_contains(pr, m->x, m->y);
     }
     if (!g_hover) return false;
-    if (m->right_clicked) { g_menu = true; g_menu_x = m->x > (i32)SCREEN_W - 248 ? (i32)SCREEN_W - 248 : m->x; g_menu_y = m->y - 8 - 4 * 38 - 8; if (g_menu_y < 48) g_menu_y = m->y; return true; }
-    if (m->left_clicked) {
+    if (m->right_clicked) { g_menu = true; g_menu_x = m->x > (i32)SCREEN_W - 248 ? (i32)SCREEN_W - 248 : m->x; g_menu_y = m->y - 8 - MENU_N * 38 - 8; if (g_menu_y < 48) g_menu_y = m->y; return true; }
+    if (m->left_clicked) {                                            /* click: open his Home to chat */
         if (pip_brain()->mode == PIP_NAP) pip_set_mode(PIP_PERCH);   /* wake */
-        if (timer_ms() - g_last_pat_ms > 250) pip_event(PE_PAT);      /* debounce a click storm */
-        g_last_pat_ms = timer_ms();
+        pip_open_home();
         return true;
     }
     return m->left || m->left_released;                              /* own the press */
