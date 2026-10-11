@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .box { padding: 10px; margin: 10px 0; border: 1px solid #ccc; }
+    .highlight { background: #e0f0ff; color: #004488; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>JavaScript Engine Test</h1>
+  <div id="target" class="box">Original text</div>
+  <button id="btn">Click me</button>
+  <p id="counter">Count: 0</p>
+  <script>
+    console.log("Hello from Weave JavaScript!");
+    const t = document.getElementById("target");
+    t.textContent = "Modified by script!";
+    t.classList.add("highlight");
+    let c = 0;
+    document.getElementById("btn").addEventListener("click", () => {
+      c++;
+      document.getElementById("counter").textContent = "Count: " + c;
+      console.log("Button clicked, count is now " + c);
+    });
+  </script>
+</body>
+</html>

@@ -49,6 +49,12 @@ static const appdb_builtin_t appdb_builtins[] = {
     { "notes",      "Notes",      "Utilities",    "notes",    "gui,fs.write"         },
     { "paint",      "Paint",      "Creative",     "paint",    "gui"                  },
     { "about",      "About",      "CareOS",       "about",    "gui"                  },
+    /* v10 dropped the app sidebar; the launcher is now the way to every app. */
+    { "help",       "Help",       "CareOS",       "help",     "gui"                  },
+    { "maze",       "Maze",       "Games",        "maze",     "gui"                  },
+    { "3d",         "Wolf3D",     "Games",        "maze",     "gui"                  },
+    { "doom",       "Doom",       "Games",        "maze",     "gui"                  },
+    { "pip",        "Pip",        "Games",        "pip",      "gui"                  },
 };
 
 #define APPDB_BUILTIN_COUNT (sizeof(appdb_builtins) / sizeof(appdb_builtins[0]))

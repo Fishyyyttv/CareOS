@@ -1,5 +1,6 @@
 #include "kernel.h"
 #include "font.h"
+#include "account_rules.h"
 
 /* Accent colour engine lives in gui/theme.c (declared in gui.h, which the
  * kernel-side settings.c does not include). Forward-declare the two entry
@@ -11,7 +12,10 @@ u32  theme_accent_count(void);
 void gfx_wallpaper_cache_invalidate(void);
 
 #define SETTINGS_MAGIC    0x43535447u /* CSTG */
-#define SETTINGS_VERSION  5u
+/* v6 kept the v5 layout and changed only the meaning of `accent` (the v10
+ * list put Care first, see accent_from_v5). v7 appends the shell/start-screen
+ * fields (theme mode, glass, dock, brightness, DND, time zone). */
+#define SETTINGS_VERSION  7u
 
 typedef struct __attribute__((packed)) {
     u32 magic;
@@ -96,6 +100,32 @@ typedef struct __attribute__((packed)) {
     u32 accent;
 } settings_blob_v5_t;
 
+/* The procedural v10 background, after the six photo slots. Mirrors
+ * WALLPAPER_CARE in gui/care_wallpaper.h (settings.c doesn't include gui/). */
+#define WALLPAPER_CARE_INDEX 6u
+
+/* v5 accents: Blue, Green, Orange, Purple, Red, Auto. v6: Care, Calm, Blue,
+ * Green, Purple, Red, Auto. Blue was the v5 default and moves to the v10
+ * default, Care, along with Orange (its closest match). */
+static u32 accent_from_v5(u32 a) {
+    static const u8 MAP[6] = { 0, 3, 0, 4, 5, 6 };
+    return a < 6u ? MAP[a] : 0u;
+}
+
+typedef struct __attribute__((packed)) {
+    settings_blob_v5_t base;           /* checksum covers the whole v7 blob */
+    u32 theme_mode;
+    u32 glass_alpha_pct;
+    u32 reduce_transparency;
+    u32 dock_position;
+    u32 dock_autohide;
+    u32 brightness_pct;
+    u32 dnd;
+    i32 tz_offset_min;
+} settings_blob_v7_t;
+
+#define TZ_DEFAULT_MIN (-420)          /* the UTC-7 the desktop clock always used */
+
 static careos_settings_t g_settings;
 static u8 settings_io[CAREOS_DISK_SETTINGS_SECTORS * 512u];
 
@@ -125,7 +155,7 @@ static void settings_defaults(void) {
     g_settings.mouse_sensitivity = 100;
     g_settings.boot_fast = 0;
     g_settings.clock_24h = 1;
-    g_settings.wallpaper = 0;
+    g_settings.wallpaper = WALLPAPER_CARE_INDEX;
     g_settings.taskbar_centered = 1;
     g_settings.vesa_w = 1920;
     g_settings.vesa_h = 1080;
@@ -134,16 +164,47 @@ static void settings_defaults(void) {
     g_settings.wifi_pass[0] = '\0';
     g_settings.font_family = 0;
     g_settings.accent = 0;
+    g_settings.theme_mode = 0;
+    g_settings.glass_alpha_pct = 100;
+    g_settings.reduce_transparency = 0;
+    g_settings.dock_position = 0;
+    g_settings.dock_autohide = 0;
+    g_settings.brightness_pct = 100;
+    g_settings.dnd = 0;
+    g_settings.tz_offset_min = TZ_DEFAULT_MIN;
+}
+
+/* Fields added in v7, for blobs written before it: keep today's behaviour. */
+static void settings_v7_defaults(void) {
+    g_settings.theme_mode = g_settings.theme == 1 ? 1u : 0u;
+    g_settings.glass_alpha_pct = 100;
+    g_settings.reduce_transparency = 0;
+    g_settings.dock_position = 0;
+    g_settings.dock_autohide = 0;
+    g_settings.brightness_pct = 100;
+    g_settings.dnd = 0;
+    g_settings.tz_offset_min = TZ_DEFAULT_MIN;
 }
 
 static void settings_clamp(void) {
     if (g_settings.mouse_sensitivity < 40) g_settings.mouse_sensitivity = 40;
     if (g_settings.mouse_sensitivity > 200) g_settings.mouse_sensitivity = 200;
     if (g_settings.theme > 1) g_settings.theme = 0;
-    if (g_settings.wallpaper > 5) g_settings.wallpaper = 0;
+    if (g_settings.wallpaper > WALLPAPER_CARE_INDEX) g_settings.wallpaper = WALLPAPER_CARE_INDEX;
     g_settings.taskbar_centered = g_settings.taskbar_centered ? 1u : 0u;
     if (g_settings.font_family >= font_registry_count()) g_settings.font_family = 0;
     if (g_settings.accent >= theme_accent_count()) g_settings.accent = 0;
+    if (g_settings.theme_mode > 2) g_settings.theme_mode = 0;
+    if (g_settings.glass_alpha_pct < 40) g_settings.glass_alpha_pct = 40;
+    if (g_settings.glass_alpha_pct > 100) g_settings.glass_alpha_pct = 100;
+    g_settings.reduce_transparency = g_settings.reduce_transparency ? 1u : 0u;
+    if (g_settings.dock_position > 2) g_settings.dock_position = 0;
+    g_settings.dock_autohide = g_settings.dock_autohide ? 1u : 0u;
+    if (g_settings.brightness_pct < 10) g_settings.brightness_pct = 10;
+    if (g_settings.brightness_pct > 100) g_settings.brightness_pct = 100;
+    g_settings.dnd = g_settings.dnd ? 1u : 0u;
+    if (g_settings.tz_offset_min < -12 * 60 || g_settings.tz_offset_min > 14 * 60)
+        g_settings.tz_offset_min = TZ_DEFAULT_MIN;
 }
 
 static void settings_save(void) {
@@ -151,7 +212,8 @@ static void settings_save(void) {
 
     kmemset(settings_io, 0, sizeof(settings_io));
 
-    settings_blob_v5_t *b = (settings_blob_v5_t*)settings_io;
+    settings_blob_v7_t *b7 = (settings_blob_v7_t*)settings_io;
+    settings_blob_v5_t *b = &b7->base;
     b->magic = SETTINGS_MAGIC;
     b->version = SETTINGS_VERSION;
     b->theme = g_settings.theme;
@@ -169,9 +231,17 @@ static void settings_save(void) {
     b->wifi_pass[sizeof(b->wifi_pass) - 1] = '\0';
     b->font_family = g_settings.font_family;
     b->accent = g_settings.accent;
+    b7->theme_mode = g_settings.theme_mode;
+    b7->glass_alpha_pct = g_settings.glass_alpha_pct;
+    b7->reduce_transparency = g_settings.reduce_transparency;
+    b7->dock_position = g_settings.dock_position;
+    b7->dock_autohide = g_settings.dock_autohide;
+    b7->brightness_pct = g_settings.brightness_pct;
+    b7->dnd = g_settings.dnd;
+    b7->tz_offset_min = g_settings.tz_offset_min;
 
     b->checksum = 0;
-    b->checksum = fnv1a32((const u8*)b, sizeof(*b));
+    b->checksum = fnv1a32((const u8*)b7, sizeof(*b7));
 
     u32 lba = settings_lba();
     for (u32 i = 0; i < CAREOS_DISK_SETTINGS_SECTORS; i++)
@@ -275,6 +345,29 @@ static bool settings_load_v5(const settings_blob_v5_t *b) {
     return true;
 }
 
+/* v7: verify the checksum over the whole blob, then reuse the v5 field copy
+ * on a re-checksummed copy of the base. */
+static bool settings_load_v7(const settings_blob_v7_t *b) {
+    settings_blob_v7_t t;
+    kmemcpy(&t, b, sizeof(t));
+    u32 expect = t.base.checksum;
+    t.base.checksum = 0;
+    if (fnv1a32((const u8*)&t, sizeof(t)) != expect) return false;
+    t.base.checksum = 0;
+    t.base.checksum = fnv1a32((const u8*)&t.base, sizeof(t.base));
+    if (!settings_load_v5(&t.base)) return false;
+    g_settings.theme_mode = t.theme_mode;
+    g_settings.glass_alpha_pct = t.glass_alpha_pct;
+    g_settings.reduce_transparency = t.reduce_transparency;
+    g_settings.dock_position = t.dock_position;
+    g_settings.dock_autohide = t.dock_autohide;
+    g_settings.brightness_pct = t.brightness_pct;
+    g_settings.dnd = t.dnd;
+    g_settings.tz_offset_min = t.tz_offset_min;
+    settings_clamp();
+    return true;
+}
+
 static bool settings_load_v1(const settings_blob_v1_t *b) {
     u32 expect = b->checksum;
     settings_blob_v1_t temp;
@@ -326,15 +419,35 @@ void settings_init(void) {
         return;
     }
 
-    if (version == SETTINGS_VERSION && settings_load_v5((const settings_blob_v5_t*)settings_io)) {
-        serial_write("[settings] loaded v5 settings from disk\n");
+    if (version == SETTINGS_VERSION && settings_load_v7((const settings_blob_v7_t*)settings_io)) {
+        serial_write("[settings] loaded v7 settings from disk\n");
+        theme_set_accent(g_settings.accent);
+        return;
+    }
+
+    if (version == 6u && settings_load_v5((const settings_blob_v5_t*)settings_io)) {
+        settings_v7_defaults();
+        serial_write("[settings] migrated v6 settings to v7\n");
+        settings_save();
+        theme_set_accent(g_settings.accent);
+        return;
+    }
+
+    if (version == 5u && settings_load_v5((const settings_blob_v5_t*)settings_io)) {
+        g_settings.accent = accent_from_v5(((const settings_blob_v5_t*)settings_io)->accent);
+        /* Still on the shipped default photo: move to the v10 default. */
+        if (g_settings.wallpaper == 0u) g_settings.wallpaper = WALLPAPER_CARE_INDEX;
+        settings_v7_defaults();
+        serial_write("[settings] migrated v5 settings to v7\n");
+        settings_save();
         theme_set_accent(g_settings.accent);
         return;
     }
 
     if (version == 4u && settings_load_v4((const settings_blob_v4_t*)settings_io)) {
-        g_settings.accent = 0u;   /* default to Blue */
-        serial_write("[settings] migrated v4 settings to v5\n");
+        g_settings.accent = 0u;   /* default to Care */
+        settings_v7_defaults();
+        serial_write("[settings] migrated v4 settings to v7\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;
@@ -343,7 +456,8 @@ void settings_init(void) {
     if (version == 3u && settings_load_v3((const settings_blob_v3_t*)settings_io)) {
         g_settings.font_family = 0u;   /* default to JetBrains Mono */
         g_settings.accent = 0u;
-        serial_write("[settings] migrated v3 settings to v5\n");
+        settings_v7_defaults();
+        serial_write("[settings] migrated v3 settings to v7\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;
@@ -352,7 +466,8 @@ void settings_init(void) {
     if (version == 2u && settings_load_v2((const settings_blob_v2_t*)settings_io)) {
         g_settings.font_family = 0u;
         g_settings.accent = 0u;
-        serial_write("[settings] migrated v2 settings to v5\n");
+        settings_v7_defaults();
+        serial_write("[settings] migrated v2 settings to v7\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;
@@ -361,7 +476,8 @@ void settings_init(void) {
     if (version == 1u && settings_load_v1((const settings_blob_v1_t*)settings_io)) {
         g_settings.font_family = 0u;
         g_settings.accent = 0u;
-        serial_write("[settings] migrated v1 settings to v5\n");
+        settings_v7_defaults();
+        serial_write("[settings] migrated v1 settings to v7\n");
         settings_save();
         theme_set_accent(g_settings.accent);
         return;
@@ -478,4 +594,46 @@ void settings_capture_to_current_user(void) {
     p.clock_24h        = g_settings.clock_24h;
     p.taskbar_centered = g_settings.taskbar_centered;
     user_prefs_set_current(&p);
+}
+
+/* ── v7 setters ─────────────────────────────────────────────────────────── */
+bool settings_auto_theme_dark(u32 local_hour) { return auto_theme_dark(local_hour); }
+
+void settings_set_theme_mode(u32 mode) {
+    g_settings.theme_mode = mode;
+    if (mode <= 1) g_settings.theme = mode;   /* fixed modes also set the theme */
+    settings_clamp();
+    settings_save();
+    if (user_session_active() && mode <= 1) settings_capture_to_current_user();
+}
+
+void settings_set_tz_offset(i32 minutes) {
+    g_settings.tz_offset_min = minutes;
+    settings_clamp();
+    settings_save();
+}
+
+void settings_set_glass(u32 alpha_pct, bool reduce) {
+    g_settings.glass_alpha_pct = alpha_pct;
+    g_settings.reduce_transparency = reduce ? 1u : 0u;
+    settings_clamp();
+    settings_save();
+}
+
+void settings_set_dock(u32 position, bool autohide) {
+    g_settings.dock_position = position;
+    g_settings.dock_autohide = autohide ? 1u : 0u;
+    settings_clamp();
+    settings_save();
+}
+
+void settings_set_brightness(u32 pct) {
+    g_settings.brightness_pct = pct;
+    settings_clamp();
+    settings_save();
+}
+
+void settings_set_dnd(bool on) {
+    g_settings.dnd = on ? 1u : 0u;
+    settings_save();
 }

@@ -2,6 +2,7 @@
  * Syntax: var x = expr;  print expr;  if (cond) { } else { }  while (cond) { }
  * Comments: // or #   Strings: "..."   Numbers: integers
  * Operators: + - * /  Comparisons: == != < > <= >= */
+#include "../gui/pip/pip.h"
 #include "kernel.h"
 #include "../gui/gui.h"
 
@@ -139,7 +140,7 @@ static cl_val_t vstr(const char *s) {
 
 /* ── Environment ─────────────────────────────────────────────────────────── */
 #define CL_MAX_VARS 32
-#define CL_MAX_FUNCS 24  /* 11 natives (4 existing + 7 rc.care) + headroom for user-defined funcs in scripts */
+#define CL_MAX_FUNCS 24  /* 13 natives (11 sys_* + 2 pip_*) + headroom for user-defined funcs in scripts */
 #define CL_MAX_ARGS 4
 typedef struct { char name[32]; bool is_str; i32 num; char str[64]; } cl_var_t;
 typedef struct { 
@@ -463,8 +464,15 @@ static void cl_stmt(cl_env_t *e, lexer_t *l) {
 
     /* name = expr; */
     if (l->cur.type == T_IDENT) {
+        lexer_t at_ident = *l;               /* to re-read a call statement as an expression */
         char name[32]; kstrncpy(name,l->cur.str,31); name[31]='\0';
         lex_next(l);
+        if (l->cur.type==T_LPAREN) {        /* f(...);  -- a call for its effect */
+            *l = at_ident;
+            (void)cl_expr(e,l);
+            if (l->cur.type==T_SEMI) lex_next(l);
+            return;
+        }
         if (l->cur.type==T_EQ) {
             lex_next(l);
             cl_val_t v=cl_expr(e,l);
@@ -536,6 +544,7 @@ static cl_val_t nat_sys_launch(cl_val_t *args, u32 nargs) {
         { "maze",     APP_MAZE,     "Maze" },
         { "3d",       APP_3D,       "3D Demo" },
         { "doom",     APP_DOOM,     "DOOM" },
+        { "pip",      APP_PIP,      "Pip" },
     };
     for (u32 i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
         if (kstrcmp(args[0].str, table[i].name) == 0) {
@@ -589,18 +598,56 @@ static cl_val_t nat_sys_first_run(cl_val_t *args, u32 nargs) {
     return vnum(1);
 }
 
+/* Counts script calls to Pip, so the Editor's own run reaction never
+ * talks over what the script asked him to do. */
+static u32 s_pip_calls;
+u32 care_lang_pip_calls(void) { return s_pip_calls; }
+static cl_val_t nat_pip_mood(cl_val_t *args, u32 nargs) {
+    s_pip_calls++;
+    return vnum(nargs >= 1 && args[0].is_str && pip_script_mood(args[0].str) ? 1 : 0);
+}
+static cl_val_t nat_pip_say(cl_val_t *args, u32 nargs) {
+    s_pip_calls++;
+    if (nargs >= 1 && args[0].is_str) pip_say(args[0].str, 4000);
+    return vnum(0);
+}
+
+/* The built-ins, in one table: registered for every run and listed by the
+ * Editor's docs panel (care_lang_builtin_name), so the two can't drift. */
+static const struct { const char *name; cl_val_t (*fn)(cl_val_t *, u32); const char *sig; } CL_NATIVES[] = {
+    { "sys_alert",         nat_sys_alert,         "sys_alert(text)" },
+    { "sys_window",        nat_sys_window,        "sys_window(title)" },
+    { "sys_beep",          nat_sys_beep,          "sys_beep(hz)" },
+    { "sys_exec",          nat_sys_exec,          "sys_exec(app_id)" },
+    { "sys_launch",        nat_sys_launch,        "sys_launch(\"files\")" },
+    { "sys_set_theme",     nat_sys_set_theme,     "sys_set_theme(0|1)" },
+    { "sys_set_wallpaper", nat_sys_set_wallpaper, "sys_set_wallpaper(n)" },
+    { "sys_get_setting",   nat_sys_get_setting,   "sys_get_setting(name)" },
+    { "sys_username",      nat_sys_username,      "sys_username()" },
+    { "sys_is_root",       nat_sys_is_root,       "sys_is_root()" },
+    { "sys_first_run",     nat_sys_first_run,     "sys_first_run()" },
+    { "pip_mood",          nat_pip_mood,          "pip_mood(\"happy\")" },
+    { "pip_say",           nat_pip_say,           "pip_say(\"hi!\")" },
+};
+#define CL_NATIVE_COUNT ((u32)(sizeof(CL_NATIVES) / sizeof(CL_NATIVES[0])))
+
 static void cl_init_natives(cl_env_t *env) {
-    cl_register_native(env, "sys_alert", nat_sys_alert);
-    cl_register_native(env, "sys_window", nat_sys_window);
-    cl_register_native(env, "sys_beep", nat_sys_beep);
-    cl_register_native(env, "sys_exec", nat_sys_exec);
-    cl_register_native(env, "sys_launch", nat_sys_launch);
-    cl_register_native(env, "sys_set_theme", nat_sys_set_theme);
-    cl_register_native(env, "sys_set_wallpaper", nat_sys_set_wallpaper);
-    cl_register_native(env, "sys_get_setting", nat_sys_get_setting);
-    cl_register_native(env, "sys_username", nat_sys_username);
-    cl_register_native(env, "sys_is_root", nat_sys_is_root);
-    cl_register_native(env, "sys_first_run", nat_sys_first_run);
+    for (u32 i = 0; i < CL_NATIVE_COUNT; i++) cl_register_native(env, CL_NATIVES[i].name, CL_NATIVES[i].fn);
+}
+
+u32 care_lang_builtin_count(void) { return CL_NATIVE_COUNT; }
+const char *care_lang_builtin_name(u32 i) { return i < CL_NATIVE_COUNT ? CL_NATIVES[i].name : ""; }
+const char *care_lang_builtin_sig(u32 i)  { return i < CL_NATIVE_COUNT ? CL_NATIVES[i].sig : ""; }
+
+/* 1-based line where the last failed run stopped (0 after a clean run). */
+static u32 g_cl_err_line;
+u32 care_lang_last_error_line(void) { return g_cl_err_line; }
+static void cl_note_error(const lexer_t *l, bool failed) {
+    g_cl_err_line = 0;
+    if (!failed) return;
+    u32 line = 1, end = l->pos < l->len ? l->pos : l->len;
+    for (u32 i = 0; i < end; i++) if (l->src[i] == '\n') line++;
+    g_cl_err_line = line;
 }
 
 /* ── Public entry points ─────────────────────────────────────────────────── */
@@ -614,6 +661,7 @@ int care_lang_exec(const char *src, u32 len) {
     lexer_t  lex; lex.src=src; lex.pos=0; lex.len=len;
     lex_next(&lex);
     cl_block(&env,&lex);
+    cl_note_error(&lex, env.had_error);
     return env.had_error ? -1 : 0;
 }
 
@@ -628,5 +676,6 @@ int care_lang_exec_buf(const char *src, u32 len, char *out, u32 out_max) {
     lex_next(&lex);
     cl_block(&env,&lex);
     g_cl_out=NULL;
+    cl_note_error(&lex, env.had_error);
     return env.had_error ? -1 : 0;
 }

@@ -3,6 +3,7 @@
  * x86_64 four-level paging: PML4, PDPT, PD, PT
  * ============================================================================= */
 #include "kernel.h"
+#include "mb2mmap.h"
 
 /* ── Physical frame allocator ──────────────────────────────────────────────── */
 #define PHYS_MEM_BYTES  (4096UL * 1024 * 1024)
@@ -18,6 +19,52 @@ static void frame_set(u32 frame) {
 
 static void frame_clear(u32 frame) {
     phys_bitmap[frame / 32] &= ~(1u << (frame % 32));
+}
+
+/* Withdraw every free frame the firmware memory map says is not RAM, plus the
+ * multiboot info block itself. paging_init() assumes a 4 GiB machine; on a
+ * 1 GiB VM it used to hand out ~3.5 GiB of frames that do not exist or that
+ * sit on the PCI hole (framebuffer, NIC registers). Call once, right after
+ * paging_init() and before anything allocates a frame. */
+static u32 s_usable_mib;
+/* Usable RAM reported by the firmware memory map (MiB). */
+u32 pmm_ram_mib(void) { return s_usable_mib; }
+
+void pmm_apply_map(u64 mbi_addr) {
+    static mb2_range_t usable[32];
+    mb2_range_t resv[1];
+    u32 nu = 0, nr = 0;
+    if (mbi_addr) {
+        const u8 *mbi = (const u8 *)(uintptr_t)mbi_addr;
+        u32 total = *(const u32 *)mbi;
+        if (total >= 16 && total <= 0x10000u) {           /* sane MBI sizes only */
+            nu = mb2_usable_ranges(mbi, total, usable, 32);
+            resv[0].base = mbi_addr; resv[0].end = mbi_addr + total; nr = 1;
+        }
+    }
+    if (nu == 0) {
+        /* No usable map (GRUB always provides one): keep the old assumption
+         * but never hand out the conventional PCI hole, where device BARs
+         * and the framebuffer live. */
+        usable[0].base = 0; usable[0].end = 0xC0000000ULL; nu = 1;
+        serial_write("[pmm] WARN: no valid memory map; excluding 3-4 GiB PCI hole\n");
+    }
+    u32 withdrawn = 0, usable_mib = 0;
+    for (u32 i = 0; i < nu; i++) usable_mib += (u32)((usable[i].end - usable[i].base) >> 20);
+    s_usable_mib = usable_mib;
+    for (u32 f = 0; f < FRAME_COUNT; f++) {
+        if (phys_bitmap[f / 32] & (1u << (f % 32))) continue;          /* already used */
+        if (pmm_frame_ok(usable, nu, resv, nr, (u64)f * PAGE_SIZE, PAGE_SIZE)) continue;
+        frame_set(f); phys_free_frames--; withdrawn++;
+    }
+    char b[16];
+    serial_write("[pmm] memory map: ");
+    kutoa(usable_mib, b, 10); serial_write(b);
+    serial_write(" MiB RAM, withdrew ");
+    kutoa(withdrawn / 256u, b, 10); serial_write(b);
+    serial_write(" MiB, ");
+    kutoa(phys_free_frames / 256u, b, 10); serial_write(b);
+    serial_write(" MiB free\n");
 }
 
 /* phys_bitmap/phys_free_frames are shared, unlocked global state. This
@@ -228,6 +275,82 @@ void paging_map_mmio(u32 phys_start, u32 size) {
         __asm__ volatile ("invlpg (%0)" : : "r"(p) : "memory");
     }
     serial_write("[paging] mmio mapped (uncached huge page)\n");
+}
+
+#define MSR_IA32_PAT 0x277
+
+static inline u64 rdmsr(u32 msr) {
+    u32 lo, hi;
+    __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((u64)hi << 32) | lo;
+}
+
+static inline void wrmsr(u32 msr, u64 value) {
+    __asm__ volatile ("wrmsr" : : "c"(msr), "a"((u32)value),
+                      "d"((u32)(value >> 32)) : "memory");
+}
+
+static bool cpu_has_pat(void) {
+    u32 a, b, c, d;
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                      : "a"(1), "c"(0));
+    return (d & (1u << 16)) != 0;
+}
+
+/* Map the requested framebuffer range UC first. Since this kernel uses 2 MiB
+ * identity mappings, boundary pages can also contain unrelated resources and
+ * must stay UC. Only complete 2 MiB pages wholly inside the framebuffer can
+ * safely be switched to WC. PAT entry 1 is selected by PWT=1, PCD=0, PAT=0.
+ * This kernel currently runs only on the BSP, so its PAT MSR is the only one
+ * that needs updating. Keep interrupts disabled across the WC transition so a
+ * task switch cannot observe a new PAT with stale framebuffer TLB entries. */
+void paging_map_framebuffer(u32 phys_start, u32 size) {
+    if (size == 0) return;
+
+    if (!cpu_has_pat()) {
+        paging_map_mmio(phys_start, size);
+        return;
+    }
+
+    /* UC is safe for the full range, including partial 2 MiB boundary pages. */
+    paging_map_mmio(phys_start, size);
+
+    const u64 page_2m = 0x200000ULL;
+    const u64 range_start = (u64)phys_start;
+    const u64 range_end = range_start + (u64)size;
+    u64 start = (range_start + page_2m - 1) & ~(page_2m - 1);
+    u64 end = range_end & ~(page_2m - 1);
+    if (end > 0x100000000ULL) end = 0x100000000ULL;
+    if (start >= end) {
+        serial_write("[paging] framebuffer mapped UC (no complete 2 MiB pages)\n");
+        return;
+    }
+
+    u64 flags;
+    __asm__ volatile ("pushfq; cli; pop %0" : "=r"(flags) :: "memory");
+
+    u64 pat = rdmsr(MSR_IA32_PAT);
+    pat = (pat & ~(0xFFULL << 8)) | (0x01ULL << 8); /* PAT1 = WC */
+    __asm__ volatile ("wbinvd" ::: "memory");
+    wrmsr(MSR_IA32_PAT, pat);
+
+    pde_t *pds[4] = { kernel_pd1, kernel_pd2, kernel_pd3, kernel_pd4 };
+    u32 wc_pages = 0;
+    for (u64 p = start; p < end; p += page_2m) {
+        u32 gb = (u32)(p >> 30);
+        u32 idx = (u32)((p >> 21) & 0x1FF);
+        pds[gb][idx] = (pds[gb][idx] & ~(u64)PDE_PCD) | PDE_PWT;
+        __asm__ volatile ("invlpg (%0)" : : "r"(p) : "memory");
+        wc_pages++;
+    }
+
+    __asm__ volatile ("wbinvd" ::: "memory");
+    __asm__ volatile ("push %0; popfq" : : "r"(flags) : "memory", "cc");
+
+    char count[16];
+    serial_write("[paging] framebuffer: ");
+    kutoa(wc_pages, count, 10); serial_write(count);
+    serial_write(" complete 2 MiB pages WC; partial boundary pages UC (PAT1=WC)\n");
 }
 
 pde_t *paging_create_dir(void) {

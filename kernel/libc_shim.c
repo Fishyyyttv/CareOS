@@ -21,12 +21,70 @@ int net_client_connected = 0;
 
 /* -- FILE handle table (fopen/fread/fseek/ftell/fclose) ------------------- */
 #define SHIM_MAX_FILES 16
+/* Writable handles keep the whole file in wbuf and flush it with one
+ * vfs_write() on fflush/fclose: vfs_write() always rewrites the file from
+ * offset 0, and Doom's savegame code calls fwrite() once per byte. */
 typedef struct {
     fs_node_t *node;
     u32        pos;
     bool       used;
+    bool       writable;
+    bool       dirty;
+    char      *wbuf;
+    u32        wlen;   /* logical file size while writable */
+    u32        wcap;
 } shim_file_t;
 static shim_file_t shim_files[SHIM_MAX_FILES];
+
+/* Absolute form of path. Ported code (Doom) uses relative paths such as
+ * "./.savegame/doomsav0.dsg", but vfs_resolve_path() only accepts absolute
+ * ones, so relative paths are anchored at the current user's home. */
+static void shim_abs_path(const char *path, char *out, u32 max) {
+    if (path[0] == '/') { kstrncpy(out, path, max - 1); out[max - 1] = '\0'; return; }
+    while (path[0] == '.' && path[1] == '/') path += 2;
+    if (user_current_uid() == 0) kstrcpy(out, "/root");
+    else { kstrcpy(out, "/home/"); kstrncpy(out + 6, user_current_name(), FS_NAME_MAX); }
+    if (path[0] == '\0' || (path[0] == '.' && path[1] == '\0')) return;
+    u32 l = kstrlen(out);
+    if (l + 1 + kstrlen(path) >= max) { out[0] = '\0'; return; }
+    out[l] = '/'; kstrcpy(out + l + 1, path);
+}
+
+/* Split an absolute path into its (existing) parent directory and leaf name.
+ * Trailing slashes are ignored. Returns NULL if the parent does not exist. */
+static fs_node_t *shim_parent(const char *abs, char *leaf) {
+    char buf[FS_PATH_MAX];
+    kstrncpy(buf, abs, FS_PATH_MAX - 1); buf[FS_PATH_MAX - 1] = '\0';
+    u32 l = kstrlen(buf);
+    while (l > 1 && buf[l - 1] == '/') buf[--l] = '\0';
+    char *slash = NULL;
+    for (char *p = buf; *p; p++) if (*p == '/') slash = p;
+    if (!slash || !slash[1]) return NULL;
+    kstrncpy(leaf, slash + 1, FS_NAME_MAX - 1); leaf[FS_NAME_MAX - 1] = '\0';
+    if (slash == buf) return vfs_root();
+    *slash = '\0';
+    fs_node_t *dir = vfs_resolve_path(buf);
+    return (dir && dir->type == FS_DIR) ? dir : NULL;
+}
+
+/* Grow a writable handle's buffer to hold at least need bytes. */
+static bool shim_reserve(shim_file_t *fh, u32 need) {
+    if (need <= fh->wcap) return true;
+    if (need > FS_FILE_MAX_BYTES) return false;
+    u32 cap = fh->wcap ? fh->wcap : 4096;
+    while (cap < need) cap *= 2;
+    if (cap > FS_FILE_MAX_BYTES) cap = FS_FILE_MAX_BYTES;
+    char *nb = (char *)kmalloc(cap);
+    if (!nb) return false;
+    if (fh->wbuf) { kmemcpy(nb, fh->wbuf, fh->wlen); kfree(fh->wbuf); }
+    fh->wbuf = nb;
+    fh->wcap = cap;
+    return true;
+}
+
+static u32 shim_size(shim_file_t *fh) {
+    return fh->writable ? fh->wlen : fh->node->size;
+}
 
 int strcasecmp(const char *s1, const char *s2) {
     while (*s1 && *s2) {
@@ -52,7 +110,7 @@ int strncasecmp(const char *s1, const char *s2, size_t n) {
 }
 
 time_t time(time_t *t) {
-    time_t res = (time_t)(timer_get_ticks() / 1000);
+    time_t res = (time_t)(timer_ms() / 1000);
     if (t) *t = res;
     return res;
 }
@@ -73,7 +131,13 @@ int stat(const char *pathname, struct stat *statbuf) {
 }
 
 int mkdir(const char *pathname, mode_t mode) {
-    return 0; /* Just pretend it worked */
+    (void)mode;
+    char abs[FS_PATH_MAX], leaf[FS_NAME_MAX];
+    shim_abs_path(pathname, abs, sizeof(abs));
+    fs_node_t *n = vfs_resolve_path(abs);
+    if (n) return n->type == FS_DIR ? 0 : -1;   /* already there: fine for Doom */
+    fs_node_t *parent = shim_parent(abs, leaf);
+    return (parent && vfs_mkdir(parent, leaf)) ? 0 : -1;
 }
 
 /* -- Standard I/O stubs -- */
@@ -82,38 +146,75 @@ FILE *stdout = NULL;
 FILE *stderr = NULL;
 
 FILE *fopen(const char *path, const char *mode) {
-    fs_node_t *node = vfs_resolve_path(path);
-    if (!node) return NULL;
+    if (!path || !mode) return NULL;
+    char abs[FS_PATH_MAX];
+    shim_abs_path(path, abs, sizeof(abs));
+    if (!abs[0]) return NULL;
+
+    bool trunc  = kstrchr(mode, 'w') != NULL;
+    bool append = kstrchr(mode, 'a') != NULL;
+    bool plus   = kstrchr(mode, '+') != NULL;
+    bool writable = trunc || append || plus;
+
+    fs_node_t *node = vfs_resolve_path(abs);
+    if (!node && (trunc || append)) {       /* "w"/"a" create missing files */
+        char leaf[FS_NAME_MAX];
+        fs_node_t *parent = shim_parent(abs, leaf);
+        if (parent) node = vfs_mkfile(parent, leaf);
+    }
+    if (!node || node->type != FS_FILE) return NULL;
+
     for (int i = 0; i < SHIM_MAX_FILES; i++) {
-        if (!shim_files[i].used) {
-            shim_files[i].node = node;
-            shim_files[i].pos  = 0;
-            shim_files[i].used = true;
-            return (FILE *)&shim_files[i];
+        shim_file_t *fh = &shim_files[i];
+        if (fh->used) continue;
+        kmemset(fh, 0, sizeof(*fh));
+        fh->node     = node;
+        fh->used     = true;
+        fh->writable = writable;
+        if (writable) {
+            /* Seed the buffer with current contents unless truncating. */
+            u32 keep = (trunc || !node->data) ? 0 : node->size;
+            if (!shim_reserve(fh, keep ? keep : 1)) { fh->used = false; return NULL; }
+            if (keep) kmemcpy(fh->wbuf, node->data, keep);
+            fh->wlen  = keep;
+            fh->dirty = trunc;              /* "w" empties the file even if unwritten */
+            if (append) fh->pos = keep;
         }
+        return (FILE *)fh;
     }
     return NULL;
 }
 
+int fflush(FILE *stream) {
+    shim_file_t *fh = (shim_file_t *)stream;
+    if (!fh || fh < shim_files || fh >= shim_files + SHIM_MAX_FILES) return 0;
+    if (!fh->used || !fh->writable || !fh->dirty) return 0;
+    if (vfs_write(fh->node, fh->wbuf ? fh->wbuf : "", fh->wlen) < 0) return -1;
+    fh->dirty = false;
+    return 0;
+}
+
 int fclose(FILE *fp) {
     shim_file_t *fh = (shim_file_t *)fp;
+    int rc = 0;
     if (fh && fh >= shim_files && fh < shim_files + SHIM_MAX_FILES) {
-        fh->used = false;
-        fh->node = NULL;
-        fh->pos  = 0;
+        rc = fflush(fp);
+        if (fh->wbuf) kfree(fh->wbuf);
+        kmemset(fh, 0, sizeof(*fh));
     }
-    return 0;
+    return rc;
 }
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *fp) {
     shim_file_t *fh = (shim_file_t *)fp;
-    if (!fh || !fh->used || !fh->node) return 0;
+    if (!fh || !fh->used || !fh->node || size == 0) return 0;
     size_t total = size * nmemb;
-    u32    avail = fh->node->size > fh->pos ? fh->node->size - fh->pos : 0;
+    u32    fsize = shim_size(fh);
+    u32    avail = fsize > fh->pos ? fsize - fh->pos : 0;
     if (total > (size_t)avail) total = (size_t)avail;
     if (total == 0) return 0;
     /* Owned and borrowed content now share one pointer. */
-    const char *src = fh->node->data;
+    const char *src = fh->writable ? fh->wbuf : fh->node->data;
     if (!src) return 0;
     kmemcpy(ptr, src + fh->pos, total);
     fh->pos += (u32)total;
@@ -121,7 +222,17 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *fp) {
 }
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *fp) {
-    return 0;
+    shim_file_t *fh = (shim_file_t *)fp;
+    if (!fh || !fh->used || !fh->writable || !ptr || size == 0) return 0;
+    u32 total = (u32)(size * nmemb);
+    if (!shim_reserve(fh, fh->pos + total)) return 0;
+    if (fh->pos > fh->wlen)                 /* seek past EOF: zero-fill the gap */
+        kmemset(fh->wbuf + fh->wlen, 0, fh->pos - fh->wlen);
+    kmemcpy(fh->wbuf + fh->pos, ptr, total);
+    fh->pos += total;
+    if (fh->pos > fh->wlen) fh->wlen = fh->pos;
+    fh->dirty = true;
+    return nmemb;
 }
 
 int fseek(FILE *fp, long offset, int whence) {
@@ -130,7 +241,7 @@ int fseek(FILE *fp, long offset, int whence) {
     long new_pos;
     if      (whence == 0) new_pos = offset;                            /* SEEK_SET */
     else if (whence == 1) new_pos = (long)fh->pos + offset;           /* SEEK_CUR */
-    else if (whence == 2) new_pos = (long)fh->node->size + offset;    /* SEEK_END */
+    else if (whence == 2) new_pos = (long)shim_size(fh) + offset;     /* SEEK_END */
     else return -1;
     if (new_pos < 0) return -1;
     fh->pos = (u32)new_pos;
@@ -143,21 +254,30 @@ long ftell(FILE *fp) {
     return (long)fh->pos;
 }
 
+/* Console output from ported code (Doom) goes to the serial log, so a fatal
+ * I_Error message is visible instead of vanishing. */
+static int shim_vlog(const char *format, va_list ap) {
+    static char buf[512];
+    int n = kvsnprintf(buf, sizeof(buf), format, ap);
+    serial_write(buf);
+    return n;
+}
+
 int printf(const char *format, ...) {
     va_list args;
     va_start(args, format);
-    kvsnprintf(NULL, 0, format, args);
+    int n = shim_vlog(format, args);
     va_end(args);
-    return 0;
+    return n;
 }
 
 int fprintf(FILE *fp, const char *format, ...) {
     va_list args;
     va_start(args, format);
-    /* For now, just print to console even if fp is a file */
-    kvsnprintf(NULL, 0, format, args);
+    (void)fp;   /* files and std streams alike go to the serial log */
+    int n = shim_vlog(format, args);
     va_end(args);
-    return 0;
+    return n;
 }
 
 int vsnprintf(char *str, size_t size, const char *format, va_list ap) {
@@ -181,29 +301,46 @@ int sprintf(char *str, const char *format, ...) {
 }
 
 int vfprintf(FILE *stream, const char *format, va_list ap) {
-    return kvsnprintf(NULL, 0, format, ap);
+    (void)stream;
+    return shim_vlog(format, ap);
 }
-
-int fflush(FILE *stream) { return 0; }
 
 void rewind(FILE *fp) { fseek(fp, 0, 0); }
 int  feof(FILE *fp) {
     shim_file_t *fh = (shim_file_t *)fp;
     if (!fh || !fh->used) return 1;
-    return fh->pos >= fh->node->size ? 1 : 0;
+    return fh->pos >= shim_size(fh) ? 1 : 0;
 }
 int ferror(FILE *fp) { return 0; }
 
 
 int remove(const char *pathname) {
-    fs_node_t *n = vfs_resolve_path(pathname);
+    char abs[FS_PATH_MAX];
+    shim_abs_path(pathname, abs, sizeof(abs));
+    fs_node_t *n = vfs_resolve_path(abs);
     if (n) return vfs_delete(n);
     return -1;
 }
 
+/* Doom saves to temp.dsg and then renames it over doomsavN.dsg. Same-dir
+ * renames are a VFS name change; across directories the data is copied. */
 int rename(const char *oldpath, const char *newpath) {
-    /* Simple stub: Doom only uses this for savegames */
-    return 0;
+    char from[FS_PATH_MAX], to[FS_PATH_MAX], leaf[FS_NAME_MAX];
+    shim_abs_path(oldpath, from, sizeof(from));
+    shim_abs_path(newpath, to, sizeof(to));
+    fs_node_t *src = vfs_resolve_path(from);
+    fs_node_t *dst_dir = shim_parent(to, leaf);
+    if (!src || !dst_dir) return -1;
+    if (src == vfs_resolve_path(to)) return 0;
+
+    fs_node_t *old = vfs_find(dst_dir, leaf);   /* POSIX: replace the target */
+    if (old && vfs_delete(old) != 0) return -1;
+
+    if (src->parent == dst_dir) return vfs_rename(src, leaf);
+    if (src->type != FS_FILE) return -1;
+    fs_node_t *dst = vfs_mkfile(dst_dir, leaf);
+    if (!dst || vfs_write(dst, src->data ? src->data : "", src->size) < 0) return -1;
+    return vfs_delete(src);
 }
 
 int putchar(int c) {
@@ -269,6 +406,7 @@ double atof(const char *nptr) {
 
 void *malloc(size_t size) { return kmalloc(size); }
 void free(void *ptr) { kfree(ptr); }
+void abort(void) { kernel_panic(0xAB07, "C runtime abort"); }
 int abs(int j) { return (j < 0) ? -j : j; }
 int system(const char *command) { return -1; }
 
@@ -338,24 +476,86 @@ char *strdup(const char *s) {
     return new;
 }
 
-double fabs(double x) { return (x < 0) ? -x : x; }
+/* Floating-point functions are provided by the musl math subset. */
 
 void *memset(void *s, int c, size_t n) { return kmemset(s, c, n); }
 
 void *memcpy(void *dest, const void *src, size_t n) { return kmemcpy(dest, src, n); }
+void *memmove(void *dest, const void *src, size_t n) {
+    unsigned char *d = (unsigned char *)dest; const unsigned char *s = (const unsigned char *)src;
+    if (d == s) return dest;
+    if (d < s) for (size_t i = 0; i < n; i++) d[i] = s[i];
+    else for (size_t i = n; i-- > 0;) d[i] = s[i];
+    return dest;
+}
 int memcmp(const void *s1, const void *s2, size_t n) { return kmemcmp(s1, s2, n); }
+void *memchr(const void *s, int c, size_t n) {
+    const unsigned char *p = (const unsigned char *)s;
+    for (size_t i = 0; i < n; i++) if (p[i] == (unsigned char)c) return (void *)(p + i);
+    return NULL;
+}
+
+char *strpbrk(const char *s, const char *accept) {
+    for (; *s; s++) for (const char *a = accept; *a; a++) if (*s == *a) return (char *)s;
+    return NULL;
+}
 size_t strlen(const char *s) { return kstrlen(s); }
 int strcmp(const char *s1, const char *s2) { return kstrcmp(s1, s2); }
 int strncmp(const char *s1, const char *s2, size_t n) { return kstrncmp(s1, s2, n); }
 char *strcpy(char *dest, const char *src) { return kstrcpy(dest, src); }
-char *strncpy(char *dest, const char *src, size_t n) { return kstrncpy(dest, src, n); }
+/* Standard strncpy: zero-fills the rest of dest. kstrncpy writes one NUL and
+ * leaves the tail as-is, which broke DOOM's 8-byte lump-name compares. */
+char *strncpy(char *dest, const char *src, size_t n) {
+    size_t i = 0;
+    for (; i < n && src[i]; i++) dest[i] = src[i];
+    for (; i < n; i++) dest[i] = '\0';
+    return dest;
+}
+
+static unsigned long shim_strtoul(const char *s, char **end, int base) {
+    const char *p = s; while (isspace((unsigned char)*p)) p++;
+    bool neg = false; if (*p == '+' || *p == '-') { neg = *p++ == '-'; }
+    if (base == 0) { base = 10; if (p[0] == '0') { base = 8; if (p[1] == 'x' || p[1] == 'X') { base = 16; p += 2; } } }
+    unsigned long v = 0; const char *first = p;
+    for (;;) {
+        int d = (*p >= '0' && *p <= '9') ? *p - '0' : (*p >= 'a' && *p <= 'z') ? *p - 'a' + 10 : (*p >= 'A' && *p <= 'Z') ? *p - 'A' + 10 : -1;
+        if (d < 0 || d >= base) break;
+        v = v * (unsigned)base + (unsigned)d; p++;
+    }
+    if (end) *end = (char *)(p == first ? s : p);
+    return neg ? (unsigned long)(-(long)v) : v;
+}
+long strtol(const char *s, char **end, int base) { return (long)shim_strtoul(s, end, base); }
+unsigned long strtoul(const char *s, char **end, int base) { return shim_strtoul(s, end, base); }
+float strtof(const char *s, char **end) {
+    const char *p = s; while (isspace((unsigned char)*p)) p++;
+    bool neg = false; if (*p == '+' || *p == '-') { neg = *p++ == '-'; }
+    float v = 0; bool any = false;
+    while (*p >= '0' && *p <= '9') { v = v * 10.0f + (float)(*p++ - '0'); any = true; }
+    if (*p == '.') { p++; float q = 0.1f; while (*p >= '0' && *p <= '9') { v += (*p++ - '0') * q; q *= 0.1f; any = true; } }
+    if (end) *end = (char *)(any ? p : s);
+    return neg ? -v : v;
+}
+
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
+    unsigned char *a = (unsigned char *)base;
+    for (size_t i = 1; i < nmemb; i++) {
+        size_t j = i;
+        while (j > 0 && compar(a + j * size, a + (j - 1) * size) < 0) {
+            for (size_t k = 0; k < size; k++) { unsigned char t = a[j * size + k]; a[j * size + k] = a[(j - 1) * size + k]; a[(j - 1) * size + k] = t; }
+            j--;
+        }
+    }
+}
 
 /* -- ctype.h -- */
 int toupper(int c) { if (c >= 'a' && c <= 'z') return c - 'a' + 'A'; return c; }
 int isspace(int c) { return (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'); }
 
 int access(const char *pathname, int mode) {
-    return vfs_resolve_path(pathname) ? 0 : -1;
+    char abs[FS_PATH_MAX];
+    shim_abs_path(pathname, abs, sizeof(abs));
+    return vfs_resolve_path(abs) ? 0 : -1;
 }
 
 int fstat(int fd, struct stat *statbuf) { return -1; }

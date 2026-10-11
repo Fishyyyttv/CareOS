@@ -10,7 +10,7 @@
  *   - wm_handle_mouse:
  *       * drag processed first (before click detection) -- fixes drag-stop bug
  *       * hit detection uses z_order
- *       * close/min/max button hitboxes: 16x16 circles, reliable
+ *       * shared, non-overlapping left-side close/min/max targets
  *       * app click coords passed relative to client rect
  *       * NEW: edge/corner resizing with min size enforcement
  *   - wm_draw_all: z-sorted draw. Enhanced shadow on focused window.
@@ -19,10 +19,16 @@
  * ============================================================================= */
 #include "kernel.h"
 #include "gui.h"
+#include "ui.h"
 #include "image.h"
 #include "icon.h"
+#include "font.h"
+#include "window_chrome.h"
+#include "pip/pip.h"
+#include "shadow.h"
 
 static window_t windows[MAX_WINDOWS];
+static u32 next_window_instance_id;
 window_t *wm_get_window(int i) { if(i<0||i>=MAX_WINDOWS) return NULL; return &windows[i]; }
 static u32      wm_next_z    = 1;
 bool     launcher_open = false;
@@ -36,37 +42,91 @@ bool g_clipboard_is_cut = false;
 /* -- Multi-desktop -------------------------------------------------------- */
 u32  g_current_desktop = 0;
 
+/* Is w shown on the current workspace? (0xFF = sticky, on every workspace.)
+ * Every focus/input path uses this: windows on other workspaces used to stay
+ * focusable and clickable while invisible. */
+bool wm_on_current_desktop(const window_t *w) {
+    return w->desktop == g_current_desktop || w->desktop == 0xFF;
+}
+
+/* Last pointer position seen by wm_handle_mouse: an unfocused window with the
+ * pointer near it may show hover effects, so it is drawn live, not cached. */
+static i32 s_wm_mouse_x = -10000, s_wm_mouse_y = -10000;
+/* The topmost window within 16 px of the pointer this frame (set by
+ * wm_draw_all). Only it can show hover effects; windows below it cannot. */
+static const window_t *s_wm_hover_top;
+
+static u32 wm_theme_id(void) {
+    /* Accent changes mutate the theme struct in place, so fold them in. */
+    return (u32)(uintptr_t)g_theme ^ g_theme->primary ^ (g_theme->accent << 1) ^
+           (g_theme->selection << 2) ^ g_theme->surface;
+}
+
+/* Apps whose pixels change on their own every frame or two. */
+static bool wm_app_always_live(const window_t *w) {
+    switch (w->app) {
+    case APP_CLOCK: case APP_SYSMON: case APP_NETMON:
+    case APP_DOOM: case APP_MAZE: case APP_3D: case APP_PIP:
+        return true;
+    case APP_BROWSER:
+        return w->browser_loading;
+    default:
+        return false;
+    }
+}
+
+static wcache_action_t wm_cache_action(window_t *w, i32 wx, i32 wy, i32 wd, i32 ht, bool transition) {
+    wcache_query_t q;
+    kmemset(&q, 0, sizeof q);
+    q.focused    = w->focused;
+    q.animating  = transition || w->animating || w->opacity != 255;
+    (void)wx; (void)wy;
+    q.hover_near = (w == s_wm_hover_top);
+    q.busy       = wm_app_always_live(w) || w->showing_snap_layouts ||
+                   w->hover_edge != RESIZE_NONE || w->resizing || w->dragging;
+    q.x = wx; q.y = wy; q.w = wd; q.h = ht;
+    q.screen_w = (i32)SCREEN_W; q.screen_h = (i32)SCREEN_H;
+    q.now_ms   = timer_ms();
+    q.theme_id = wm_theme_id();
+    q.font_id  = font_active_index();
+    q.stagger_ms = (u32)((w - windows) * 97 % 400);
+    wcache_action_t a = wcache_decide(&w->wcache, &q);
+    if (a == WC_DRAW && w->focused && w->wcache_px) {       /* free RAM while focused */
+        kfree(w->wcache_px); w->wcache_px = NULL;
+    }
+    if (a == WC_BLIT && !w->wcache_px) a = WC_DRAW;
+    return a;
+}
+
+static void wm_cache_capture(window_t *w, i32 wx, i32 wy, i32 wd, i32 ht) {
+    if (w->wcache_px && (w->wcache.w != wd || w->wcache.h != ht)) {
+        kfree(w->wcache_px); w->wcache_px = NULL;
+    }
+    if (!w->wcache_px) w->wcache_px = (u32 *)kmalloc((size_t)wd * (size_t)ht * 4u);
+    if (!w->wcache_px) { w->wcache.valid = false; return; }
+    gfx_snapshot_rect(wx, wy, wd, ht, w->wcache_px);
+    wcache_query_t q;
+    kmemset(&q, 0, sizeof q);
+    q.w = wd; q.h = ht; q.now_ms = timer_ms();
+    q.theme_id = wm_theme_id(); q.font_id = font_active_index();
+    wcache_captured(&w->wcache, &q);
+}
+
 /* -- Idle tracking (for screensaver / auto-lock) -------------------------- */
 u32  g_last_activity_tick = 0;
 
-/* -- Desktop icon table --------------------------------------------------- */
+/* -- Desktop shortcut column (visual-system spec §10, Desktop artboard) ----
+ * Left 28, top 68, 96 px buttons with 56 px icons and a 13 px semibold label.
+ * Only shortcuts with something real behind them: Home opens Files, Wallpapers
+ * opens Settings. "Care scripts" and "Trash" join when CareOS has them. */
 static desktop_icon_t icons[] = {
-    {"Terminal", APP_TERMINAL, 0,0,false,false, 0x4ade80},
-    {"Packages", APP_PKGMGR,   0,0,false,false, 0x06b6d4},
-    {"Notes",    APP_NOTES,    0,0,false,false, 0xfbbf24},
-    {"Editor",   APP_EDITOR,   0,0,false,false, 0x4ade80},
-    {"Files",    APP_FILES,    0,0,false,false, 0x4a6fff},
-    {"Paint",    APP_PAINT,    0,0,false,false, 0xf87171},
-    {"Monitor",  APP_SYSMON,   0,0,false,false, 0x22d3ee},
-    {"Clock",    APP_CLOCK,    0,0,false,false, 0xfbbf24},
-    {"Calc",     APP_CALC,     0,0,false,false, 0xfb923c},
-    {"NetMon",   APP_NETMON,   0,0,false,false, 0x22d3ee},
-    {"Browser",  APP_BROWSER,  0,0,false,false, 0x7c3aed},
-    {"Users",    APP_USERS,    0,0,false,false, 0xfb923c},
-    {"Maze",     APP_MAZE,     0,0,false,false, 0xef4444},
-    {"Wolf3D",   APP_3D,       0,0,false,false, 0xef4444},
-    {"Doom",     APP_DOOM,     0,0,false,false, 0xff0000},
-    {"Settings", APP_SETTINGS, 0,0,false,false, 0xa78bfa},
-    {"About",    APP_ABOUT,    0,0,false,false, 0x6b7280},
+    {"Home",       APP_FILES,    0,0,false,false, 0},
+    {"Wallpapers", APP_SETTINGS, 0,0,false,false, 0},
 };
-#define ICON_COUNT   17
-static i32 ICON_W      = 72;
-static i32 ICON_H      = 80;
-static i32 ICON_COL_W  = 96;   /* full column width = ICON_W + gap between cols */
-#define    ICON_MARGIN  20
-#define SIDEBAR_PANEL_X 2
-#define SIDEBAR_ROW_X   12
-#define SIDEBAR_DIVIDER_GAP 14
+#define ICON_COUNT ((int)(sizeof(icons) / sizeof(icons[0])))
+#define SHORTCUT_W     96
+#define SHORTCUT_ICON  56
+#define SHORTCUT_GAP   14
 
 /* Taskbar layout constants */
 #define TB_LAUNCHER_W  54
@@ -80,87 +140,110 @@ static i32 ICON_COL_W  = 96;   /* full column width = ICON_W + gap between cols 
 static u32        tb_last_tick = 0;
 static rtc_time_t tb_time;
 
-/* -- Icon layout (Sidebar style) ------------------------------------------ */
-static i32 sidebar_row_h(void) {
-    return ((i32)SCREEN_H < 720) ? 36 : 44;
-}
-
-static i32 sidebar_row_gap(void) {
-    return ((i32)SCREEN_H < 720) ? 3 : 5;
-}
-
-static i32 sidebar_icon_size(void) {
-    return ((i32)SCREEN_H < 720) ? 24 : 32;
-}
-
-static bool sidebar_break_after(int idx) {
-    return idx == 3 || idx == 5 || idx == 7 || idx == 9 || idx == 11;
+static i32 shortcut_h(void) {
+    return 8 + SHORTCUT_ICON + 8 + gfx_role_line_h(FONT_ROLE_UI, 1) + 8;
 }
 
 static rect_t sidebar_icon_rect(int idx) {
-    return rect_make(SIDEBAR_PANEL_X + 2, icons[idx].y, SIDEBAR_W - (SIDEBAR_PANEL_X + 2) * 2, sidebar_row_h());
+    return rect_make(icons[idx].x, icons[idx].y, SHORTCUT_W, shortcut_h());
 }
 
 static void layout_icons(void) {
-    i32 x = SIDEBAR_ROW_X;
-    i32 y = TOPBAR_H + 18;
-    i32 row_h = sidebar_row_h();
-    i32 gap = sidebar_row_gap();
+    i32 y = TOPBAR_H + 28;
     for (int i = 0; i < ICON_COUNT; i++) {
-        icons[i].x = x;
+        icons[i].x = 28;
         icons[i].y = y;
-        y += row_h + gap;
-        if (sidebar_break_after(i)) y += SIDEBAR_DIVIDER_GAP;
+        y += shortcut_h() + SHORTCUT_GAP;
     }
 }
 
-/* -- Icon graphics (Sidebar style) ---------------------------------------- */
 static void draw_desktop_icon(const desktop_icon_t *ic) {
-    i32 idx = (i32)(ic - icons);
-    rect_t r = sidebar_icon_rect(idx);
-    i32 sc = (i32)GFX_FONT_SCALE;
-    i32 icon_sz = sidebar_icon_size();
+    rect_t r = sidebar_icon_rect((int)(ic - icons));
+    if (ic->hover)
+        gfx_rect_rounded_blend(r.x, r.y, r.w, r.h, 16, g_theme->is_dark ? 0xFFFFFFu : g_theme->ink, 20);
+    ui_app_icon(ui_icon_for_app(ic->app), r.x + (r.w - SHORTCUT_ICON) / 2, r.y + 8, SHORTCUT_ICON);
+    /* Label with the artboard's soft text shadow, so it reads on any wallpaper. */
+    i32 tw = gfx_str_role_width(ic->label, FONT_ROLE_UI, 1, FONT_W_BOLD);
+    i32 tx = r.x + (r.w - tw) / 2, ty = r.y + 8 + SHORTCUT_ICON + 8;
+    u32 ink = g_theme->is_dark ? g_theme->ink : g_theme->ink;
+    if (g_theme->is_dark) gfx_str_role(tx, ty + 1, ic->label, 0x000000, FONT_ROLE_UI, 1, FONT_W_BOLD);
+    gfx_str_role(tx, ty, ic->label, ink, FONT_ROLE_UI, 1, FONT_W_BOLD);
+}
 
-    /* Hover / active highlight */
-    if (ic->hover) {
-        gfx_rect_rounded(r.x + 2, r.y + 1, r.w - 4, r.h - 2, CDL_R_BUTTON, COL_HOVER);
-        gfx_rect_rounded_outline(r.x + 2, r.y + 1, r.w - 4, r.h - 2, CDL_R_BUTTON, COL_ACCENT);
-    } else if (ic->selected) {
-        gfx_rect_rounded(r.x + 2, r.y + 1, r.w - 4, r.h - 2, CDL_R_BUTTON, COL_SELECTION);
+/* -- Desktop hero (visual-system spec §10) --------------------------------
+ * Date, "Good <part of day>, <name>." and the bar reserved for the coming AI
+ * assistant (a placeholder; it does not open anything). Artboard position left 260 / top 200 / width 700 at 1440x900,
+ * scaled to the screen. Resume chips need a real source (last session, recent
+ * files, pending updates); none exists yet, so none are shown. Hidden on short
+ * screens and while a maximized window covers the desktop. */
+static bool hero_visible(void) {
+    if ((i32)SCREEN_H < 720) return false;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        if (w->active && !w->minimized && w->maximized && wm_on_current_desktop(w)) return false;
     }
+    return true;
+}
 
-    /* Icon — left-aligned with consistent padding */
-    i32 icon_x = r.x + 10;
-    i32 icon_y = r.y + (r.h - icon_sz) / 2;
-    icon_draw_app(ic->app, icon_x, icon_y, icon_sz, ic->icon_color);
+/* A maximized window covers the desktop: the dock tucks itself away. */
+bool wm_fullscreen_active(void) {
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        if (w->active && !w->minimized && w->maximized && w->anim_kind != WM_ANIM_MINIMIZE &&
+            wm_on_current_desktop(w)) return true;
+    }
+    return false;
+}
 
-    /* Label — vertically centred next to icon, full name visible */
-    i32 tx = icon_x + icon_sz + 10;
-    i32 ty = r.y + (r.h - (i32)FONT_H * sc) / 2;
-    i32 max_lw = r.x + r.w - tx - 6;
-    gfx_str_clipped(tx, ty, max_lw, ic->label, ic->hover ? COL_TEXT : COL_DIM, COL_TRANSPARENT);
+static rect_t hero_search_rect(void) {
+    i32 x = 260 * (i32)SCREEN_W / 1440, y = 200 * (i32)SCREEN_H / 900;
+    i32 head = gfx_role_line_h(FONT_ROLE_UI, 4) + 6 + gfx_role_line_h(FONT_ROLE_DISPLAY, 4);
+    return rect_make(x, y + head + 22, 700, 60);
+}
+
+static void desktop_draw_hero(void) {
+    if (!hero_visible()) return;
+    rtc_time_t t;
+    clock_read_local(&t);
+    static const char *const DAYS[7] = { "Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday" };
+    static const char *const MONS[12] = { "January","February","March","April","May","June","July",
+                                          "August","September","October","November","December" };
+    i32 x = 260 * (i32)SCREEN_W / 1440, y = 200 * (i32)SCREEN_H / 900;
+
+    char line[40];
+    ksprintf(line, "%s, %s %d", DAYS[clock_day_of_week((i32)t.year, (i32)t.month, (i32)t.day)],
+             (t.month >= 1 && t.month <= 12) ? MONS[t.month - 1] : "", (int)t.day);
+    gfx_str_role(x, y, line, g_theme->is_dark ? 0xD5DAEAu : g_theme->ink2, FONT_ROLE_UI, 4, FONT_W_REGULAR);
+    y += gfx_role_line_h(FONT_ROLE_UI, 4) + 6;
+
+    /* Greeting by local hour: 5-12 morning, 12-18 afternoon, otherwise evening. */
+    const char *part = (t.hour >= 5 && t.hour < 12) ? "morning" : (t.hour >= 12 && t.hour < 18) ? "afternoon" : "evening";
+    const char *name = user_current_name();
+    char greet[80];
+    ksprintf(greet, "Good %s, %s.", part, (name && name[0]) ? name : "friend");
+    gfx_str_role_fit(x, y, (i32)SCREEN_W - x - 360, greet, g_theme->ink, FONT_ROLE_DISPLAY, 4, FONT_W_BOLD);
+
+    /* Search bar: glass, 20 radius, hairline, the artboard's soft drop shadow. */
+    rect_t s = hero_search_rect();
+    ui_glass(30, s, 20, g_theme->panel_tint, g_theme->is_dark ? 184 : 199, 24,
+             UI_GLASS_HAIRLINE | UI_GLASS_SHADOW_M);
+    /* Reserved for the AI assistant: a placeholder, not wired to anything yet. */
+    ui_care_logo(s.x + 18, s.y + (s.h - 22) / 2, 22);
+    gfx_str_role(s.x + 52, s.y + (s.h - gfx_role_line_h(FONT_ROLE_UI, 3)) / 2,
+                 "Ask Care anything", g_theme->muted, FONT_ROLE_UI, 3, FONT_W_REGULAR);
+    {
+        const char *soon = "Coming soon";
+        i32 cw = gfx_str_role_width(soon, FONT_ROLE_UI, 0, FONT_W_BOLD) + 20, ch = 26;
+        i32 cx = s.x + s.w - 14 - cw, cy = s.y + (s.h - ch) / 2;
+        gfx_rect_rounded(cx, cy, cw, ch, ch / 2, g_theme->raised2);
+        gfx_str_role(cx + 10, cy + (ch - gfx_role_line_h(FONT_ROLE_UI, 0)) / 2, soon,
+                     g_theme->ink2, FONT_ROLE_UI, 0, FONT_W_BOLD);
+    }
 }
 
 void desktop_draw(void) {
-    i32 panel_y = TOPBAR_H + 4;
-    i32 panel_h = (i32)SCREEN_H - panel_y - 8;
-    i32 panel_x = SIDEBAR_PANEL_X;
-    i32 panel_w = SIDEBAR_W - SIDEBAR_PANEL_X * 2;
-
-    /* Sidebar: the same frosted glass the dock and widgets use, so the whole
-     * desktop reads as one material instead of a flat opaque slab. */
-    gfx_shadow_soft(panel_x, panel_y, panel_w, panel_h, CDL_R_CARD);
-    gfx_glass_panel(panel_x, panel_y, panel_w, panel_h, CDL_R_CARD);
-
-    /* App rows */
-    for (int i = 0; i < ICON_COUNT; i++) {
-        draw_desktop_icon(&icons[i]);
-        if (sidebar_break_after(i)) {
-            rect_t r = sidebar_icon_rect(i);
-            i32 dy = r.y + r.h + sidebar_row_gap() / 2 + SIDEBAR_DIVIDER_GAP / 2;
-            gfx_hline(panel_x + 14, dy, panel_w - 28, COL_BORDER);
-        }
-    }
+    desktop_draw_hero();
+    for (int i = 0; i < ICON_COUNT; i++) draw_desktop_icon(&icons[i]);
 }
 
 
@@ -170,9 +253,6 @@ void wm_init(void) {
     open_count = 0;
     wm_next_z  = 1;
     launcher_open = false;
-    ICON_W     = SIDEBAR_W - SIDEBAR_ROW_X * 2;
-    ICON_H     = sidebar_row_h();
-    ICON_COL_W = SIDEBAR_W;
     layout_icons();
     rtc_read(&tb_time);
 }
@@ -181,7 +261,7 @@ void wm_init(void) {
 void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     switch (app) {
     case APP_CALC:     *w = 320; *h = 440; return;
-    case APP_CLOCK:    *w = 280; *h = 240; return;
+    case APP_CLOCK:    *w = 300; *h = 330; return;   /* room for time + weekday/date lines */
     case APP_ABOUT: {
         /* app_about_draw stacks a logo, an H2 wordmark, a version line, a
          * rule, seven info rows and a footer, all on the live line height. A
@@ -199,8 +279,39 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     }
     case APP_PAINT:    *w = sw*75/100; *h = sh*75/100; return;
     case APP_DOOM:     *w = 640; *h = 400 + TITLEBAR_H; return; /* 640x400 client + titlebar */
+    case APP_PIP:      *w = 1180; *h = 760; return;
     default:           *w = sw*65/100; *h = sh*70/100; return;
     }
+}
+
+/* Smallest window each app still lays out correctly in, derived from the
+ * app's own fixed columns (keep in sync with them), scaled with the font and
+ * capped to the screen. Applied on open, resize and snap. */
+void app_min_size(app_id_t app, i32 *w, i32 *h) {
+    i32 sc = (i32)GFX_FONT_SCALE;
+    i32 mw = MIN_WIN_W, mh = MIN_WIN_H;
+    switch (app) {
+    case APP_SETTINGS: mw = (120 + 64 * sc) + 52 + 320 * sc; mh = 420 * sc; break; /* sidebar sb, app_settings.c */
+    case APP_FILES:    mw = 180 + 420 * sc;                  mh = 360 * sc; break; /* sidebar + grid, app_files.c */
+    case APP_BROWSER:  mw = 460 * sc;                         mh = 320 * sc; break;
+    case APP_EDITOR:   mw = 480 * sc;                         mh = 320 * sc; break;
+    case APP_PAINT:    mw = 500 * sc;                         mh = 340 * sc; break;
+    case APP_USERS:    mw = 460 * sc;                         mh = 380 * sc; break;
+    case APP_PKGMGR:   mw = 440 * sc;                         mh = 320 * sc; break;
+    case APP_CALC:     mw = 260 * sc;                         mh = 380 * sc; break;
+    case APP_DOOM:     mw = 640;                              mh = 400 + TITLEBAR_H; break;
+    case APP_PIP:      mw = 900;                              mh = 600; break;
+    case APP_ABOUT:    mw = 460 * sc;                         mh = 420 * sc; break;
+    case APP_NETMON:   mw = 360 * sc;                         mh = 280 * sc; break;
+    case APP_SYSMON:   mw = 360 * sc;                         mh = 300 * sc; break;
+    case APP_CLOCK:    mw = 280 * sc;                         mh = 320 * sc; break;
+    default: break;
+    }
+    if (mw < MIN_WIN_W) mw = MIN_WIN_W;
+    if (mh < MIN_WIN_H) mh = MIN_WIN_H;
+    if (mw > (i32)SCREEN_W) mw = (i32)SCREEN_W;
+    if (mh > (i32)SCREEN_H - (i32)TOPBAR_H) mh = (i32)SCREEN_H - (i32)TOPBAR_H;
+    *w = mw; *h = mh;
 }
 
 /* -- Animation helpers (macOS-style open/close/minimise transitions) ------ */
@@ -225,7 +336,7 @@ static void wm_refocus_after(window_t *skip) {
     window_t *top = NULL; u32 bz = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *o = &windows[i];
-        if (o == skip || !o->active || o->minimized) continue;
+        if (o == skip || !o->active || o->minimized || !wm_on_current_desktop(o)) continue;
         if (o->anim_kind == WM_ANIM_CLOSE || o->anim_kind == WM_ANIM_MINIMIZE) continue;
         if (o->z_order >= bz) { top = o; bz = o->z_order; }
     }
@@ -236,6 +347,23 @@ static void wm_refocus_after(window_t *skip) {
  * original wm_close side effects (slot freed, cascade count decremented, buffer freed). */
 static void wm_finish_close(window_t *w) {
     if (w->win_buffer.pixels) { kfree(w->win_buffer.pixels); w->win_buffer.pixels = NULL; }
+    if (w->wcache_px) { kfree(w->wcache_px); w->wcache_px = NULL; }
+    if (w->app == APP_TERMINAL) app_terminal_close(w);
+    if (w->app == APP_FILES) app_files_close(w);
+    if (w->app == APP_NOTES) app_notes_close(w);   /* saves before the state goes */
+    if (w->app == APP_EDITOR) app_editor_close(w);
+    if (w->app_state) { kfree(w->app_state); w->app_state = NULL; }
+    if (w->app == APP_BROWSER) {
+        browser_fetch_cancel(w->instance_id);
+        app_browser_close(w);
+        if (w->bview_px) { kfree(w->bview_px); w->bview_px = NULL; }
+        if (w->browser_links) { kfree(w->browser_links); w->browser_links = NULL; }
+        for (int t = 0; t < 4; t++)
+            if (w->browser_tab_content[t]) { kfree(w->browser_tab_content[t]); w->browser_tab_content[t] = NULL; }
+    }
+    if (w->text_buf) { kfree(w->text_buf); w->text_buf = NULL; w->text_cap = 0; }
+    w->wcache.valid = false;
+    if (w->root) { widget_destroy(w->root); w->root = NULL; }
     w->active    = false;
     w->focused   = false;
     w->animating = false;
@@ -251,7 +379,7 @@ static void wm_start_restore(window_t *w) {
     w->anim_from       = wm_dock_rect();
     w->target_rect     = home;
     w->anim_kind       = WM_ANIM_RESTORE;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->opacity         = 0;
     w->animating       = true;
     wm_focus(w);
@@ -260,10 +388,16 @@ static void wm_start_restore(window_t *w) {
 /* -- Open window -- SINGLE init path -------------------------------------- */
 window_t *wm_open(app_id_t app, const char *title,
                   i32 x, i32 y, i32 w, i32 h) {
+    {   /* Never open an app smaller than it can lay out. */
+        i32 mnw, mnh; app_min_size(app, &mnw, &mnh);
+        if (w < mnw) w = mnw;
+        if (h < mnh) h = mnh;
+    }
 
     /* If app already open -- restore + focus, no re-init */
     for (int i = 0; i < MAX_WINDOWS; i++) {
         if (windows[i].active && windows[i].app == app && app != APP_NONE) {
+            windows[i].desktop = g_current_desktop;
             if (windows[i].minimized) wm_start_restore(&windows[i]); /* grow from dock */
             else                      wm_focus(&windows[i]);
             serial_write("  [wm_open] restored existing window\n");
@@ -277,7 +411,17 @@ window_t *wm_open(app_id_t app, const char *title,
 
         window_t *win = &windows[i];
         kmemset(win, 0, sizeof(window_t));
+        win->desktop = g_current_desktop;
+        /* Every app's text/state buffer. Zero-filled: Paint uses it as a 64x64
+         * canvas and NetMon as history bytes. If it cannot be allocated the
+         * window is not created at all (the slot stays free). */
+        win->text_buf = (char *)kmalloc(WIN_TEXT_BUF);
+        if (!win->text_buf) return NULL;
+        kmemset(win->text_buf, 0, WIN_TEXT_BUF);
+        win->text_cap = WIN_TEXT_BUF;
         win->active   = true;
+        win->instance_id = ++next_window_instance_id;
+        if (!win->instance_id) win->instance_id = ++next_window_instance_id;
         win->focused  = true;
         win->app      = app;
         win->z_order  = wm_next_z++;
@@ -312,7 +456,7 @@ window_t *wm_open(app_id_t app, const char *title,
          * first animation tick moves it. */
         win->anim_from       = rect_scale_center(win->rect, 95);
         win->anim_kind       = WM_ANIM_OPEN;
-        win->anim_start_tick = timer_get_ticks();
+        win->anim_start_tick = timer_ms();
         win->opacity         = 0;
         win->animating       = true;
 
@@ -320,16 +464,16 @@ window_t *wm_open(app_id_t app, const char *title,
         /* Initialize structural UI root */
         rect_t cr = wm_client_rect(win);
         win->root = widget_create(WIDGET_PANEL, 0, 0, cr.w, cr.h);
+        if (!win->root) {
+            kfree(win->text_buf); win->text_buf = NULL; win->text_cap = 0;
+            win->active = false;
+            return NULL;
+        }
         win->root->bg_color = COL_SURFACE;
         
-        /* Allocate offscreen buffer */
-        win->win_buffer.w = (u32)w;
-        win->win_buffer.h = (u32)h;
-        win->win_buffer.pitch = (u32)w * 4;
-        win->win_buffer.pixels = (u32 *)kmalloc((size_t)w * (size_t)h * 4);
-        if (win->win_buffer.pixels) {
-            kmemset(win->win_buffer.pixels, 0, (size_t)w * (size_t)h * 4);
-        }
+        /* No per-window offscreen buffer: only DOOM needs one, and it
+         * allocates its own fixed-size frame in app_doom_init. This used to
+         * cost w*h*4 bytes (several MB) for every window of every app. */
 
         open_count++;
 
@@ -355,11 +499,13 @@ window_t *wm_open(app_id_t app, const char *title,
         case APP_MAZE:     app_maze_init(win);     break;
         case APP_3D:       app_3d_init(win);       break;
         case APP_DOOM:     app_doom_init(win);     break;
+        case APP_PIP:      app_pip_init(win);      break;
         case APP_ABOUT:    app_about_init(win);    break;
         case APP_HELP:     app_help_init(win);     break;
         default: break;
         }
 
+        if (app != APP_PIP) pip_event(PE_LOADING);   /* Pip thinks while it opens */
         return win;
     }
 
@@ -371,6 +517,7 @@ window_t *wm_open(app_id_t app, const char *title,
 void wm_close(window_t *w) {
     if (!w) return;
     if (w->anim_kind == WM_ANIM_CLOSE) return;  /* already closing */
+    if (w->app == APP_PIP) { pip_event(PE_CLOSE_HOME); pip_say("See you soon!", 1800); }   /* he waves goodbye */
 
     /* Start the close transition: shrink to ~95% about centre + fade out. The
      * window stays active/drawn until the animation finishes; the real teardown
@@ -379,7 +526,7 @@ void wm_close(window_t *w) {
     w->anim_from       = w->rect;
     w->target_rect     = rect_scale_center(w->rect, 95);
     w->anim_kind       = WM_ANIM_CLOSE;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->opacity         = 255;
     w->animating       = true;
     w->focused         = false;
@@ -388,9 +535,11 @@ void wm_close(window_t *w) {
 
 void wm_close_all(void) {
     /* Close every open window (e.g. on Log Out / Switch User) so the next
-       session starts with a clean desktop. Mirrors wm_close() per-window. */
+       session starts with a clean desktop. Tears down synchronously: the login
+       flow runs its own loop and never ticks wm_animate_all(), so an animated
+       close would leave these windows alive into the next user's session. */
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        if (windows[i].active) wm_close(&windows[i]);
+        if (windows[i].active) wm_finish_close(&windows[i]);
     }
     open_count = 0;
 }
@@ -414,7 +563,7 @@ void wm_minimize(window_t *w) {
     w->anim_from       = w->rect;
     w->target_rect     = wm_dock_rect();
     w->anim_kind       = WM_ANIM_MINIMIZE;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->opacity         = 255;
     w->animating       = true;
 
@@ -429,9 +578,11 @@ void wm_maximize(window_t *w) {
     } else {
         w->restore_rect = w->rect;
         /* Start below the top bar (which draws over windows) so the titlebar and
-         * its min/max/close buttons stay reachable, and stop above the dock. */
+         * its min/max/close buttons stay reachable, and run to the bottom edge:
+         * the dock slides away while a maximized window shows and comes back
+         * when the pointer touches the bottom of the screen (taskbar.c). */
         w->rect = rect_make(0, (i32)TOPBAR_H, (i32)SCREEN_W,
-                            (i32)SCREEN_H - (i32)TOPBAR_H - (i32)TASKBAR_H);
+                            (i32)SCREEN_H - (i32)TOPBAR_H);
         w->maximized = true;
     }
 }
@@ -444,7 +595,8 @@ rect_t wm_client_rect(window_t *w) {
 window_t *wm_focused(void) {
     window_t *best = NULL; u32 bz = 0;
     for (int i = 0; i < MAX_WINDOWS; i++)
-        if (windows[i].active && windows[i].focused && windows[i].z_order >= bz) {
+        if (windows[i].active && windows[i].focused && wm_on_current_desktop(&windows[i]) &&
+            windows[i].z_order >= bz) {
             best = &windows[i]; bz = windows[i].z_order;
         }
     return best;
@@ -460,7 +612,7 @@ void wm_cycle_focus(int dir) {
     int order[MAX_WINDOWS];
     int cnt = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        if (windows[i].active && !windows[i].minimized)
+        if (windows[i].active && !windows[i].minimized && wm_on_current_desktop(&windows[i]))
             order[cnt++] = i;
     }
     if (cnt <= 1) return;
@@ -500,7 +652,7 @@ void wm_snap_focused(int mode) {
 
     w->maximized = false;
     w->animating = true;
-    w->anim_start_tick = timer_get_ticks();
+    w->anim_start_tick = timer_ms();
     w->restore_rect = w->rect;
 
     switch (mode) {
@@ -521,6 +673,13 @@ void wm_snap_focused(int mode) {
     case SNAP_BR:
         w->target_rect = rect_make(sw/2, top + sh/2, sw-sw/2, sh-sh/2); break;
     }
+    {   /* A snap zone smaller than the app's minimum grows to the minimum,
+         * staying on screen. */
+        i32 mnw, mnh; app_min_size(w->app, &mnw, &mnh);
+        rect_t *t = &w->target_rect;
+        if (t->w < mnw) { if (t->x + mnw > (i32)SCREEN_W) t->x = (i32)SCREEN_W - mnw; t->w = mnw; }
+        if (t->h < mnh) { if (t->y + mnh > (i32)SCREEN_H) t->y = (i32)SCREEN_H - mnh; t->h = mnh; }
+    }
 }
 
 /* -- Detect resize edge under cursor. A wider zone is much easier to grab, and
@@ -538,6 +697,7 @@ static cursor_shape_t edge_to_cursor(u32 edge) {
 static u32 detect_resize_edge(window_t *w, i32 mx, i32 my) {
     rect_t r = w->rect;
     if (mx < r.x || mx >= r.x + r.w || my < r.y || my >= r.y + r.h) return RESIZE_NONE;
+    if (wm_control_hit(r.x, r.y, TITLEBAR_H, mx, my) != WM_CONTROL_NONE) return RESIZE_NONE;
 
     /* Corners get a larger square so diagonal resize is easy to hit; edges use
      * the base zone. Corners are tested first. */
@@ -564,7 +724,7 @@ static u32 detect_resize_edge(window_t *w, i32 mx, i32 my) {
 
 bool wm_animate_all(void) {
     bool any = false;
-    u32  now = timer_get_ticks();
+    u32  now = timer_ms();
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
         if (!w->active || !w->animating) continue;   // <-- add !w->animating
@@ -620,10 +780,11 @@ bool wm_animate_all(void) {
             w->rect.w += dw / 4;
             w->rect.h += dh / 4;
 
-            if (kabs(dx) < 2) w->rect.x = w->target_rect.x;
-            if (kabs(dy) < 2) w->rect.y = w->target_rect.y;
-            if (kabs(dw) < 2) w->rect.w = w->target_rect.w;
-            if (kabs(dh) < 2) w->rect.h = w->target_rect.h;
+            /* Division by four cannot advance a remaining delta of 1..3. */
+            if (kabs(dx) < 4) w->rect.x = w->target_rect.x;
+            if (kabs(dy) < 4) w->rect.y = w->target_rect.y;
+            if (kabs(dw) < 4) w->rect.w = w->target_rect.w;
+            if (kabs(dh) < 4) w->rect.h = w->target_rect.h;
 
             any = true;
         } else {
@@ -634,11 +795,15 @@ bool wm_animate_all(void) {
 }
 
 
+static rect_t wm_snap_rect(const window_t *w) {
+    return rect_make(wm_snap_x(w->rect.x, (i32)SCREEN_W),
+                     w->rect.y + TITLEBAR_H + 4, WM_SNAP_WIDTH, WM_SNAP_HEIGHT);
+}
+
 void wm_draw_snap_layouts(window_t *w) {
     if (!w->showing_snap_layouts) return;
-    i32 wd = 180, ht = 120;
-    i32 x = w->rect.x + w->rect.w - wd - 4;
-    i32 y = w->rect.y + TITLEBAR_H + 4;
+    rect_t r = wm_snap_rect(w);
+    i32 x = r.x, y = r.y, wd = r.w, ht = r.h;
 
     gfx_shadow(x, y, wd, ht);
     gfx_rect_rounded(x, y, wd, ht, 8, COL_SURFACE);
@@ -661,12 +826,55 @@ void wm_draw_snap_layouts(window_t *w) {
     }
 }
 
-/* Titlebar button centers -- used identically in draw_window AND wm_handle_mouse */
-#define TB_BTN_R      8
-#define TB_BTN_CY(wy) ((wy) + TITLEBAR_H / 2)
-#define TB_BTN_MIN_X(wx, ww)    ((wx) + (ww) - 74)
-#define TB_BTN_MAX_X(wx, ww)    ((wx) + (ww) - 48)
-#define TB_BTN_CLOSE_X(wx, ww)  ((wx) + (ww) - 22)
+/* Only these small corner tiles need preserving around legacy apps, whose
+ * rectangle fills do not all honour the client clip. Reused sequentially for
+ * each window: no full-window buffer, heap allocation, or per-frame blur. */
+static u32 chrome_corners[4][WM_CHROME_RADIUS * WM_CHROME_RADIUS];
+
+static void wm_corners(i32 x, i32 y, i32 w, i32 h, bool restore) {
+    const i32 r = WM_CHROME_RADIUS;
+    for (i32 corner = 0; corner < 4; corner++) {
+        i32 cx = (corner & 1) ? x + w - r : x;
+        i32 cy = (corner & 2) ? y + h - r : y;
+        if (!restore) {
+            gfx_snapshot_rect(cx, cy, r, r, chrome_corners[corner]);
+        } else {
+            for (i32 row = 0; row < r; row++) {
+                i32 x0, x1;
+                if (!rr_row_span(x, y, w, h, r, cy + row, &x0, &x1)) continue;
+                for (i32 col = 0; col < r; col++)
+                    if (cx + col < x0 || cx + col >= x1)
+                        gfx_setpixel(cx + col, cy + row, chrome_corners[corner][row * r + col]);
+            }
+        }
+    }
+}
+
+static void wm_draw_controls(window_t *w, const wm_chrome_palette_t *p) {
+    i32 cy = w->rect.y + TITLEBAR_H / 2;
+    i32 hover = w == s_wm_hover_top
+              ? wm_control_hit(w->rect.x, w->rect.y, TITLEBAR_H, s_wm_mouse_x, s_wm_mouse_y)
+              : WM_CONTROL_NONE;
+    u32 colors[] = {p->close, p->minimize, p->maximize};
+    for (i32 i = 0; i < 3; i++) {
+        i32 cx = wm_control_x(w->rect.x, i);
+        u32 color = w->focused || hover != WM_CONTROL_NONE ? colors[i] : p->inactive;
+        /* Rounded fill has an exact 14px footprint (circle_fill is 2r+1). */
+        gfx_rect_rounded_blend(cx - 7, cy - 7, 14, 14, 7, color, 255);
+        if (hover == WM_CONTROL_NONE) continue;
+        if (i == WM_CONTROL_CLOSE) {
+            gfx_line(cx - 3, cy - 3, cx + 2, cy + 2, p->glyph);
+            gfx_line(cx - 3, cy + 2, cx + 2, cy - 3, p->glyph);
+        } else if (i == WM_CONTROL_MIN) {
+            gfx_hline(cx - 3, cy, 6, p->glyph);
+        } else if (w->maximized) {
+            gfx_rect_outline(cx - 2, cy - 3, 5, 5, p->glyph);
+            gfx_rect_outline(cx - 3, cy - 1, 5, 4, p->glyph);
+        } else {
+            gfx_rect_outline(cx - 3, cy - 3, 6, 6, p->glyph);
+        }
+    }
+}
 
 /* -- Draw one window (direct-to-screen, no intermediate buffer) ------------- */
 static void draw_window(window_t *w) {
@@ -682,22 +890,46 @@ static void draw_window(window_t *w) {
     /* Soft floating drop shadow (CDL). Focused windows float higher (full CDL
      * defaults); unfocused ones sit lower with a fainter, tighter halo. Drawn
      * before the surface. */
-    if (w->focused)
-        gfx_shadow_soft(wx, wy, wd, ht, CDL_R_WINDOW);
-    else
-        gfx_shadow_soft_ex(wx, wy, wd, ht, CDL_R_WINDOW,
-                           CDL_SHADOW_BLUR * 3 / 4, CDL_SHADOW_ALPHA / 2,
-                           CDL_SHADOW_DY / 2);
+    /* Settled windows use the hollow variant: the opaque body drawn next hides
+     * everything under it, so blending there was wasted work. Transitions keep
+     * the full shadow (their body is faded over the backdrop). */
+    bool hollow = (w->opacity == 255 && !transition);
+    if (w->focused) {
+        if (hollow) gfx_shadow_soft_hollow(wx, wy, wd, ht, CDL_R_WINDOW,
+                                           CDL_SHADOW_BLUR, CDL_SHADOW_ALPHA, CDL_SHADOW_DY);
+        else        gfx_shadow_soft(wx, wy, wd, ht, CDL_R_WINDOW);
+    } else {
+        if (hollow) gfx_shadow_soft_hollow(wx, wy, wd, ht, CDL_R_WINDOW,
+                                           CDL_SHADOW_BLUR * 3 / 4, CDL_SHADOW_ALPHA / 2,
+                                           CDL_SHADOW_DY / 2);
+        else        gfx_shadow_soft_ex(wx, wy, wd, ht, CDL_R_WINDOW,
+                                       CDL_SHADOW_BLUR * 3 / 4, CDL_SHADOW_ALPHA / 2,
+                                       CDL_SHADOW_DY / 2);
+    }
 
-    /* Window body */
-    gfx_rect_rounded(wx, wy, wd, ht, CDL_R_WINDOW, COL_SURFACE);
+    /* Unfocused, settled windows are blitted from their cached pixels. */
+    wcache_action_t wc = wm_cache_action(w, wx, wy, wd, ht, transition);
+    if (wc == WC_BLIT) {
+        gfx_blit_argb_rounded(wx, wy, w->wcache_px, wd, ht, CDL_R_WINDOW);
+        return;
+    }
 
-    /* Titlebar */
-    u32 tbar_col = w->focused ? COL_WINBAR : g_theme->surface2;
-    gfx_rect_rounded(wx, wy, wd, TITLEBAR_H, CDL_R_WINDOW, tbar_col);
-    gfx_rect_blend(wx + 1, wy + 1, wd - 2, TITLEBAR_H - 2, COL_WHITE, w->focused ? 25 : 12);
-    gfx_hline(wx, wy + TITLEBAR_H - 1, wd, COL_BORDER);
-    gfx_rect_rounded_outline(wx, wy, wd, ht, CDL_R_WINDOW, w->focused ? COL_BORDER : g_theme->surface2);
+    wm_corners(wx, wy, wd, ht, false);
+    const wm_chrome_palette_t *chrome = theme_window_chrome();
+    /* Opaque scanline fill: avoid alpha arithmetic across the whole window.
+     * The saved corner tiles restore the rounded silhouette after app paint. */
+    gfx_rect(wx, wy, wd, ht, chrome->body);
+
+    /* Round only the top corners; the titlebar meets the client along a
+     * straight hairline, without the old rectangular highlight leaking out. */
+    i32 bar_h = ht < TITLEBAR_H ? ht : TITLEBAR_H;
+    for (i32 row = 0; row < bar_h; row++) {
+        i32 x0, x1;
+        if (rr_row_span(wx, wy, wd, ht, CDL_R_WINDOW, wy + row, &x0, &x1))
+            gfx_hline(x0, wy + row, x1 - x0, chrome->bar);
+    }
+    if (ht > TITLEBAR_H)
+        gfx_hline(wx + 1, wy + TITLEBAR_H - 1, wd - 2, chrome->divider);
 
     /* Resize affordance: light up the edge/corner under the cursor so it is
      * obvious what a drag will grab. Corners get an L of two short bars. */
@@ -716,22 +948,21 @@ static void draw_window(window_t *w) {
         }
     }
 
-    /* App title on left, traffic-light controls on right. */
-    i32 btn_cy = TB_BTN_CY(wy);
-    gfx_circle_fill(TB_BTN_MIN_X(wx, wd),   btn_cy, TB_BTN_R, rgb(0xff, 0xbd, 0x2e));
-    gfx_circle_fill(TB_BTN_MAX_X(wx, wd),   btn_cy, TB_BTN_R, rgb(0x28, 0xc9, 0x40));
-    gfx_circle_fill(TB_BTN_CLOSE_X(wx, wd), btn_cy, TB_BTN_R, rgb(0xff, 0x5f, 0x57));
-
-    u32 tc = w->focused ? COL_TEXT : g_theme->muted;
-    icon_draw_app(w->app, wx + 14, wy + (TITLEBAR_H - 26) / 2, 26,
-                  w->focused ? COL_ACCENT : g_theme->muted);
-    /* Title — draw with a slightly larger size for legibility */
-    i32 title_y = wy + (TITLEBAR_H - (i32)FONT_H) / 2;
-    gfx_str_clipped(wx + 50, title_y, wd - 155, w->title, tc, COL_TRANSPARENT);
+    /* Tiny transition frames have no room for controls or a title. */
+    if (wd >= WM_TITLE_LEFT + 14 && ht >= TITLEBAR_H) {
+        wm_draw_controls(w, chrome);
+        /* App toolbar if the app has one, else the title: UI 13 bold (spec §7). */
+        rect_t bar = rect_make(wx + WM_TITLE_LEFT, wy, wd - WM_TITLE_LEFT - 14, TITLEBAR_H);
+        if (transition || !app_toolbar_draw(w, bar)) {
+            i32 title_y = wy + (TITLEBAR_H - gfx_role_line_h(FONT_ROLE_UI, 1)) / 2;
+            gfx_str_role_fit(wx + WM_TITLE_LEFT, title_y, wd - WM_TITLE_LEFT - 14, w->title,
+                             w->focused ? chrome->title : chrome->muted, FONT_ROLE_UI, 1, FONT_W_BOLD);
+        }
+    }
 
     /* App content, clipped to client area (skipped mid-transition). */
     if (!transition) {
-    gfx_set_clip(wx + 1, wy + TITLEBAR_H, wd - 2, ht - TITLEBAR_H - 1);
+    gfx_set_clip_base(wx + 1, wy + TITLEBAR_H, wd - 2, ht - TITLEBAR_H - 1);
     switch (w->app) {
     case APP_TERMINAL: app_terminal_draw(w); break;
     case APP_NOTES:    app_notes_draw(w);    break;
@@ -750,13 +981,18 @@ static void draw_window(window_t *w) {
     case APP_MAZE:     app_maze_draw(w);     break;
     case APP_3D:       app_3d_draw(w);       break;
     case APP_DOOM:     app_doom_draw(w);     break;
+    case APP_PIP:      app_pip_draw(w);      break;
     case APP_HELP:     app_help_draw(w);     break;
     default: break;
     }
-    gfx_clear_clip();
+    gfx_clear_clip_base();
 
     if (w->showing_snap_layouts) wm_draw_snap_layouts(w);
     }
+
+    gfx_rect_rounded_outline(wx, wy, wd, ht, CDL_R_WINDOW, chrome->border);
+    wm_corners(wx, wy, wd, ht, true);
+    if (wc == WC_DRAW_AND_CAPTURE) wm_cache_capture(w, wx, wy, wd, ht);
 
     /* Fade: overlay the background colour at (255-opacity) inside the rounded
      * window shape so open/restore read as a fade-in and close/minimise as a
@@ -781,6 +1017,14 @@ void wm_draw_all(void) {
             if (windows[order[a]].z_order > windows[order[b]].z_order) {
                 int tmp = order[a]; order[a] = order[b]; order[b] = tmp;
             }
+    s_wm_hover_top = NULL;
+    for (int i = cnt - 1; i >= 0; i--) {
+        const window_t *w = &windows[order[i]];
+        if (s_wm_mouse_x >= w->rect.x - 16 && s_wm_mouse_x < w->rect.x + w->rect.w + 16 &&
+            s_wm_mouse_y >= w->rect.y - 16 && s_wm_mouse_y < w->rect.y + w->rect.h + 16) {
+            s_wm_hover_top = w; break;
+        }
+    }
     for (int i = 0; i < cnt; i++)
         draw_window(&windows[order[i]]);
     notify_draw();
@@ -788,13 +1032,8 @@ void wm_draw_all(void) {
 
 /* -- Mouse handling ------------------------------------------------------- */
 
-/* Helper: is cursor within +/-8px of a titlebar button circle? */
-static bool hit_btn(i32 mx, i32 my, i32 bx, i32 bmy) {
-    i32 dx = mx - bx, dy = my - bmy;
-    return (dx*dx + dy*dy) <= 196;  /* 14px radius */
-}
-
 void wm_handle_mouse(mouse_t *m) {
+    s_wm_mouse_x = m->x; s_wm_mouse_y = m->y;
     /* launcher input is now pre-routed in gui.c */
 
     /* -- 0. Pointer feedback: pick the cursor shape and the hovered edge for
@@ -815,7 +1054,7 @@ void wm_handle_mouse(mouse_t *m) {
             window_t *h = NULL; u32 hz = 0;
             for (int i = 0; i < MAX_WINDOWS; i++) {
                 window_t *w = &windows[i];
-                if (!w->active || w->minimized) continue;
+                if (!w->active || w->minimized || !wm_on_current_desktop(w)) continue;
                 if (rect_contains(w->rect, m->x, m->y) && w->z_order >= hz) { h = w; hz = w->z_order; }
             }
             if (h && !h->maximized) {
@@ -861,8 +1100,9 @@ void wm_handle_mouse(mouse_t *m) {
                 break;
             }
             /* Enforce minimum size */
-            if (r.w < MIN_WIN_W) { r.w = MIN_WIN_W; if (w->resize_edge == RESIZE_LEFT || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_BL) r.x = w->restore_rect.x + w->restore_rect.w - MIN_WIN_W; }
-            if (r.h < MIN_WIN_H) { r.h = MIN_WIN_H; if (w->resize_edge == RESIZE_TOP || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_TR) r.y = w->restore_rect.y + w->restore_rect.h - MIN_WIN_H; }
+            i32 mnw, mnh; app_min_size(w->app, &mnw, &mnh);
+            if (r.w < mnw) { r.w = mnw; if (w->resize_edge == RESIZE_LEFT || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_BL) r.x = w->restore_rect.x + w->restore_rect.w - mnw; }
+            if (r.h < mnh) { r.h = mnh; if (w->resize_edge == RESIZE_TOP || w->resize_edge == RESIZE_TL || w->resize_edge == RESIZE_TR) r.y = w->restore_rect.y + w->restore_rect.h - mnh; }
             w->rect = r;
         } else {
             w->resizing = false;
@@ -914,20 +1154,28 @@ void wm_handle_mouse(mouse_t *m) {
     window_t *hit = NULL; u32 hz = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
-        if (!w->active || w->minimized) continue;
+        if (!w->active || w->minimized || !wm_on_current_desktop(w)) continue;
         if (rect_contains(w->rect, m->x, m->y) && w->z_order >= hz) {
             hit = w; hz = w->z_order;
         }
     }
 
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        if (w != hit) { w->hover_start_tick = 0; w->showing_snap_layouts = false; }
+    }
     if (hit) {
-        /* Hover detection for Snap Layouts on Maximize button */
-        i32 bx_max = TB_BTN_MAX_X(hit->rect.x, hit->rect.w);
-        i32 by     = TB_BTN_CY(hit->rect.y);
-        if (hit_btn(m->x, m->y, bx_max, by)) {
-            if (hit->hover_start_tick == 0) hit->hover_start_tick = timer_get_ticks();
-            if (timer_get_ticks() - hit->hover_start_tick > 50) hit->showing_snap_layouts = true;
-        } else {
+        /* Keep the open flyout alive while crossing the short gap from the
+         * green light, and while choosing a layout inside the flyout. */
+        rect_t sr = wm_snap_rect(hit);
+        rect_t bridge = rect_make(sr.x, hit->rect.y + TITLEBAR_H / 2,
+                                  sr.w, TITLEBAR_H / 2 + 4);
+        i32 control = wm_control_hit(hit->rect.x, hit->rect.y, TITLEBAR_H, m->x, m->y);
+        if (control == WM_CONTROL_MAX) {
+            if (hit->hover_start_tick == 0) hit->hover_start_tick = timer_ms();
+            if (timer_ms() - hit->hover_start_tick > 500) hit->showing_snap_layouts = true;
+        } else if (!(hit->showing_snap_layouts && control == WM_CONTROL_NONE &&
+                     (rect_contains(sr, m->x, m->y) || rect_contains(bridge, m->x, m->y)))) {
             hit->hover_start_tick = 0;
             hit->showing_snap_layouts = false;
         }
@@ -943,6 +1191,8 @@ void wm_handle_mouse(mouse_t *m) {
         if (rect_contains(scr, m->x, m->y)) {
             if (hit->app == APP_BROWSER) {
                 app_browser_scroll(hit, m->scroll_delta);
+            } else if (hit->app == APP_TERMINAL) {
+                app_terminal_scroll(hit, m->scroll_delta * 3);   /* 3 lines / notch */
             } else {
                 i32 ns = (i32)hit->scroll - m->scroll_delta * 3;   /* 3 lines / notch */
                 hit->scroll = (ns > 0) ? (u32)ns : 0;
@@ -956,7 +1206,22 @@ void wm_handle_mouse(mouse_t *m) {
         if (rect_contains(cr, m->x, m->y)) {
             if (hit->app == APP_PAINT) app_paint_click(hit, m->x, m->y, m);
         }
+        if (hit->app == APP_SETTINGS) app_settings_drag(hit, m->x, m->y);
         return;
+    }
+
+    /* -- Right-click on titlebar: close window. Must run before the left-click
+     *    gate below, which returned early and made this unreachable. ------- */
+    if (m->right_clicked && hit &&
+        m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H) {
+        wm_close(hit);
+        return;
+    }
+
+    /* A slider drag in Settings commits (saves) on release, wherever it ends. */
+    if (m->left_released) {
+        window_t *fw = wm_focused();
+        if (fw && fw->app == APP_SETTINGS) app_settings_release(fw);
     }
 
     /* Only discrete clicks from here */
@@ -968,33 +1233,36 @@ void wm_handle_mouse(mouse_t *m) {
 
     /* Click in Snap Layout Flyout */
     if (hit->showing_snap_layouts) {
-        i32 wd = 180, ht = 120;
-        i32 sx = hit->rect.x + hit->rect.w - wd - 4;
-        i32 sy = hit->rect.y + TITLEBAR_H + 4;
-        if (rect_contains(rect_make(sx, sy, wd, ht), m->x, m->y)) {
+        rect_t sr = wm_snap_rect(hit);
+        i32 sx = sr.x, sy = sr.y;
+        if (rect_contains(sr, m->x, m->y)) {
             /* Check which grid item was clicked */
             for (int i=0; i<6; i++) {
                 i32 lx = sx + 8 + (i%3) * 56;
                 i32 ly = sy + 8 + (i/3) * 54;
                 if (rect_contains(rect_make(lx, ly, 48, 44), m->x, m->y)) {
-                    wm_snap_focused(i + 1); /* +1 because 0 is NONE */
+                    static const int modes[] = {SNAP_LEFT, SNAP_FULL, SNAP_RIGHT,
+                                                 SNAP_TL, SNAP_TOP, SNAP_TR};
+                    wm_snap_focused(modes[i]);
                     hit->showing_snap_layouts = false;
                     return;
                 }
             }
+            return; /* Padding belongs to the flyout, not the app underneath. */
         }
     }
 
-    /* -- 5. Titlebar buttons (use same macro positions as draw_window) ------ */
+    /* -- 5. Titlebar buttons (same geometry as painting and hover) ---------- */
     {
-        i32 btn_cy    = TB_BTN_CY(hit->rect.y);
-        i32 btn_close = TB_BTN_CLOSE_X(hit->rect.x, hit->rect.w);
-        i32 btn_max   = TB_BTN_MAX_X(hit->rect.x, hit->rect.w);
-        i32 btn_min   = TB_BTN_MIN_X(hit->rect.x, hit->rect.w);
-
-        if (hit_btn(m->x, m->y, btn_close, btn_cy)) { wm_close(hit);    return; }
-        if (hit_btn(m->x, m->y, btn_max,   btn_cy)) { wm_maximize(hit); return; }
-        if (hit_btn(m->x, m->y, btn_min,   btn_cy)) { wm_minimize(hit); return; }
+        i32 control = wm_control_hit(hit->rect.x, hit->rect.y, TITLEBAR_H, m->x, m->y);
+        if (control != WM_CONTROL_NONE) {
+            hit->showing_snap_layouts = false;
+            hit->hover_start_tick = 0;
+            if (control == WM_CONTROL_CLOSE) wm_close(hit);
+            if (control == WM_CONTROL_MIN) wm_minimize(hit);
+            if (control == WM_CONTROL_MAX) wm_maximize(hit);
+            return;
+        }
     }
 
     /* -- 6. Edge/corner resize -------------------------------------------- */
@@ -1010,7 +1278,10 @@ void wm_handle_mouse(mouse_t *m) {
         }
     }
 
-    /* -- 7. Titlebar drag ------------------------------------------------- */
+    /* -- 7. Title-bar toolbar, then titlebar drag --------------------------- */
+    if (m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H &&
+        app_toolbar_click(hit, m->x, m->y))
+        return;
     if (m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H && !hit->maximized) {
         hit->dragging = true;
         hit->drag_ox  = m->x - hit->rect.x;
@@ -1022,6 +1293,7 @@ void wm_handle_mouse(mouse_t *m) {
     rect_t cr = wm_client_rect(hit);
     if (rect_contains(cr, m->x, m->y)) {
         switch (hit->app) {
+        case APP_TERMINAL: app_terminal_click(hit, m->x, m->y);    break;
         case APP_FILES:    app_files_click(hit, m->x, m->y, m);    break;
         case APP_CALC:     app_calc_click(hit, m->x, m->y);        break;
         case APP_SYSMON:   app_sysmon_click(hit, m->x, m->y);      break;
@@ -1031,18 +1303,11 @@ void wm_handle_mouse(mouse_t *m) {
         case APP_EDITOR:   app_editor_click(hit, m->x, m->y, m);   break;
         case APP_PAINT:    app_paint_click(hit, m->x, m->y, m);    break;
         case APP_USERS:    app_users_click(hit, m->x, m->y);       break;
+        case APP_NOTES:    app_notes_click(hit, m->x, m->y);       break;
+        case APP_PIP:      app_pip_click(hit, m->x, m->y);         break;
         default: break;
         }
     }
-
-    /* -- 9. Right-click on titlebar: close window -------------------------- */
-    if (m->right_clicked && hit) {
-        if (m->y >= hit->rect.y && m->y < hit->rect.y + TITLEBAR_H) {
-            wm_close(hit);
-            return;
-        }
-    }
-
 }
 
 /* -- Keyboard routing: ONLY to focused window ----------------------------- */
@@ -1063,6 +1328,7 @@ void wm_handle_key(char c, window_t *w) {
     case APP_MAZE:     app_maze_key(w, c);     break;
     case APP_3D:       app_3d_key(w, c);       break;
     case APP_DOOM:     app_doom_key(w, c);     break;
+    case APP_PIP:      app_pip_key(w, c);      break;
     default: break;
     }
 }
@@ -1114,18 +1380,15 @@ void desktop_handle_mouse(mouse_t *m) {
             i32 sw=(i32)SCREEN_W, sh=(i32)SCREEN_H;
             i32 ww, wh;
             app_default_size(icons[i].app, sw, sh, &ww, &wh);
-            /* Centre window in the area right of the sidebar */
-            i32 avail_x = SIDEBAR_W + 8;
-            i32 cx = avail_x + (sw - avail_x - ww) / 2;
-            if (cx < avail_x) cx = avail_x;
-            wm_open(icons[i].app, icons[i].label, cx, (sh - wh) / 2 - 10, ww, wh);
+            wm_open(icons[i].app, icons[i].app == APP_FILES ? "Files" : "Settings",
+                    (sw - ww) / 2, (sh - wh) / 2 - 10, ww, wh);
         }
     }
 }
 
 void wm_minimize_all(void) {
     for (int i = 0; i < MAX_WINDOWS; i++)
-        if (windows[i].active && !windows[i].minimized) {
+        if (windows[i].active && !windows[i].minimized && wm_on_current_desktop(&windows[i])) {
             windows[i].minimized = true;
             windows[i].focused   = false;
         }
@@ -1133,3 +1396,50 @@ void wm_minimize_all(void) {
 
 /* -- App Launcher overlay (Now in launcher.c) ----------------------------- */
 /* Legacy code removed to resolve conflicts with new launcher.c */
+
+/* Switch workspace: focus the topmost visible window there, if any. */
+void wm_switch_desktop(u32 d) {
+    if (d > 3) return;
+    g_current_desktop = d;
+    window_t *top = NULL; u32 bz = 0;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        w->focused = false;
+        if (w->active && !w->minimized && wm_on_current_desktop(w) && w->z_order >= bz) { top = w; bz = w->z_order; }
+    }
+    if (top) top->focused = true;
+}
+
+/* Instant part of the desktop layer's look: shortcut hover and whether the
+ * hero shows (a maximized window hides it). */
+u32 desktop_layer_key(void) {
+    u32 k = hero_visible() ? 1u : 0u;
+    for (int i = 0; i < ICON_COUNT; i++) if (icons[i].hover) k |= 2u << i;
+    return k;
+}
+
+/* Pointer routing (gui.c): the window manager owns the pointer while a window
+ * is being dragged or resized, while a snap-layout flyout is open, and over
+ * any visible window -- so a click on a window never reaches the desktop
+ * widgets, shortcuts or hero search drawn underneath it. */
+bool wm_busy(void) {
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        const window_t *w = &windows[i];
+        if (w->active && (w->dragging || w->resizing || w->showing_snap_layouts)) return true;
+    }
+    return false;
+}
+
+bool wm_pointer_owner(i32 x, i32 y) {
+    if (wm_busy()) return true;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        const window_t *w = &windows[i];
+        if (w->active && !w->minimized && wm_on_current_desktop(w) && rect_contains(w->rect, x, y))
+            return true;
+    }
+    return false;
+}
+
+void desktop_clear_hover(void) {
+    for (int i = 0; i < ICON_COUNT; i++) icons[i].hover = false;
+}

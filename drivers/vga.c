@@ -3,6 +3,7 @@
  * VGA text-mode terminal (80x25, color)
  * ============================================================================= */
 #include "kernel.h"
+#include "../kernel/kfmt.h"
 
 static u32  term_row    = 0;
 static u32  term_col    = 0;
@@ -95,50 +96,14 @@ void terminal_set_cursor(u32 col, u32 row) {
 }
 
 /* ── kprintf / ksprintf ─────────────────────────────────────────────────── */
+/* Formatting lives in kernel/kfmt.c (host-tested). With no output buffer the
+ * text goes to the VGA terminal (kprintf). */
 int kvsnprintf(char *out, size_t max, const char *fmt, va_list ap) {
-    char *p = out;
-    char *end = out + max - 1;
-    char tmp[32];
-
-    for (const char *f = fmt; *f && (p < end || !out); f++) {
-        if (*f != '%') { if(out) *p++ = *f; else terminal_putchar(*f); continue; }
-        f++;
-        int pad = 0;
-        if (*f == '0') { f++; while(*f >= '0' && *f <= '9') { pad = pad * 10 + (*f - '0'); f++; } }
-        
-        switch (*f) {
-        case 'd':
-        case 'u': {
-            u32 v = va_arg(ap, u32);
-            kutoa(v, tmp, 10);
-            int len = (int)kstrlen(tmp);
-            while(pad > len) { if(out) *p++ = '0'; else terminal_putchar('0'); pad--; }
-            for(char *s = tmp; *s; s++) { if(out) *p++ = *s; else terminal_putchar(*s); }
-            break;
-        }
-        case 'x':
-        case 'X':
-        case 'p': {
-            u32 v = va_arg(ap, u32);
-            if(*f == 'p') { if(out) { *p++='0';*p++='x'; } else terminal_write("0x"); }
-            kutoa(v, tmp, 16);
-            if(*f == 'X') for(char *s=tmp;*s;s++) if(*s>='a'&&*s<='f') *s-=32;
-            for(char *s = tmp; *s; s++) { if(out) *p++ = *s; else terminal_putchar(*s); }
-            break;
-        }
-        case 's': {
-            const char *s = va_arg(ap, const char*);
-            if(!s) s = "(null)";
-            while(*s) { if(out) *p++ = *s++; else terminal_putchar(*s++); }
-            break;
-        }
-        case 'c': { if(out) *p++ = (char)va_arg(ap, int); else terminal_putchar((char)va_arg(ap, int)); break; }
-        case '%': { if(out) *p++ = '%'; else terminal_putchar('%'); break; }
-        default:  { if(out) *p++ = *f; else terminal_putchar(*f); break; }
-        }
-    }
-    if(out) *p = '\0';
-    return out ? (int)(p - out) : 0;
+    if (out) return kfmt_vformat(out, max, fmt, ap);
+    char buf[256];
+    int n = kfmt_vformat(buf, sizeof(buf), fmt, ap);
+    terminal_write(buf);
+    return n;
 }
 
 void kprintf(const char *fmt, ...) {

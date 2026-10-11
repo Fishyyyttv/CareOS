@@ -1,36 +1,61 @@
-# Disk images
-careos.img
-*.img
-
-# ISOs (build output)
-careos.iso
-*.iso
-out/
-
-# DOOM assets (copyrighted)
-DOOM1.WAD
-
-# Build artifacts
-*.bin.o
+# ---- Build output -----------------------------------------------------------
 *.o
 *.d
 *.elf
-gfx
+*.bin.o
+*.cra.o
+build/
+out/
 kernel/kernel.elf
 iso/boot/kernel.elf
+.build-defs
 -boot
-boot.log
 
-# Brainstorming session files
-.superpowers/
+# ---- Disk images, ISOs, firmware -------------------------------------------
+*.img
+*.iso
+careos.img
+careos.iso
 
-# Claude Code worktrees and local settings
-.claude/
+# ---- Copyrighted game data ---------------------------------------------------
+DOOM1.WAD
+*.WAD
+*.wad
 
-# Python font-tooling venv
-tools/.venv/
-
-# QEMU screenshots
+# ---- Logs, screenshots, scratch ----------------------------------------------
+*.log
+*.png.tmp
 shots/
+scratch*/
+tmp/
+/qa/
+/*.png
 
+# ---- Local tooling and assistant workspaces (never published) ---------------
+.claude/
+.superpowers/
+.codex/
+.cursor/
+.vscode/
+.idea/
+wt/
+docs/
+CLAUDE.md
+AGENTS.md
+MEMORY.md
+memory/
+
+# ---- Python / tooling --------------------------------------------------------
+tools/.venv/
+__pycache__/
+*.pyc
+
+# ---- OS junk ------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# ---- Third-party checkout (a submodule / separate clone) ---------------------
 doomgeneric/

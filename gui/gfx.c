@@ -5,6 +5,8 @@
 #include "kernel.h"
 #include "gui.h"
 #include "font.h"
+#include "blit.h"
+#include "shadow.h"
 #define GFX_TRANSPARENT 0xFFFFFFFF  /* internal skip-pixel sentinel */
 
 u32  SCREEN_W     = 1920;
@@ -74,45 +76,62 @@ void gfx_dirty(i32 x, i32 y, i32 w, i32 h) {
     dirty_rects[dirty_count++] = (dirty_rect_t){x, y, w, h};
 }
 
-#ifdef __SSE2__
-#include <immintrin.h>
-static void gfx_flip_sse2(void) {
-    if (dirty_full || dirty_count == 0) {
-        __m128i *src = (__m128i*)BACKBUFFER;
-        __m128i *dst = (__m128i*)FRAMEBUFFER;
-        size_t n = (SCREEN_W * SCREEN_H * 4) / 16;
-        for (size_t i = 0; i < n; i++) _mm_storeu_si128(dst + i, _mm_loadu_si128(src + i));
-    } else {
-        for (u32 i = 0; i < dirty_count; i++) {
-            dirty_rect_t *d = &dirty_rects[i];
-            for (i32 y = d->y; y < d->y + d->h; y++) {
-                __m128i *src = (__m128i*)&BACKBUFFER[y * SCREEN_W + d->x];
-                __m128i *dst = (__m128i*)&FRAMEBUFFER[y * SCREEN_W + d->x];
-                i32 nw = d->w / 4;
-                for (i32 x = 0; x < nw; x++) _mm_storeu_si128(dst + x, _mm_loadu_si128(src + x));
-            }
-        }
-    }
-}
-#endif
-
+/* Present the backbuffer. Rows go through blit_copy_rows, which honours the
+ * framebuffer's real pitch (padded modes used to skew), 24 bpp, and non-RGB
+ * channel order; the native 32 bpp RGB case is still one memcpy per row.
+ * (The old __SSE2__ path was dead under -mno-sse2 and dropped up to three
+ * pixels at the right edge of every dirty rect.) */
 void gfx_flip(void) {
-    if (!FRAMEBUFFER || !BACKBUFFER) return;
-#ifdef __SSE2__
-    gfx_flip_sse2();
-#else
+    if (!FRAMEBUFFER || !BACKBUFFER || gfx_direct_mode) { dirty_reset(); return; }
+    u8 *fb = (u8 *)FRAMEBUFFER;
     if (dirty_full || dirty_count == 0) {
-        kmemcpy(FRAMEBUFFER, BACKBUFFER, SCREEN_W * SCREEN_H * 4);
+        blit_copy_rows(fb, SCREEN_PITCH, FB_BPP, BACKBUFFER, SCREEN_W,
+                       0, 0, (i32)SCREEN_W, (i32)SCREEN_H, FB_R_SHIFT, FB_G_SHIFT, FB_B_SHIFT);
     } else {
         for (u32 i = 0; i < dirty_count; i++) {
             dirty_rect_t *d = &dirty_rects[i];
-            for (i32 y = d->y; y < d->y + d->h; y++) {
-                kmemcpy(&FRAMEBUFFER[y * SCREEN_W + d->x], &BACKBUFFER[y * SCREEN_W + d->x], d->w * 4);
-            }
+            blit_copy_rows(fb, SCREEN_PITCH, FB_BPP, BACKBUFFER, SCREEN_W,
+                           d->x, d->y, d->w, d->h, FB_R_SHIFT, FB_G_SHIFT, FB_B_SHIFT);
         }
     }
-#endif
     dirty_reset();
+}
+
+/* Copy an ARGB image into the current target at (dx,dy), clipped to the
+ * given rect, the active gfx clip, and the target. One memcpy per row. */
+void gfx_blit_argb(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh,
+                   i32 cx, i32 cy, i32 cw, i32 ch) {
+    if (!g_target || !g_target->pixels || !src) return;
+    if (clip_active) {
+        blit_box_t c;
+        if (!blit_clip(cx, cy, cw, ch, clip_x, clip_y, clip_w, clip_h,
+                       (i32)g_target->w, (i32)g_target->h, &c)) return;
+        cx = c.x0; cy = c.y0; cw = c.x1 - c.x0; ch = c.y1 - c.y0;
+    }
+    blit_box_t b;
+    if (!blit_clip(dx, dy, sw, sh, cx, cy, cw, ch,
+                   (i32)g_target->w, (i32)g_target->h, &b)) return;
+    u32 st = g_target->pitch / 4u;
+    for (i32 y = b.y0; y < b.y1; y++)
+        kmemcpy(&g_target->pixels[(u64)(u32)y * st + (u32)b.x0],
+                &src[(u64)(u32)(y - dy) * (u32)sw + (u32)(b.x0 - dx)],
+                (size_t)(b.x1 - b.x0) * 4u);
+    gfx_dirty(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+}
+
+/* Copy the target's pixels in (x,y,w,h) into dst (w*h, row-major);
+ * pixels outside the target come back as 0. */
+void gfx_snapshot_rect(i32 x, i32 y, i32 w, i32 h, u32 *dst) {
+    if (!dst || w <= 0 || h <= 0) return;
+    kmemset(dst, 0, (size_t)w * (size_t)h * 4u);
+    if (!g_target || !g_target->pixels) return;
+    blit_box_t b;
+    if (!blit_clip(x, y, w, h, x, y, w, h, (i32)g_target->w, (i32)g_target->h, &b)) return;
+    u32 st = g_target->pitch / 4u;
+    for (i32 r = b.y0; r < b.y1; r++)
+        kmemcpy(&dst[(u64)(u32)(r - y) * (u32)w + (u32)(b.x0 - x)],
+                &g_target->pixels[(u64)(u32)r * st + (u32)b.x0],
+                (size_t)(b.x1 - b.x0) * 4u);
 }
 
 /* -- Wallpaper cache ------------------------------------------------------
@@ -226,6 +245,17 @@ void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch) {
     FB_BPP = (bytes_per_px >= 4) ? 32 : 24;
     size_t sz = (size_t)(w * h * sizeof(u32));
     sz = (sz + 15) & ~15u;
+
+    /* gfx_init runs again on every resolution change (vesa_set_mode). Release
+     * the previous screen-sized buffers first; they used to leak three full
+     * frames per mode switch (~25 MB at 1080p, and ~3.7 MB at every VirtualBox
+     * boot, which switches from GRUB's 640x480). */
+    if (BACKBUFFER && !gfx_direct_mode) kfree(BACKBUFFER);
+    if (WALLPAPER_CACHE) kfree(WALLPAPER_CACHE);
+    if (DESKTOP_CACHE)   kfree(DESKTOP_CACHE);
+    BACKBUFFER = WALLPAPER_CACHE = DESKTOP_CACHE = (u32*)0;
+    gfx_direct_mode = false;
+
     BACKBUFFER = (u32*)kmalloc(sz);
     if (!BACKBUFFER) {
         gfx_direct_mode = true;
@@ -463,17 +493,55 @@ void gfx_blur_region(i32 x, i32 y, i32 w, i32 h, i32 rad) {
     gfx_dirty(x, y, w, h);
 }
 
-void gfx_shadow_soft_ex(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy) {
-    if (w <= 0 || h <= 0 || blur <= 0) return;
-    const i32 L = 6;                    /* stacked rings → smooth falloff (fewer = faster) */
-    u32 denom = (u32)(L * (L + 1) / 2);  /* Σ weights, so total ink ≈ alpha */
-    for (i32 i = L; i >= 1; i--) {
-        i32 s = blur * i / L;            /* outer rings reach further, fainter */
-        u32 a = (u32)alpha * (u32)(L - i + 1) / denom;
-        if (a == 0) a = 1;
-        gfx_rect_rounded_blend(x - s, y - s + dy, w + 2 * s, h + 2 * s, r + s,
-                               COL_SHADOW, (u8)a);
+/* Soft drop shadow, one blend per pixel (gui/shadow.c). It looks like the
+ * original L stacked rings, which blended most shadow pixels L times. With
+ * hollow, pixels under the opaque rounded body are skipped entirely. */
+static void shadow_single_pass(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha,
+                               i32 dy, bool hollow) {
+    if (w <= 0 || h <= 0 || blur <= 0 || alpha == 0) return;
+    const i32 L = 6;                    /* ring count of the CDL shadow look */
+    u32 A[7];
+    for (i32 i = 1; i <= L; i++) A[i] = shadow_combined_alpha(alpha, (u32)L, (u32)i);
+    shadow_seg_t seg[24];
+    i32 y0 = y - blur + dy, y1 = y + h + blur + dy;
+    for (i32 yy = y0; yy < y1; yy++) {
+        u32 n = shadow_row(x, y, w, h, r, blur, dy, L, hollow, yy, seg, 24);
+        for (u32 k = 0; k < n; k++)
+            blend_span(seg[k].x0, yy, seg[k].x1 - seg[k].x0, COL_SHADOW, A[seg[k].level]);
     }
+    gfx_dirty(x - blur, y0, w + 2 * blur, y1 - y0);
+}
+
+void gfx_shadow_soft_ex(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy) {
+    shadow_single_pass(x, y, w, h, r, blur, alpha, dy, false);
+}
+
+void gfx_shadow_soft_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy) {
+    shadow_single_pass(x, y, w, h, r, blur, alpha, dy, true);
+}
+
+void gfx_blit_argb_rounded(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh, i32 r) {
+    if (!g_target || !g_target->pixels || !src || sw <= 0 || sh <= 0) return;
+    if (r * 2 > sw) r = sw / 2;
+    if (r * 2 > sh) r = sh / 2;
+    blit_box_t b;
+    i32 cx = 0, cy = 0, cw = (i32)g_target->w, ch = (i32)g_target->h;
+    if (clip_active) { cx = clip_x; cy = clip_y; cw = clip_w; ch = clip_h; }
+    if (!blit_clip(dx, dy, sw, sh, cx, cy, cw, ch, (i32)g_target->w, (i32)g_target->h, &b)) return;
+    u32 st = g_target->pitch / 4u;
+    for (i32 y = b.y0; y < b.y1; y++) {
+        i32 row = y - dy, dyr = -1, inset = 0;
+        if (row < r) dyr = (r - 1) - row;
+        else if (row >= sh - r) dyr = row - (sh - r);
+        if (dyr >= 0) inset = r - (i32)gfx_isqrt((u32)(r * r - dyr * dyr));
+        i32 x0 = dx + inset, x1 = dx + sw - inset;
+        if (x0 < b.x0) x0 = b.x0;
+        if (x1 > b.x1) x1 = b.x1;
+        if (x1 <= x0) continue;
+        kmemcpy(&g_target->pixels[(u64)(u32)y * st + (u32)x0],
+                &src[(u64)(u32)row * (u32)sw + (u32)(x0 - dx)], (size_t)(x1 - x0) * 4u);
+    }
+    gfx_dirty(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
 }
 
 void gfx_shadow_soft(i32 x, i32 y, i32 w, i32 h, i32 r) {
@@ -515,7 +583,7 @@ typedef struct { i32 x, y; u32 born; u32 color; bool active; } ripple_t;
 static ripple_t ripples[MAX_RIPPLES];
 
 void gfx_ripple(i32 x, i32 y, u32 color) {
-    u32 now = timer_get_ticks();
+    u32 now = timer_ms();
     int slot = 0; u32 oldest = 0xFFFFFFFFu;
     for (int i = 0; i < MAX_RIPPLES; i++) {
         if (!ripples[i].active) { slot = i; break; }
@@ -534,7 +602,7 @@ static void circle_blend(i32 cx, i32 cy, i32 r, u32 color, u32 a) {
 }
 
 void gfx_ripples_draw(void) {
-    u32 now = timer_get_ticks();
+    u32 now = timer_ms();
     const u32 life = 300, R = 48;
     for (int i = 0; i < MAX_RIPPLES; i++) {
         if (!ripples[i].active) continue;
@@ -638,10 +706,29 @@ static inline i32 glyph_adv(const font_face_t *f, u8 ch) {
     return f->advances ? (i32)f->advances[ch - FONT_FIRST_CH] : (i32)f->advance;
 }
 
+static void draw_text_face(i32 x, i32 y, const char *s, u32 fg, u32 bg,
+                           const font_face_t *f);
+
 static void draw_text(i32 x, i32 y, const char *s, u32 fg, u32 bg,
                       font_size_t size, bool bold) {
-    const font_face_t *f = bold ? font_bold_face_at((u32)size)
-                                : font_face_at((u32)size);
+    draw_text_face(x, y, s, fg, bg, bold ? font_bold_face_at((u32)size)
+                                         : font_face_at((u32)size));
+}
+
+/* Role text (gui/font_roles.c) names its face directly. */
+void gfx_str_face(i32 x, i32 y, const char *s, u32 fg, const font_face_t *f) {
+    if (s && f) draw_text_face(x, y, s, fg, COL_TRANSPARENT, f);
+}
+
+i32 gfx_str_face_width_n(const char *s, u32 n, const font_face_t *f) {
+    if (!s || !f) return 0;
+    i32 w = 0;
+    for (u32 i = 0; i < n && s[i]; i++) w += glyph_adv(f, (u8)s[i]);
+    return w * (i32)GFX_FONT_SCALE;
+}
+
+static void draw_text_face(i32 x, i32 y, const char *s, u32 fg, u32 bg,
+                           const font_face_t *f) {
     i32 sc = (i32)GFX_FONT_SCALE;
     i32 lh  = (i32)f->line_h  * sc;
     i32 cy = y, start_x = x, start_y = y, max_x = x;
@@ -734,8 +821,37 @@ void gfx_str_bg_none(i32 x, i32 y, const char *s, u32 fg) {
     gfx_str_ex(x, y, s, fg, COL_TRANSPARENT, FONT_BODY);
 }
 
-void gfx_set_clip(i32 x,i32 y,i32 w,i32 h){ clip_x=x;clip_y=y;clip_w=w;clip_h=h;clip_active=true; }
-void gfx_clear_clip(void){ clip_active=false; }
+/* Two-level clipping. The window manager sets a BASE clip (a window's client
+ * area) around each app's draw. App clips intersect with it, and clearing an
+ * app clip restores the base instead of disabling clipping -- apps used to
+ * gfx_set_clip/gfx_clear_clip for inner regions, which dropped the window
+ * clip and let later text spill outside their window. */
+static bool clip_base_active = false;
+static i32  cb_x, cb_y, cb_w, cb_h;
+
+void gfx_set_clip(i32 x,i32 y,i32 w,i32 h){
+    if (clip_base_active) {
+        blit_box_t b;
+        if (blit_clip(x, y, w, h, cb_x, cb_y, cb_w, cb_h, 0x7FFFFFFF, 0x7FFFFFFF, &b)) {
+            clip_x = b.x0; clip_y = b.y0; clip_w = b.x1 - b.x0; clip_h = b.y1 - b.y0;
+        } else {
+            clip_x = cb_x; clip_y = cb_y; clip_w = 0; clip_h = 0;     /* empty: draw nothing */
+        }
+    } else {
+        clip_x = x; clip_y = y; clip_w = w; clip_h = h;
+    }
+    clip_active = true;
+}
+void gfx_clear_clip(void){
+    if (clip_base_active) { clip_x = cb_x; clip_y = cb_y; clip_w = cb_w; clip_h = cb_h; clip_active = true; }
+    else clip_active = false;
+}
+void gfx_set_clip_base(i32 x, i32 y, i32 w, i32 h){
+    cb_x = x; cb_y = y; cb_w = w > 0 ? w : 0; cb_h = h > 0 ? h : 0;
+    clip_base_active = true;
+    gfx_clear_clip();
+}
+void gfx_clear_clip_base(void){ clip_base_active = false; clip_active = false; }
 
 /* Read back the active clip rect. The image blitter resolves the clip once per
  * draw into a bounds box instead of testing it per pixel, which is the whole
@@ -960,57 +1076,6 @@ void textinput_key(textinput_t *t,char c){
 }
 void textinput_handle_mouse(textinput_t *t, const mouse_t *m){ if (!t || !m || !m->left_clicked) return; t->focused = rect_contains(t->rect, m->x, m->y); t->hover = t->focused; }
 
-static notification_t notifs[MAX_NOTIFICATIONS];
-static bool notif_hover[MAX_NOTIFICATIONS];
-void notify_push(const char *title, const char *body, u32 icon_color) {
-    int slot = -1; u32 oldest_tick = 0xFFFFFFFF;
-    for (int i = 0; i < MAX_NOTIFICATIONS; i++) { if (!notifs[i].active) { slot = i; break; } if (notifs[i].born_tick < oldest_tick) { oldest_tick = notifs[i].born_tick; slot = i; } }
-    if (slot < 0) slot = 0;
-    kstrncpy(notifs[slot].title, title, 31); kstrncpy(notifs[slot].body, body, 127);
-    notifs[slot].icon_color = icon_color; notifs[slot].born_tick = timer_get_ticks(); notifs[slot].active = true; notif_hover[slot] = false;
-}
-void notify_tick(void) { u32 now = timer_get_ticks(); for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active && now - notifs[i].born_tick > 500) notifs[i].active = false; }
-bool notify_active(void) { for (int i = 0; i < MAX_NOTIFICATIONS; i++) if (notifs[i].active) return true; return false; }
-void notify_draw(void) {
-    /* Toast geometry follows the live font: an H3 title over a BODY line.
-     * Both the box height and the title/body split have to track those two
-     * line heights, or the title runs into the body (JetBrains Mono H3 is 21px
-     * against the 13px the old bitmap face used).
-     *
-     * The stack also starts below TOPBAR_H. gui_run() paints the menu bar
-     * after wm_draw_all() -> notify_draw(), so anything drawn above that line
-     * is covered by an opaque bar. */
-    i32 pad      = 12;
-    i32 title_lh = gfx_line_h_ex(FONT_H3);
-    i32 body_lh  = gfx_line_h_ex(FONT_BODY);
-    i32 nw = 264;
-    i32 nh = pad + title_lh + 4 + body_lh + pad;
-    int slot = 0;
-    for (int i = 0; i < MAX_NOTIFICATIONS; i++) {
-        if (!notifs[i].active) continue;
-        i32 nx = (i32)SCREEN_W - nw - 12;
-        i32 ny = TOPBAR_H + 12 + slot*(nh+8);
-        u32 now = timer_get_ticks(); u32 age = now - notifs[i].born_tick; u32 life = 500;
-        u32 pct = (age < life) ? (100 * (life - age) / life) : 0;
-        /* Floating frosted card: soft shadow, blurred wallpaper, tint, hairline. */
-        gfx_shadow_soft(nx, ny, nw, nh, CDL_R_CARD);
-        gfx_glass_panel(nx, ny, nw, nh, CDL_R_CARD);
-        /* Accent dot + title, body, and a thin accent life bar along the bottom. */
-        gfx_circle_fill(nx + 18, ny + pad + title_lh / 2, 4,
-                        notifs[i].icon_color ? notifs[i].icon_color : COL_ACCENT);
-        gfx_str_ex(nx+32, ny+pad, notifs[i].title, COL_TEXT, COL_TRANSPARENT, FONT_H3);
-        gfx_str_clipped(nx+32, ny+pad+title_lh+4, nw-44, notifs[i].body, COL_DIM, COL_TRANSPARENT);
-        gfx_rect_rounded(nx + 12, ny + nh - 5, (nw - 24) * (i32)pct / 100, 2, 1, COL_ACCENT);
-        slot++;
-    }
-}
-
-bool notify_handle_mouse(mouse_t *m) {
-    (void)m;
-    return false;
-}
-
-
 void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy) {
     if (!src || !src->pixels || !g_target) return;
     i32 sw = (i32)src->w;
@@ -1026,4 +1091,77 @@ void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy) {
             g_target->pixels[sy * (g_target->pitch / 4) + sx] = col;
         }
     }
+}
+
+/* Blend `color` through an 8-bit coverage mask (w*h, row-major) at (x,y).
+ * Honours the clip rect; used by the UI kit's glyph cache. */
+void gfx_blend_mask(i32 x, i32 y, const u8 *mask, i32 w, i32 h, u32 color) {
+    if (!mask || w <= 0 || h <= 0) return;
+    for (i32 r = 0; r < h; r++) {
+        const u8 *row = mask + (u32)r * (u32)w;
+        for (i32 c = 0; c < w; c++)
+            if (row[c]) gfx_setpixel_blend(x + c, y + r, color, row[c]);
+    }
+    gfx_dirty(x, y, w, h);
+}
+
+/* Blend an ARGB image (alpha = coverage, colour not premultiplied) at (x,y).
+ * Honours the clip rect; used for the UI kit's anti-aliased app icons. */
+void gfx_blend_argb(i32 x, i32 y, const u32 *src, i32 w, i32 h) {
+    if (!src || w <= 0 || h <= 0) return;
+    for (i32 r = 0; r < h; r++) {
+        const u32 *row = src + (u32)r * (u32)w;
+        for (i32 c = 0; c < w; c++) {
+            u32 a = row[c] >> 24;
+            if (a) gfx_setpixel_blend(x + c, y + r, row[c] & 0xFFFFFFu, (u8)a);
+        }
+    }
+    gfx_dirty(x, y, w, h);
+}
+
+/* Blend an opaque RGB image over the target at a global alpha (0..255). Used
+ * to fade a prepared backdrop in or out without rebuilding it. */
+void gfx_blend_image(i32 x, i32 y, const u32 *src, i32 w, i32 h, u8 alpha) {
+    if (!src || !g_target || !g_target->pixels || w <= 0 || h <= 0 || alpha == 0) return;
+    i32 tw = (i32)g_target->w, th = (i32)g_target->h, st = (i32)(g_target->pitch / 4);
+    i32 x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
+    i32 x1 = x + w > tw ? tw : x + w, y1 = y + h > th ? th : y + h;
+    if (x0 >= x1 || y0 >= y1) return;
+    for (i32 r = y0; r < y1; r++) {
+        const u32 *s = src + (u32)(r - y) * (u32)w + (u32)(x0 - x);
+        u32 *d = g_target->pixels + (u32)r * (u32)st + (u32)x0;
+        if (alpha >= 250) { kmemcpy(d, s, (size_t)(x1 - x0) * 4u); continue; }
+        for (i32 c = 0; c < x1 - x0; c++) d[c] = color_blend(d[c], s[c], alpha);
+    }
+    gfx_dirty(x0, y0, x1 - x0, y1 - y0);
+}
+
+/* Draw an ARGB sprite scaled about its centre, which lands at (cx, cy).
+ * scale is Q16 (65536 = 1:1), nearest-neighbour; every pixel's own alpha is
+ * multiplied by the global alpha. For short zoom animations. */
+void gfx_blit_argb_scaled(i32 cx, i32 cy, const u32 *src, i32 w, i32 h, u32 scale, u8 alpha) {
+    if (!src || !g_target || !g_target->pixels || w <= 0 || h <= 0 || scale < 1024 || alpha == 0) return;
+    i32 dw = (i32)(((i64)w * scale) >> 16), dh = (i32)(((i64)h * scale) >> 16);
+    if (dw <= 0 || dh <= 0) return;
+    i32 dx = cx - dw / 2, dy = cy - dh / 2;
+    i32 tw = (i32)g_target->w, th = (i32)g_target->h, st = (i32)(g_target->pitch / 4);
+    i32 x0 = dx < 0 ? 0 : dx, y0 = dy < 0 ? 0 : dy;
+    i32 x1 = dx + dw > tw ? tw : dx + dw, y1 = dy + dh > th ? th : dy + dh;
+    u32 inv = (u32)(((u64)1 << 32) / scale);          /* Q16 source step per dest pixel */
+    for (i32 r = y0; r < y1; r++) {
+        i32 sy = (i32)(((u64)(u32)(r - dy) * inv) >> 16);
+        if (sy >= h) sy = h - 1;
+        const u32 *srow = src + (u32)sy * (u32)w;
+        u32 *d = g_target->pixels + (u32)r * (u32)st;
+        u64 sxq = (u64)(u32)(x0 - dx) * inv;
+        for (i32 c = x0; c < x1; c++, sxq += inv) {
+            i32 sx = (i32)(sxq >> 16);
+            if (sx >= w) sx = w - 1;
+            u32 p = srow[sx], a = p >> 24;
+            if (!a) continue;
+            a = a * alpha / 255u;
+            d[c] = color_blend(d[c], p & 0xFFFFFFu, (u8)a);
+        }
+    }
+    if (x1 > x0 && y1 > y0) gfx_dirty(x0, y0, x1 - x0, y1 - y0);
 }

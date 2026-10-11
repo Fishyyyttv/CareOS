@@ -79,8 +79,9 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 -= accel_q8(dx);   /* flip both axes to match the host pointer */
-            accum_dy_q8 += accel_q8(dy);
+            /* PS/2: +dx is right, +dy is up; screen y grows downward. */
+            accum_dx_q8 += accel_q8(dx);
+            accum_dy_q8 -= accel_q8(dy);
         }
         break;
     case 3:
@@ -95,8 +96,9 @@ static void mouse_irq(registers_t *r) {
             i16 dx = (i16)(u8)pkt[1]; if (pkt[0] & 0x10) dx -= 256;
             i16 dy = (i16)(u8)pkt[2]; if (pkt[0] & 0x20) dy -= 256;
 
-            accum_dx_q8 -= accel_q8(dx);   /* flip both axes to match the host pointer */
-            accum_dy_q8 += accel_q8(dy);
+            /* PS/2: +dx is right, +dy is up; screen y grows downward. */
+            accum_dx_q8 += accel_q8(dx);
+            accum_dy_q8 -= accel_q8(dy);
         }
 
         /* M-06: scroll wheel (4th byte, signed) */

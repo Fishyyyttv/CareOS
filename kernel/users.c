@@ -9,7 +9,7 @@
 
 #define MAX_USERS 16
 #define USERDB_MAGIC   0x43555352u  /* CUSR */
-#define USERDB_VERSION 6u
+#define USERDB_VERSION 7u
 #define USERDB_SECTORS CAREOS_DISK_USERDB_SECTORS
 #define USERDB_SECTOR_SIZE 512u
 
@@ -40,6 +40,11 @@ typedef struct {
     u8   last_login_minute;
     u8   hash_algo;
     bool must_change_password;
+    /* v7 profile (start screens) */
+    char display_name[32];
+    u8   avatar_color;        /* 0..5, index into the avatar gradients */
+    bool onboarded;           /* finished (or skipped) first-run onboarding */
+    u8   onboard_step;        /* 0..3, where onboarding resumes */
 } user_rec_t;
 
 typedef struct {
@@ -80,6 +85,17 @@ typedef struct __attribute__((packed)) {
     u8   last_login_hour;
     u8   last_login_minute;
 } userdb_entry_v6_t;
+
+/* v7 = v6 + profile. 253 bytes, so all 16 users still fit the 8-sector region
+ * (16 x 253 = 4048 <= 4080). The password hint is kept elsewhere for that
+ * reason (and because it must be readable before sign-in). */
+typedef struct __attribute__((packed)) {
+    userdb_entry_v6_t base;
+    char display_name[32];
+    u8   avatar_color;
+    u8   onboarded;
+    u8   onboard_step;
+} userdb_entry_v7_t;
 
 typedef struct __attribute__((packed)) {
     u32  uid;
@@ -362,6 +378,18 @@ static void users_sanitize_profile(user_rec_t *u) {
         u->theme_pref = USER_THEME_SYSTEM_DEFAULT;
     if (u->font_pref != USER_FONT_SYSTEM_DEFAULT && u->font_pref >= font_registry_count())
         u->font_pref = USER_FONT_SYSTEM_DEFAULT;
+    /* Records from before v7 have no profile: existing accounts skip onboarding. */
+    if (u->display_name[0] == '\0') {
+        kstrncpy(u->display_name, u->name, sizeof(u->display_name) - 1);
+        u->avatar_color = (u8)(u->uid % 6u);
+        u->onboarded = true;
+        u->onboard_step = 0;
+    }
+    u->display_name[sizeof(u->display_name) - 1] = '\0';
+    for (u32 i = 0; u->display_name[i]; i++)
+        if (u->display_name[i] < 32 || u->display_name[i] > 126) u->display_name[i] = '?';
+    if (u->avatar_color > 5) u->avatar_color = 0;
+    if (u->onboard_step > 3) u->onboard_step = 0;
 }
 
 static void rebuild_passwd_file(void) {
@@ -414,42 +442,51 @@ static bool users_persist_load(void) {
     kmemset(users, 0, sizeof(users));
     user_count = 0;
 
-    if (hdr->version == USERDB_VERSION) {
-        u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v6_t);
+    if (hdr->version == USERDB_VERSION || hdr->version == 6u) {
+        bool v7 = hdr->version == USERDB_VERSION;
+        u32 esz = v7 ? (u32)sizeof(userdb_entry_v7_t) : (u32)sizeof(userdb_entry_v6_t);
+        u32 payload_len = hdr->count * esz;
         u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
         if (payload_len > max_payload) return false;
 
         u8 *payload = userdb_io + sizeof(userdb_hdr_t);
         if (userdb_checksum(payload, payload_len) != hdr->checksum) return false;
 
-        userdb_entry_v6_t *entries = (userdb_entry_v6_t*)payload;
         for (u32 i = 0; i < hdr->count && i < MAX_USERS; i++) {
+            const userdb_entry_v6_t *e = (const userdb_entry_v6_t*)(payload + i * esz);
             user_rec_t *u = &users[user_count++];
-            u->uid = entries[i].uid;
-            u->gid = entries[i].gid;
-            u->hash_algo = entries[i].hash_algo;
-            u->must_change_password = entries[i].must_change ? true : false;
-            kmemcpy(u->pass_hash, entries[i].pass_hash, USER_PASS_HASH_LEN);
-            kmemcpy(u->salt, entries[i].salt, USER_SALT_LEN);
-            u->active = entries[i].active ? true : false;
-            u->is_root = entries[i].is_root ? true : false;
-            u->theme_pref = entries[i].theme_pref;
-            u->font_pref = entries[i].font_pref;
-            u->wallpaper_pref = entries[i].wallpaper_pref;
-            u->mouse_pref = entries[i].mouse_pref;
-            u->clock24_pref = entries[i].clock24_pref;
-            u->taskbar_pref = entries[i].taskbar_pref;
-            u->last_login_year = entries[i].last_login_year;
-            u->last_login_month = entries[i].last_login_month;
-            u->last_login_day = entries[i].last_login_day;
-            u->last_login_hour = entries[i].last_login_hour;
-            u->last_login_minute = entries[i].last_login_minute;
+            if (v7) {
+                const userdb_entry_v7_t *x = (const userdb_entry_v7_t*)(payload + i * esz);
+                kmemcpy(u->display_name, x->display_name, sizeof(u->display_name));
+                u->avatar_color = x->avatar_color;
+                u->onboarded = x->onboarded ? true : false;
+                u->onboard_step = x->onboard_step;
+            }
+            u->uid = e->uid;
+            u->gid = e->gid;
+            u->hash_algo = e->hash_algo;
+            u->must_change_password = e->must_change ? true : false;
+            kmemcpy(u->pass_hash, e->pass_hash, USER_PASS_HASH_LEN);
+            kmemcpy(u->salt, e->salt, USER_SALT_LEN);
+            u->active = e->active ? true : false;
+            u->is_root = e->is_root ? true : false;
+            u->theme_pref = e->theme_pref;
+            u->font_pref = e->font_pref;
+            u->wallpaper_pref = e->wallpaper_pref;
+            u->mouse_pref = e->mouse_pref;
+            u->clock24_pref = e->clock24_pref;
+            u->taskbar_pref = e->taskbar_pref;
+            u->last_login_year = e->last_login_year;
+            u->last_login_month = e->last_login_month;
+            u->last_login_day = e->last_login_day;
+            u->last_login_hour = e->last_login_hour;
+            u->last_login_minute = e->last_login_minute;
 
-            kstrncpy(u->name, entries[i].name, sizeof(u->name) - 1);
+            kstrncpy(u->name, e->name, sizeof(u->name) - 1);
             u->name[sizeof(u->name) - 1] = '\0';
-            kstrncpy(u->home, entries[i].home, sizeof(u->home) - 1);
+            kstrncpy(u->home, e->home, sizeof(u->home) - 1);
             u->home[sizeof(u->home) - 1] = '\0';
-            kstrncpy(u->shell, entries[i].shell, sizeof(u->shell) - 1);
+            kstrncpy(u->shell, e->shell, sizeof(u->shell) - 1);
             u->shell[sizeof(u->shell) - 1] = '\0';
             users_sanitize_profile(u);
         }
@@ -692,44 +729,50 @@ static void users_persist_save(void) {
      * populated account list overflowed the static buffer and corrupted
      * whatever followed it in BSS. Cap the write to what the region holds. */
     u32 max_payload = USERDB_SECTORS * USERDB_SECTOR_SIZE - (u32)sizeof(userdb_hdr_t);
-    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v6_t);
+    u32 max_entries = max_payload / (u32)sizeof(userdb_entry_v7_t);
     u32 to_write = user_count < max_entries ? user_count : max_entries;
     if (to_write < user_count)
         serial_write("[users] WARNING: userdb region too small, truncating save\n");
     hdr->count = to_write;
 
-    userdb_entry_v6_t *entries = (userdb_entry_v6_t*)(userdb_io + sizeof(userdb_hdr_t));
+    userdb_entry_v7_t *ext = (userdb_entry_v7_t*)(userdb_io + sizeof(userdb_hdr_t));
     for (u32 i = 0; i < to_write; i++) {
-        entries[i].uid = users[i].uid;
-        entries[i].gid = users[i].gid;
-        entries[i].hash_algo = users[i].hash_algo;
-        entries[i].must_change = users[i].must_change_password ? 1 : 0;
-        kmemcpy(entries[i].pass_hash, users[i].pass_hash, USER_PASS_HASH_LEN);
-        kmemcpy(entries[i].salt, users[i].salt, USER_SALT_LEN);
-        entries[i].active = users[i].active ? 1 : 0;
-        entries[i].is_root = users[i].is_root ? 1 : 0;
-        entries[i].theme_pref = users[i].theme_pref;
-        entries[i].font_pref = users[i].font_pref;
-        entries[i].wallpaper_pref = users[i].wallpaper_pref;
-        entries[i].mouse_pref     = users[i].mouse_pref;
-        entries[i].clock24_pref   = users[i].clock24_pref;
-        entries[i].taskbar_pref   = users[i].taskbar_pref;
-        entries[i].last_login_year = users[i].last_login_year;
-        entries[i].last_login_month = users[i].last_login_month;
-        entries[i].last_login_day = users[i].last_login_day;
-        entries[i].last_login_hour = users[i].last_login_hour;
-        entries[i].last_login_minute = users[i].last_login_minute;
+        userdb_entry_v6_t *e = &ext[i].base;
+        kmemcpy(ext[i].display_name, users[i].display_name, sizeof(ext[i].display_name));
+        ext[i].display_name[sizeof(ext[i].display_name) - 1] = '\0';
+        ext[i].avatar_color = users[i].avatar_color;
+        ext[i].onboarded = users[i].onboarded ? 1 : 0;
+        ext[i].onboard_step = users[i].onboard_step;
+        e->uid = users[i].uid;
+        e->gid = users[i].gid;
+        e->hash_algo = users[i].hash_algo;
+        e->must_change = users[i].must_change_password ? 1 : 0;
+        kmemcpy(e->pass_hash, users[i].pass_hash, USER_PASS_HASH_LEN);
+        kmemcpy(e->salt, users[i].salt, USER_SALT_LEN);
+        e->active = users[i].active ? 1 : 0;
+        e->is_root = users[i].is_root ? 1 : 0;
+        e->theme_pref = users[i].theme_pref;
+        e->font_pref = users[i].font_pref;
+        e->wallpaper_pref = users[i].wallpaper_pref;
+        e->mouse_pref     = users[i].mouse_pref;
+        e->clock24_pref   = users[i].clock24_pref;
+        e->taskbar_pref   = users[i].taskbar_pref;
+        e->last_login_year = users[i].last_login_year;
+        e->last_login_month = users[i].last_login_month;
+        e->last_login_day = users[i].last_login_day;
+        e->last_login_hour = users[i].last_login_hour;
+        e->last_login_minute = users[i].last_login_minute;
 
-        kstrncpy(entries[i].name, users[i].name, sizeof(entries[i].name) - 1);
-        entries[i].name[sizeof(entries[i].name) - 1] = '\0';
-        kstrncpy(entries[i].home, users[i].home, sizeof(entries[i].home) - 1);
-        entries[i].home[sizeof(entries[i].home) - 1] = '\0';
-        kstrncpy(entries[i].shell, users[i].shell, sizeof(entries[i].shell) - 1);
-        entries[i].shell[sizeof(entries[i].shell) - 1] = '\0';
+        kstrncpy(e->name, users[i].name, sizeof(e->name) - 1);
+        e->name[sizeof(e->name) - 1] = '\0';
+        kstrncpy(e->home, users[i].home, sizeof(e->home) - 1);
+        e->home[sizeof(e->home) - 1] = '\0';
+        kstrncpy(e->shell, users[i].shell, sizeof(e->shell) - 1);
+        e->shell[sizeof(e->shell) - 1] = '\0';
     }
 
-    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v6_t);
-    hdr->checksum = userdb_checksum((u8*)entries, payload_len);
+    u32 payload_len = hdr->count * (u32)sizeof(userdb_entry_v7_t);
+    hdr->checksum = userdb_checksum((u8*)ext, payload_len);
 
     u32 lba = users_db_lba();
     for (u32 i = 0; i < USERDB_SECTORS; i++) {
@@ -790,6 +833,10 @@ static int user_add(u32 uid, u32 gid, const char *name, const char *pass,
     u->mouse_pref     = USER_PREF_UNSET;
     u->clock24_pref   = USER_PREF_UNSET;
     u->taskbar_pref   = USER_PREF_UNSET;
+    kstrncpy(u->display_name, name, sizeof(u->display_name) - 1);
+    u->avatar_color = (u8)(uid % 6u);
+    u->onboarded = false;              /* first sign-in runs onboarding */
+    u->onboard_step = 0;
     user_set_password(u, pass);
     return 0;
 }
@@ -1258,4 +1305,103 @@ void users_selftest(void) {
 
         current_uid = sv;
     }
+}
+
+/* ── Profile (userdb v7) and password hints ─────────────────────────────── */
+bool user_profile_get(const char *name, user_profile_t *out) {
+    user_rec_t *u = name ? find_user_by_name(name) : NULL;
+    if (!u || !out) return false;
+    kmemcpy(out->display_name, u->display_name, sizeof(out->display_name));
+    out->avatar_color = u->avatar_color;
+    out->onboarded = u->onboarded;
+    out->onboard_step = u->onboard_step;
+    return true;
+}
+
+int user_profile_set(const char *name, const user_profile_t *p) {
+    user_rec_t *u = name ? find_user_by_name(name) : NULL;
+    if (!u || !p) return -1;
+    if (u->uid != current_uid && !user_is_root()) return -3;
+    if (p->display_name[0]) {
+        kstrncpy(u->display_name, p->display_name, sizeof(u->display_name) - 1);
+        u->display_name[sizeof(u->display_name) - 1] = '\0';
+    }
+    u->avatar_color = p->avatar_color;
+    u->onboarded = p->onboarded;
+    u->onboard_step = p->onboard_step;
+    users_sanitize_profile(u);
+    users_persist_save();
+    return 0;
+}
+
+#define HINTS_PATH "/home/.careos-hints"   /* "name<TAB>hint" per line */
+
+bool user_hint_get(const char *name, char *out, u32 cap) {
+    if (!name || !out || cap == 0) return false;
+    out[0] = '\0';
+    fs_node_t *f = vfs_resolve_path(HINTS_PATH);
+    if (!f) return false;
+    const char *s = vfs_file_str(f);
+    u32 nl_len = (u32)kstrlen(name);
+    while (*s) {
+        const char *line = s;
+        while (*s && *s != '\n') s++;
+        if ((u32)(s - line) > nl_len && kstrncmp(line, name, nl_len) == 0 && line[nl_len] == '\t') {
+            u32 n = (u32)(s - line) - nl_len - 1, i;
+            if (n >= cap) n = cap - 1;
+            for (i = 0; i < n; i++) out[i] = line[nl_len + 1 + i];
+            out[n] = '\0';
+            return n > 0;
+        }
+        if (*s) s++;
+    }
+    return false;
+}
+
+int user_hint_set(const char *name, const char *hint) {
+    user_rec_t *u = name ? find_user_by_name(name) : NULL;
+    if (!u) return -1;
+    if (u->uid != current_uid && !user_is_root()) return -3;
+    fs_node_t *home = vfs_find(vfs_root(), "home");
+    if (!home) return -1;
+    fs_node_t *f = vfs_find(home, ".careos-hints");
+    if (!f) f = vfs_mkfile(home, ".careos-hints");
+    if (!f) return -1;
+
+    static char buf[MAX_USERS * 128];
+    u32 n = 0, nl_len = (u32)kstrlen(name);
+    const char *s = vfs_file_str(f);
+    while (*s) {                                   /* keep every other user's line */
+        const char *line = s;
+        while (*s && *s != '\n') s++;
+        u32 len = (u32)(s - line);
+        bool mine = len > nl_len && kstrncmp(line, name, nl_len) == 0 && line[nl_len] == '\t';
+        if (!mine && len > 0 && n + len + 1 < sizeof(buf)) {
+            kmemcpy(buf + n, line, len); n += len; buf[n++] = '\n';
+        }
+        if (*s) s++;
+    }
+    if (hint && hint[0] && n + nl_len + 66 < sizeof(buf)) {
+        kmemcpy(buf + n, name, nl_len); n += nl_len; buf[n++] = '\t';
+        for (u32 i = 0; hint[i] && i < 63; i++)
+            buf[n++] = (hint[i] >= 32 && hint[i] <= 126 && hint[i] != '\t') ? hint[i] : ' ';
+        buf[n++] = '\n';
+    }
+    return vfs_write(f, buf, n) >= 0 ? 0 : -1;
+}
+
+bool user_last_login_name(char *out, u32 cap) {
+    user_rec_t *best = NULL;
+    u32 best_key = 0;
+    for (u32 i = 0; i < user_count; i++) {
+        user_rec_t *u = &users[i];
+        if (!u->active) continue;
+        u32 key = ((u32)u->last_login_year << 20) | ((u32)u->last_login_month << 16) |
+                  ((u32)u->last_login_day << 11) | ((u32)u->last_login_hour << 6) | u->last_login_minute;
+        if (!best || key > best_key) { best = u; best_key = key; }
+    }
+    if (!best || !out || cap == 0) return false;
+    kstrncpy(out, best->name, cap - 1);
+    out[cap - 1] = '\0';
+    return true;
 }

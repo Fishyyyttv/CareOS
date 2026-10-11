@@ -6,17 +6,54 @@ QEMU      := qemu-system-x86_64
 GCC_INC   := $(shell gcc -print-file-name=include 2>/dev/null)
 LIBGCC    := $(shell gcc -print-libgcc-file-name 2>/dev/null)
 
+# Build-time switches. Defaults give a normal desktop build.
+#   SMOKE=1         run the ring-3 smoke tests at boot (they can page-fault
+#                   and reboot under QEMU TCG, so they are opt-in)
+#   QA_AUTOLOGIN=1  skip the login gate (headless QA only -- never ship)
+#   PERF_BENCH=1    run the 10 s compositor benchmark 3 s after the desktop
+#   QA_LAYOUT=1     cycle every app at its minimum size for screenshots
+SMOKE        ?= 0
+QA_AUTOLOGIN ?= 0
+PERF_BENCH   ?= 0
+QA_LAYOUT    ?= 0
+BUILD_DEFS :=
+ifeq ($(SMOKE),0)
+BUILD_DEFS += -DCAREOS_SKIP_SMOKE_TESTS
+endif
+ifeq ($(QA_AUTOLOGIN),1)
+BUILD_DEFS += -DCAREOS_QA_AUTOLOGIN
+endif
+ifeq ($(PERF_BENCH),1)
+BUILD_DEFS += -DCAREOS_PERF_BENCH_AT_BOOT
+endif
+QA_PIP_SHEET ?= 0
+ifeq ($(QA_PIP_SHEET),1)
+BUILD_DEFS += -DCAREOS_QA_PIP_SHEET
+endif
+ifeq ($(QA_LAYOUT),1)
+BUILD_DEFS += -DCAREOS_QA_LAYOUT
+endif
+
 KERN_CFLAGS := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
-               -Iinclude -Iinclude/libc -Igui -fno-builtin \
-               -mno-red-zone -mno-mmx -mno-sse -mno-sse2
+               -Iinclude -Iinclude/libc -Igui -Igui/pip -Iweb/engine -Iweb/third_party -fno-builtin \
+               -mno-red-zone -mno-mmx -mno-sse -mno-sse2 $(BUILD_DEFS)
 
 APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
-               -Iinclude -Iinclude/libc -Igui -fno-builtin \
+               -Iinclude -Iinclude/libc -Igui -Igui/pip -fno-builtin \
                -mno-red-zone
 
 CFLAGS      := $(KERN_CFLAGS)
+
+# Floating point for applications (apps/). SSE is enabled at boot (CR4.OSFXSR)
+# and the scheduler fxsave/fxrstor's every task on every switch, so FP state
+# survives preemption. Kernel, driver and GUI code keep -mno-sse, so interrupt
+# handlers never touch XMM registers and never need to save them.
+# -mincoming-stack-boundary=3: kernel stacks are only guaranteed 8-byte
+# aligned, so let gcc realign wherever SSE spills need 16.
+FP_CFLAGS   := $(filter-out -mno-mmx -mno-sse -mno-sse2,$(KERN_CFLAGS)) \
+               -msse2 -mfpmath=sse -mincoming-stack-boundary=3
 DOOM_CFLAGS := $(APP_CFLAGS) -DDOOMGENERIC_RESX=640 -DDOOMGENERIC_RESY=400
 
 DOOM_EXCLUDE := doomgeneric/doomgeneric/doomgeneric_allegro.c \
@@ -80,12 +117,16 @@ ASM_SRC   := boot/boot.asm
 C_SRC     := kernel/kernel.c       \
              kernel/gdt_idt.c      \
              kernel/memory.c       \
+             kernel/heap.c         \
              kernel/paging.c       \
+             kernel/mb2mmap.c      \
              kernel/vfs.c          \
              kernel/scheduler.c    \
              kernel/syscall.c      \
              kernel/users.c        \
              kernel/settings.c     \
+             kernel/account_rules.c \
+             kernel/kfmt.c         \
              kernel/power.c        \
              kernel/appdb.c        \
              kernel/carepkg.c      \
@@ -110,6 +151,12 @@ C_SRC     := kernel/kernel.c       \
              net/tls.c             \
              shell/shell.c         \
              gui/gfx.c             \
+             gui/blit.c            \
+             gui/shadow.c          \
+             gui/wcache.c          \
+             gui/textbuf.c         \
+             gui/perf_stats.c      \
+             gui/perf.c            \
              gui/image.c           \
              gui/image_bmp.c       \
              gui/image_tga.c       \
@@ -125,7 +172,35 @@ C_SRC     := kernel/kernel.c       \
              gui/fonts/font_ibm_plex_mono_bold.c \
              gui/fonts/font_ibm_plex_sans.c \
              gui/fonts/font_ibm_plex_sans_bold.c \
+             gui/fonts/font_figtree.c \
+             gui/fonts/font_figtree_bold.c \
+             gui/fonts/font_bricolage_bold.c \
+             gui/fonts/font_bricolage_xbold.c \
+             gui/fonts/font_bricolage_clock.c \
+             gui/font_roles.c      \
+             gui/ui.c              \
+             gui/ui_glyph.c        \
+             gui/ui_glyph_raster.c \
+             gui/ui_icons.c        \
+             gui/notify.c          \
+             gui/glass.c           \
+             gui/spring.c          \
+             gui/pip/pip_raster.c  \
+             gui/pip/pip_art.c     \
+             gui/pip/pip_brain.c   \
+             gui/pip/pip_sprite.c  \
+             gui/pip/pip.c         \
+             gui/pip/pip_desktop.c \
+             gui/pip/pip_assist.c  \
+             gui/pip/pip_chat.c    \
+             gui/session/common.c \
+             gui/session/boot.c \
+             gui/session/login.c \
+             gui/session/signup.c \
+             gui/session/power.c \
+             gui/session/onboarding.c \
              gui/theme.c           \
+            gui/care_wallpaper.c  \
              gui/launcher.c        \
              gui/mouse.c           \
              gui/wm.c              \
@@ -135,13 +210,23 @@ C_SRC     := kernel/kernel.c       \
              gui/gui.c             \
              apps/apps.c           \
              apps/app_terminal.c   \
+             apps/term_layout.c    \
+             apps/term_cmds.c      \
+             apps/settings_index.c \
+             apps/care_syntax.c    \
+             apps/notes_md.c       \
+             apps/store_model.c    \
              apps/app_notes.c      \
              apps/app_files.c      \
              apps/app_sysmon.c     \
              apps/app_calc.c       \
+             apps/calc_engine.c    \
              apps/app_about.c      \
              apps/app_settings.c   \
              apps/app_browser.c    \
+             apps/http_parse.c     \
+             apps/browser_fetch.c  \
+             apps/fetch_token.c    \
              apps/app_pkgmgr.c     \
              apps/app_editor.c     \
              apps/app_paint.c      \
@@ -152,19 +237,45 @@ C_SRC     := kernel/kernel.c       \
              apps/app_maze.c       \
              apps/app_3d.c         \
              apps/app_doom.c       \
+             apps/app_pip.c        \
              kernel/libc_shim.c
 
 ASM_OBJ   := $(ASM_SRC:.asm=.o)
 C_OBJ     := $(C_SRC:.c=.o)
 DOOM_OBJ  := $(DOOM_SRC:.c=.o)
+WEB_SRC   := $(wildcard web/engine/*.c) $(shell find web/third_party/lexbor -name '*.c')
+WEB_SRC   += $(addprefix web/third_party/quickjs/,quickjs.c libregexp.c libunicode.c dtoa.c)
+WEB_SRC   := $(filter-out web/engine/math.c,$(WEB_SRC)) $(wildcard web/third_party/musl-math/*.c)
+WEB_OBJ   := $(WEB_SRC:.c=.o)
+WEB_FONT_SRC := fonts/IBMPlexSans-Regular.ttf fonts/IBMPlexSans-Bold.ttf \
+                fonts/IBMPlexMono-Regular.ttf fonts/IBMPlexMono-Bold.ttf
+WEB_FONT_OBJ := web/font_sans.o web/font_sans_bold.o web/font_mono.o web/font_mono_bold.o
 
+
+ASM_OBJ   := $(ASM_SRC:.asm=.o)
+C_OBJ     := $(C_SRC:.c=.o)
+C_OBJ     += kernel/quickjs_platform.o
+C_OBJ     += tests/web_smoke.o
+DOOM_OBJ  := $(DOOM_SRC:.c=.o)
 # Baked GUI assets. The icon theme is rendered offline by tools/gen-icons.py
 # into one .cra archive and linked in with objcopy, exactly like DOOM1.WAD --
 # /system is an in-memory VFS rebuilt every boot, so system artwork cannot live
 # on disk. gui/resource_boot.c publishes it into the VFS at gui_init().
 ICON_ARCHIVE := assets/careos-icons.cra
 
-ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o $(ICON_ARCHIVE).o
+# apps/ objects are built with FP_CFLAGS (see above). Changing this set
+# requires rebuilding those objects: make clean, or rm apps/*.o.
+FP_OBJ    := $(patsubst %.c,%.o,$(filter apps/%.c,$(C_SRC)))
+$(FP_OBJ): CFLAGS := $(FP_CFLAGS)
+
+tests/web_smoke.o: CFLAGS := $(FP_CFLAGS) -DLEXBOR_STATIC
+$(WEB_OBJ): CFLAGS := $(FP_CFLAGS) -Iweb/engine -Iweb/third_party -DLEXBOR_STATIC -DNDEBUG
+$(filter web/third_party/quickjs/%,$(WEB_OBJ)): CFLAGS += -DCAREOS -D__STDC_NO_ATOMICS__=1
+$(filter web/third_party/musl-math/%,$(WEB_OBJ)): CFLAGS += -Iweb/third_party/musl-math -Dhidden= -ffp-contract=off
+web/engine/js.o: web/engine/js_prelude.h
+web/engine/js_prelude.h: web/engine/prelude.js web/host/gen_prelude.sh
+	bash web/host/gen_prelude.sh
+ALL_OBJ   := $(ASM_OBJ) $(C_OBJ) $(WEB_OBJ) $(WEB_FONT_OBJ) $(DOOM_OBJ) tests/ring3_exit.bin.o tests/ring3_isolate_a.bin.o tests/ring3_isolate_b.bin.o DOOM1.WAD.bin.o $(ICON_ARCHIVE).o
 
 .PHONY: all run run-1080p run-kvm run-whpx run-nowindow debug clean clean-all help disk reset-disk test-elfs format-disk host-test
 
@@ -191,6 +302,30 @@ kernel/libc_shim.o: kernel/libc_shim.c
 %.o: %.c
 	@echo "  CC    $<"
 	$(CC) $(CFLAGS) -c -o $@ $<
+web/font_sans.o: fonts/IBMPlexSans-Regular.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Regular_ttf_start=web_font_sans_start \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Regular_ttf_end=web_font_sans_end $< $@
+web/font_sans_bold.o: fonts/IBMPlexSans-Bold.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Bold_ttf_start=web_font_sans_bold_start \
+	  --redefine-sym _binary_fonts_IBMPlexSans_Bold_ttf_end=web_font_sans_bold_end $< $@
+web/font_mono.o: fonts/IBMPlexMono-Regular.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Regular_ttf_start=web_font_mono_start \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Regular_ttf_end=web_font_mono_end $< $@
+web/font_mono_bold.o: fonts/IBMPlexMono-Bold.ttf
+	objcopy -I binary -O elf64-x86-64 -B i386:x86-64 --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Bold_ttf_start=web_font_mono_bold_start \
+	  --redefine-sym _binary_fonts_IBMPlexMono_Bold_ttf_end=web_font_mono_bold_end $< $@
+
+
+# Rebuild objects that read BUILD_DEFS whenever the flag set changes.
+.build-defs: FORCE
+	@echo '$(BUILD_DEFS)' | cmp -s - $@ || echo '$(BUILD_DEFS)' > $@
+kernel/kernel.o gui/gui.o gui/perf.o: .build-defs
+.PHONY: FORCE
+FORCE:
 
 # Header dependency tracking. Without this, editing a header (e.g. the
 # fs_node_t layout in include/kernel.h) rebuilds nothing, and stale objects
@@ -203,10 +338,11 @@ kernel/kernel.elf: $(ALL_OBJ)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJ) $(LIBGCC)
 	@echo "  Size: $$(du -h $@ | cut -f1)"
 
-careos.iso: kernel/kernel.elf
+careos.iso: kernel/kernel.elf iso/boot/grub/grub.cfg
 	@echo "  ISO   building..."
 	@mkdir -p iso/boot/grub
-	@cp kernel/kernel.elf iso/boot/kernel.elf
+	@objcopy --strip-debug kernel/kernel.elf iso/boot/kernel.elf
+	@echo "  ELF   $$(du -h kernel/kernel.elf | cut -f1) -> $$(du -h iso/boot/kernel.elf | cut -f1) on the ISO (debug info kept in kernel/kernel.elf for gdb)"
 	@grub-mkrescue -o careos.iso iso/ 2>&1 | grep -v "^$$" || \
 	 grub2-mkrescue -o careos.iso iso/ 2>&1 | grep -v "^$$"
 	@echo "  ISO: $$(du -h careos.iso | cut -f1)"
@@ -347,14 +483,76 @@ DOOM1.WAD.bin.o: DOOM1.WAD
 
 test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_isolate_b
 
-# Host-side unit test for the QOI decoder. Built with the host gcc (not the
-# freestanding kernel toolchain) so it can link libc and run directly -- no
-# QEMU needed. gui/image_qoi.c compiles under -DHOST_TEST with its own
-# u8/u32/u64 typedefs, matching tests/host/test_qoi.c.
-host-test:
-	gcc -Iinclude -Igui -o /tmp/test_qoi tests/host/test_qoi.c gui/image_qoi.c \
-	    -DHOST_TEST 2>&1 || true
-	/tmp/test_qoi
+# Host unit tests (host gcc, not the kernel toolchain). Register a test by
+# adding HT_SRC_<name> := <sources under test> and appending <name> to
+# HOST_TESTS; the test file is tests/host/test_<name>.c.
+HOST_TEST_DIR := build/host
+HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Igui/pip -Iapps -Ikernel -DHOST_TEST \
+                 -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+                 -fno-omit-frame-pointer
+HT_SRC_qoi    := gui/image_qoi.c
+HT_SRC_perf_stats := gui/perf_stats.c
+HT_SRC_calc_engine := apps/calc_engine.c
+HT_SRC_keychord :=
+HT_SRC_blit := gui/blit.c
+HT_SRC_wcache := gui/wcache.c
+HT_SRC_shadow := gui/shadow.c
+HT_SRC_heap := kernel/heap.c
+HT_SRC_textbuf := gui/textbuf.c
+HT_SRC_mb2mmap := kernel/mb2mmap.c
+HT_SRC_term_layout := apps/term_layout.c
+HT_SRC_http_parse := apps/http_parse.c
+HT_SRC_fetch_token := apps/fetch_token.c
+HT_SRC_netrate :=
+HOST_TESTS    := qoi perf_stats calc_engine keychord blit wcache shadow heap textbuf mb2mmap term_layout http_parse fetch_token netrate
+HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass spring account_rules
+HOST_TESTS    += term_cmds settings_index care_syntax notes_md store_model kfmt
+HT_SRC_kfmt := kernel/kfmt.c
+$(HOST_TEST_DIR)/test_kfmt: kernel/kfmt.h
+HOST_TESTS    += pip_raster pip_art pip_brain pip_assist
+HT_SRC_pip_assist := gui/pip/pip_assist.c apps/settings_index.c
+$(HOST_TEST_DIR)/test_pip_assist: gui/pip/pip_assist.h apps/settings_index.h
+HT_SRC_pip_brain := gui/pip/pip_brain.c
+$(HOST_TEST_DIR)/test_pip_brain: gui/pip/pip_brain.h gui/pip/pip_art.h
+HT_SRC_pip_art := gui/pip/pip_art.c gui/pip/pip_raster.c
+$(HOST_TEST_DIR)/test_pip_art: gui/pip/pip_art.h gui/pip/pip_raster.h
+HT_SRC_pip_raster := gui/pip/pip_raster.c
+$(HOST_TEST_DIR)/test_pip_raster: gui/pip/pip_raster.h
+HT_SRC_store_model := apps/store_model.c
+$(HOST_TEST_DIR)/test_store_model: apps/store_model.h
+HT_SRC_notes_md := apps/notes_md.c
+$(HOST_TEST_DIR)/test_notes_md: apps/notes_md.h
+HT_SRC_care_syntax := apps/care_syntax.c
+$(HOST_TEST_DIR)/test_care_syntax: apps/care_syntax.h
+HT_SRC_settings_index := apps/settings_index.c
+$(HOST_TEST_DIR)/test_settings_index: apps/settings_index.h
+HT_SRC_term_cmds := apps/term_cmds.c
+$(HOST_TEST_DIR)/test_term_cmds: apps/term_cmds.h
+$(HOST_TEST_DIR)/test_term_layout: apps/term_layout.h
+HT_SRC_account_rules := kernel/account_rules.c
+HT_SRC_spring := gui/spring.c
+HT_SRC_glass := gui/glass.c
+HT_SRC_care_wallpaper := gui/care_wallpaper.c
+HT_SRC_font_roles := gui/font_roles.c
+HT_SRC_ui_icons := gui/ui_icons.c
+HT_SRC_ui_glyph := gui/ui_glyph_raster.c
+$(HOST_TEST_DIR)/test_window_chrome: gui/window_chrome.h
+$(HOST_TEST_DIR)/test_care_wallpaper: gui/care_wallpaper.h
+$(HOST_TEST_DIR)/test_font_roles: gui/font_roles.h
+$(HOST_TEST_DIR)/test_ui_icons: gui/ui_icons.h
+$(HOST_TEST_DIR)/test_ui_glyph: gui/ui_glyph_raster.h gui/ui_glyph_data.h
+$(HOST_TEST_DIR)/test_glass: gui/glass.h
+$(HOST_TEST_DIR)/test_spring: gui/spring.h
+$(HOST_TEST_DIR)/test_account_rules: kernel/account_rules.h
+
+.SECONDEXPANSION:
+$(HOST_TEST_DIR)/test_%: tests/host/test_%.c $$(HT_SRC_$$*) include/pure.h
+	@mkdir -p $(HOST_TEST_DIR)
+	gcc $(HOST_CFLAGS) -o $@ $< $(HT_SRC_$*)
+
+.PHONY: host-test
+host-test: $(addprefix $(HOST_TEST_DIR)/test_,$(HOST_TESTS))
+	@set -e; for t in $^; do echo "  HOST  $$t"; ./$$t; done
 
 clean:
 	@rm -f $(ALL_OBJ) $(ALL_OBJ:.o=.d) kernel/kernel.elf careos.iso DOOM1.WAD.bin.o
@@ -381,6 +579,5 @@ help:
 	@echo "  Mouse: click QEMU window to capture, Ctrl+Alt+G to release"
 	@echo "  Fullscreen: Ctrl+Alt+F toggles it any time (or use make run-1080p)"
 	@echo "  Display: override backend with make run QEMU_DISPLAY=gtk"
-
 
 

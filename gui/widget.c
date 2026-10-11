@@ -24,6 +24,19 @@ void widget_add_child(widget_t *parent, widget_t *child) {
     }
 }
 
+/* Free a widget and every descendant. Siblings of wi itself are left alone --
+ * they belong to wi's parent, which frees them via its own child walk. */
+void widget_destroy(widget_t *wi) {
+    if (!wi) return;
+    widget_t *child = wi->first_child;
+    while (child) {
+        widget_t *next = child->next_sibling;
+        widget_destroy(child);
+        child = next;
+    }
+    kfree(wi);
+}
+
 void widget_update_abs_rect(widget_t *wi, i32 px, i32 py) {
     if (!wi) return;
     wi->abs_rect.x = px + wi->rect.x;

@@ -1,10 +1,13 @@
 /* CareOS v9 -- apps/app_sysmon.c -- System Monitor */
 #include "apps_common.h"
+#include "perf.h"
 
 void app_sysmon_tick(window_t *w){
     u32 pos = w->sysmon_hist_pos % 64;
-    w->sysmon_cpu_hist[pos] = (timer_get_ticks() % 70) + 5;
-    w->sysmon_mem_hist[pos] = kmem_used() * 100 / KERNEL_HEAP_SIZE;
+    /* Real CPU busy %: the share of wall time the GUI loop did not spend
+     * halted (background tasks count as busy). It used to be ticks % 70. */
+    w->sysmon_cpu_hist[pos] = perf_cpu_busy_pct();
+    w->sysmon_mem_hist[pos] = (u32)((u64)kmem_used() * 100u / kheap_size());
     w->sysmon_hist_pos++;
 }
 
@@ -62,7 +65,7 @@ void app_sysmon_draw(window_t *w){
     if (w->tab == 0) {
         /* Overview */
         u32 cpu = w->sysmon_cpu_hist[(w->sysmon_hist_pos + 63) % 64];
-        u32 mem = kmem_used() * 100 / KERNEL_HEAP_SIZE;
+        u32 mem = (u32)((u64)kmem_used() * 100u / kheap_size());
 
         cy = draw_stat_bar(bx, cy, bw, "CPU Usage", cpu, COL_GREEN);
         cy = draw_stat_bar(bx, cy, bw, "Memory",    mem, COL_PRIMARY);
@@ -71,7 +74,7 @@ void app_sysmon_draw(window_t *w){
         struct { const char *label; const char *val; } rows[4];
         char task_s[8], uptime_s[16], net_val[24];
         kutoa(task_count_active(), task_s, 10);
-        kutoa(timer_get_ticks()/1000, uptime_s, 10); kstrcat(uptime_s, "s");
+        kutoa(timer_ms()/1000, uptime_s, 10); kstrcat(uptime_s, "s");
         kstrcpy(net_val, net_is_up() ? "UP (e1000)" : "DOWN");
 
         rows[0].label = "Tasks:";    rows[0].val = task_s;

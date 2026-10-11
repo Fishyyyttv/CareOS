@@ -148,6 +148,7 @@ void image_classify_alpha(image_t *img);
 
 #define CRI_ENC_BGRA32      0u
 #define CRI_ENC_RLE_BGRA32  1u
+#define CRI_ENC_QOI         2u   /* payload is a QOI image (tools/repack-cra.py) */
 
 #define CRI_FLAG_HAS_ALPHA  0x01u
 #define CRI_HEADER_BYTES    16u

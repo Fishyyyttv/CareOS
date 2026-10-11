@@ -120,7 +120,7 @@ typedef void (*isr_handler_t)(registers_t*);
 /* -- PIT Timer ------------------------------------------------------------ */
 #define PIT_CHANNEL0    0x40
 #define PIT_CMD         0x43
-#define PIT_HZ          100   /* 100 Hz = 10ms tick */
+#define PIT_HZ          1000  /* 1 kHz = 1 ms tick. Use timer_ms() for time. */
 
 /* -- Keyboard ------------------------------------------------------------- */
 #define KB_DATA_PORT    0x60
@@ -133,11 +133,14 @@ typedef void (*isr_handler_t)(registers_t*);
  * Growing KERNEL_HEAP_SIZE therefore grows the kernel image's memory footprint
  * directly, and the loader must zero all of it at boot.
  *
- * 512 MB against the 4 GB the VM is given. Consumers are the framebuffer
- * backbuffer (8 MB at 1080p), the image cache (RES_BUDGET_BYTES, 32 MB),
- * per-window buffers, and VFS file contents. */
+ * 192 MB = about 2x the measured peak (2026-09-26: 68,955 KB with twelve apps
+ * open plus the compositor benchmark, 1080p; Terminal 'free' reports it).
+ * Consumers: three screen-sized buffers (backbuffer + wallpaper/desktop
+ * caches, 8 MB each at 1080p), the image cache (RES_BUDGET_BYTES, 32 MB),
+ * unfocused-window pixel caches, DOOM's 6 MB zone, and VFS file contents.
+ * It was 512 MB, which made the kernel image 554 MB and ruled out small VMs. */
 #define KERNEL_HEAP_START   0x400000    /* vestigial; heap_mem[] lives in .bss */
-#define KERNEL_HEAP_SIZE    (512*1024*1024) /* 512 MB heap */
+#define KERNEL_HEAP_SIZE    (192*1024*1024) /* 192 MB heap */
 
 /* FLOOR for the physical frames paging_init() withholds from pmm_alloc_frame().
  * The real reservation is computed from the _kernel_end symbol emitted by
@@ -179,6 +182,7 @@ void isr_handler(registers_t *r);
 /* -- Timer ---------------------------------------------------------------- */
 void timer_init(u32 hz);
 u32  timer_get_ticks(void);
+u32  timer_ms(void);
 void timer_wait(u32 ms);
 void timer_tick_advance(void);
 
@@ -186,12 +190,14 @@ void timer_tick_advance(void);
 void keyboard_init(void);
 char keyboard_getchar(void);
 bool keyboard_haschar(void);
+char keyboard_peekchar(void);   /* 0 if empty; does not consume */
 void keyboard_flush(void);
 bool keyboard_ctrl_held(void);
 bool keyboard_alt_held(void);
 bool keyboard_shift_held(void);
 bool keyboard_super_held(void);
 bool keyboard_super_tapped(void);
+bool keyboard_key_held(u8 code);   /* set-1 make code, +0x80 for E0 keys */
 
 /* Machine power control (kernel/power.c). Neither returns. */
 void power_shutdown(void);
@@ -200,19 +206,14 @@ void power_reboot(void);
 /* -- Memory --------------------------------------------------------------- */
 void  pmm_init(void);
 /* -- Memory / Heap -------------------------------------------------------- */
-typedef struct block_hdr {
-    u64              magic;
-    u64              size;
-    bool             free;
-    u8               reserved[15];
-    struct block_hdr *next;
-    struct block_hdr *prev;
-} block_hdr_t;
-
-#define HEAP_MAGIC  0xC4E05AFE
+#include "heap_types.h"
 
 void  *kmalloc(size_t size);
 void   kfree(void *ptr);
+void   kheap_init(void *base, size_t size);   /* kernel/heap.c */
+size_t kheap_size(void);
+u32    kmem_peak(void);
+u32    kmem_largest_free(void);
 void *kmemset(void *dst, int c, size_t n);
 void *kmemcpy(void *dst, const void *src, size_t n);
 int   kmemcmp(const void *a, const void *b, size_t n);
@@ -245,7 +246,7 @@ __attribute__((noreturn)) void kernel_panic(u32 code, const char *msg);
 #define FS_PATH_MAX     256
 
 /* Upper bound on a single file's heap allocation. File contents live on the
- * kernel heap (KERNEL_HEAP_SIZE, 192 MiB); this ceiling stops one runaway
+ * kernel heap (KERNEL_HEAP_SIZE); this ceiling stops one runaway
  * write from consuming it. Previously file data was a 5 MiB inline array,
  * which cost 640 MiB of BSS for the 128-node pool whether used or not. */
 #define FS_FILE_MAX_BYTES (16u*1024u*1024u)
@@ -334,6 +335,15 @@ void task_init(void);
 int  task_create(const char *name, task_func_t fn);
 int  task_create_user(const char *name, u64 entry, pde_t *page_dir, int session);
 void task_yield(void);
+void task_block_unless(volatile bool *flag);  /* sleep until task_wake unless *flag */
+void task_wake(int idx);                      /* idx as returned by task_create */
+bool sched_other_ready(void);
+void task_set_timeslice(int idx, u32 ticks);
+bool net_trylock(void);
+void net_count_tx(u32 len);
+void net_get_counters(u32 *rx_bytes, u32 *tx_bytes);
+void net_lock(void);
+void net_unlock(void);
 __attribute__((noreturn)) void task_exit(void);
 task_t *task_current(void);
 void task_list(void);
@@ -369,6 +379,11 @@ void sysinfo_print(void);
 /* -- Care Language interpreter -------------------------------------------- */
 int care_lang_exec(const char *src, u32 len);
 int care_lang_exec_buf(const char *src, u32 len, char *out, u32 out_max);
+u32 care_lang_builtin_count(void);
+const char *care_lang_builtin_name(u32 i);
+const char *care_lang_builtin_sig(u32 i);      /* e.g. "sys_alert(text)" */
+u32 care_lang_pip_calls(void);                /* pip_mood/pip_say calls so far */
+u32 care_lang_last_error_line(void);           /* 0 = last run was clean */
 
 /* -- Startup scripts (rc.care) --------------------------------------------- */
 void rc_care_run_startup(void);
@@ -387,10 +402,13 @@ void  paging_init(void);
 u32   pmm_alloc_frame(void);
 void  pmm_free_frame(u32 frame);
 u32   pmm_free_count(void);
+u32   pmm_ram_mib(void);              /* usable RAM from the memory map */
 
 pde_t *paging_create_dir(void);
 int    paging_map(pde_t *dir, u64 virt, u64 phys, u32 flags);
 void   paging_map_mmio(u32 phys_start, u32 size);
+void   paging_map_framebuffer(u32 phys_start, u32 size);
+void   pmm_apply_map(u64 mbi_addr);   /* after paging_init: honour the MB2 memory map */
 void   paging_switch_dir(pde_t *dir);
 void   paging_switch_kernel(void);
 void   paging_free_dir(pde_t *dir);
@@ -464,6 +482,11 @@ typedef struct {
     u8   last_login_minute;
     u8   hash_algo;
     bool must_change_password;
+    /* v7 profile (start screens) */
+    char display_name[32];
+    u8   avatar_color;        /* 0..5, index into the avatar gradients */
+    bool onboarded;           /* finished (or skipped) first-run onboarding */
+    u8   onboard_step;        /* 0..3, where onboarding resumes */
 } user_t;
 
 #define USER_PREF_UNSET 0xFFFFFFFFu
@@ -509,6 +532,22 @@ bool        user_must_change_password(void);
  * accounts only -- guest (uid 65534) is not a stored account and is never
  * enumerated. */
 u32         user_enum_count(void);
+
+/* Profile (userdb v7). Anyone may read a profile (the login screen shows display
+ * names and avatars); only the account itself or an administrator may change
+ * it. The password hint is readable before sign-in, so it lives outside the
+ * protected record, in /home/.careos-hints. */
+typedef struct {
+    char display_name[32];
+    u8   avatar_color;
+    bool onboarded;
+    u8   onboard_step;
+} user_profile_t;
+bool        user_profile_get(const char *name, user_profile_t *out);
+int         user_profile_set(const char *name, const user_profile_t *p);   /* 0 ok, -1 no user, -3 denied */
+bool        user_hint_get(const char *name, char *out, u32 cap);
+int         user_hint_set(const char *name, const char *hint);              /* "" clears */
+bool        user_last_login_name(char *out, u32 cap);                       /* most recent sign-in */
 bool        user_enum_at(u32 idx, u32 *uid_out, char *name_out, u32 name_cap, bool *is_root_out);
 
 /* VFS path helper (implemented in users.c) */
@@ -582,6 +621,7 @@ void        ata_cache_flush(void);
 void        e1000_init(void);
 bool        e1000_is_up(void);
 const u8   *e1000_get_mac(void);
+u32         e1000_link_mbps(void);   /* 0 = no link */
 void        e1000_poll(void);
 
 /* net_send_frame is called by net.c; e1000.c implements it */
@@ -621,6 +661,7 @@ int  dns_resolve(const char *host, u32 *out);
 int  net_dhcp_renew(void);
 void net_set_dns_server(u32 ip);
 u32  net_get_dns_server(void);
+u32  net_get_gateway(void);
 const char *net_last_error(void);
 int  http_get(const char *host, u16 port, const char *path,
               char *resp, u32 maxlen);
@@ -689,6 +730,15 @@ typedef struct {
     u32  vesa_h;
     u32  font_family;
     u32  accent;
+    /* v7 (start screens / shell) */
+    u32  theme_mode;           /* 0 dark, 1 light, 2 auto (07:00 light, 19:00 dark) */
+    u32  glass_alpha_pct;      /* 40..100, 100 = token alphas as designed */
+    u32  reduce_transparency;  /* 0/1 */
+    u32  dock_position;        /* 0 bottom, 1 left, 2 right */
+    u32  dock_autohide;        /* 0/1 */
+    u32  brightness_pct;       /* 10..100 */
+    u32  dnd;                  /* 0/1 */
+    i32  tz_offset_min;        /* local time = UTC + this; default -420 (UTC-7) */
 } careos_settings_t;
 
 void settings_init(void);
@@ -703,6 +753,13 @@ void settings_set_taskbar_centered(bool centered);
 void settings_set_wifi_profile(const char *ssid, const char *pass, bool connected);
 void settings_set_vesa_mode(u32 w, u32 h);
 void settings_set_font_family(u32 index);
+void settings_set_theme_mode(u32 mode);       /* 0 dark, 1 light, 2 auto */
+void settings_set_tz_offset(i32 minutes);
+void settings_set_glass(u32 alpha_pct, bool reduce);
+void settings_set_dock(u32 position, bool autohide);
+void settings_set_brightness(u32 pct);
+void settings_set_dnd(bool on);
+bool settings_auto_theme_dark(u32 local_hour);  /* the auto rule: dark before 07:00 and from 19:00 */
 void settings_apply_prefs(const user_prefs_t *p);
 void settings_capture_to_current_user(void);
 

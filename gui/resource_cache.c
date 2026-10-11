@@ -94,7 +94,7 @@ static void entry_drop(res_entry_t *e) {
 /* Evict the least recently used unprotected entry. Returns false when every
  * entry is pinned or was touched this tick. */
 static bool cache_evict_one(void) {
-    u32          now  = timer_get_ticks();
+    u32          now  = timer_ms();
     res_entry_t *best = NULL;
 
     for (u32 i = 0; i < RES_MAX_ENTRIES; i++) {
@@ -126,7 +126,7 @@ static res_entry_t *cache_insert(const char *key, image_t *img) {
         kstrncpy(e->key, key, RES_KEY_MAX - 1);
         e->img      = img;
         e->bytes    = bytes;
-        e->last_use = timer_get_ticks();
+        e->last_use = timer_ms();
         e->used     = true;
         if (img) img->flags |= IMG_CACHED;
         cache_bytes += bytes;
@@ -162,7 +162,7 @@ image_t *res_image(const char *path) {
 
     res_entry_t *e = cache_find(key);
     if (e) {
-        e->last_use = timer_get_ticks();
+        e->last_use = timer_ms();
         stat_hits++;
         return e->img;                 /* may be NULL: a remembered failure */
     }
@@ -188,7 +188,7 @@ image_t *res_image_sized(const char *path, u32 w, u32 h) {
 
     res_entry_t *e = cache_find(key);
     if (e) {
-        e->last_use = timer_get_ticks();
+        e->last_use = timer_ms();
         stat_hits++;
         return e->img;
     }

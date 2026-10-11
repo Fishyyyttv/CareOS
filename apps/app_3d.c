@@ -37,7 +37,6 @@ static i32 i_cos(i32 deg) { return i_sin(deg + 90); }
 
 void app_3d_init(window_t *w) {
     w->app = APP_3D;
-    w->win_buffer.pixels = NULL;
     px = TILE_SIZE + TILE_SIZE / 2;
     py = TILE_SIZE + TILE_SIZE / 2;
     pa = 45;

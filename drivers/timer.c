@@ -26,9 +26,13 @@ void timer_init(u32 hz) {
 
 u32 timer_get_ticks(void) { return ticks; }
 
+/* Milliseconds since boot. The one clock GUI/net code should use -- raw
+ * ticks were once mistaken for ms throughout the GUI while PIT_HZ was 100. */
+u32 timer_ms(void) { return ticks * (1000u / PIT_HZ); }
+
 void timer_wait(u32 ms) {
-    u32 target = ticks + (ms * PIT_HZ / 1000) + 1;
-    while (ticks < target) {
-        __asm__ volatile ("hlt");
-    }
+	u32 start = timer_ms();
+	while ((u32)(timer_ms() - start) < ms) {
+		__asm__ volatile ("hlt");
+	}
 }

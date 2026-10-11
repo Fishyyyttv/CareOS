@@ -20,6 +20,10 @@ static bool super_down   = false;
 static bool super_used   = false;   /* another key was pressed during the hold */
 static bool e0_prefix    = false;   /* previous byte was the 0xE0 extend marker */
 static volatile bool super_tap_latch = false;
+/* Physical up/down state of every key, indexed by set-1 make code with 0x80
+ * added for E0-extended keys (so Up arrow is 0xC8). Games poll this to get
+ * real key releases; the char queue only ever reports presses. */
+static volatile bool key_held[256];
 
 /* US QWERTY scancode-to-ASCII (unshifted) */
 static const char sc_normal[128] = {
@@ -64,6 +68,7 @@ static void keyboard_irq(registers_t *r) {
 
     bool released = (sc & 0x80) != 0;
     u8   key      = sc & 0x7F;
+    key_held[key | (e0_prefix ? 0x80 : 0)] = !released;
 
     if (e0_prefix) {
         e0_prefix = false;
@@ -73,8 +78,31 @@ static void keyboard_irq(registers_t *r) {
             return;
         }
         /* Any other extended key (arrows, etc.) counts as "used" so it cannot be
-         * mistaken for a bare Super tap, then is otherwise ignored here. */
+         * mistaken for a bare Super tap. */
         if (super_down && !released) super_used = true;
+        if (key == 0x1D) { ctrl_down = !released; return; }   /* right Ctrl */
+        if (key == 0x38) { alt_down  = !released; return; }   /* right Alt  */
+        if (released) return;
+        /* Navigation keys become ANSI/xterm escape sequences, which the text
+         * shell already parses; the GUI collapses them to single KEY_* codes
+         * (see gui_read_key()). Home/End use ESC[H / ESC[F rather than
+         * Ctrl+A/Ctrl+E so they stay distinguishable from real chords. */
+        char seq = 0;
+        switch (key) {
+        case 0x48: seq = 'A'; break;   /* Up    */
+        case 0x50: seq = 'B'; break;   /* Down  */
+        case 0x4D: seq = 'C'; break;   /* Right */
+        case 0x4B: seq = 'D'; break;   /* Left  */
+        case 0x47: seq = 'H'; break;   /* Home  */
+        case 0x4F: seq = 'F'; break;   /* End   */
+        case 0x53: kb_push_char(0x7F); return;   /* Delete */
+        case 0x49: kb_push_char(0x1B); kb_push_char('['); kb_push_char('5'); kb_push_char('~'); return; /* PgUp */
+        case 0x51: kb_push_char(0x1B); kb_push_char('['); kb_push_char('6'); kb_push_char('~'); return; /* PgDn */
+        case 0x1C: kb_push_char('\n'); return;   /* keypad Enter */
+        case 0x35: kb_push_char('/');  return;   /* keypad '/'  */
+        default: return;
+        }
+        kb_push_char(0x1B); kb_push_char('['); kb_push_char(seq);
         return;
     }
 
@@ -116,6 +144,11 @@ char keyboard_getchar(void) {
     return c;
 }
 
+/* Next buffered char without consuming it, or 0 when the buffer is empty. */
+char keyboard_peekchar(void) {
+    return keyboard_haschar() ? kb_buf[kb_tail] : 0;
+}
+
 void keyboard_flush(void) { kb_head = kb_tail = 0; }
 
 
@@ -123,6 +156,7 @@ bool keyboard_ctrl_held(void) { return ctrl_down; }
 bool keyboard_alt_held(void) { return alt_down; }
 bool keyboard_shift_held(void) { return shift_down; }
 bool keyboard_super_held(void) { return super_down; }
+bool keyboard_key_held(u8 code) { return key_held[code]; }
 
 /* One-shot: true once after a lone Super tap, then clears. */
 bool keyboard_super_tapped(void) {

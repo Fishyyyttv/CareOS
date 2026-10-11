@@ -10,9 +10,16 @@
 #define PIT_CMD          0x43
 #define PIT_SPKR         0x61
 
+/* Menu-bar mute. Muting silences every speaker_play() caller at the source;
+ * the PIT keeps its timing, so beeps still take their usual time. */
+static bool s_muted = false;
+void speaker_stop(void);
+void speaker_set_muted(bool muted) { s_muted = muted; if (muted) speaker_stop(); }
+bool speaker_muted(void) { return s_muted; }
+
 /* Play a frequency on the PC speaker */
 void speaker_play(u32 freq) {
-    if (freq == 0) {
+    if (freq == 0 || s_muted) {
         /* Stop sound */
         u8 tmp = inl(PIT_SPKR);
         outl(PIT_SPKR, tmp & 0xFC);

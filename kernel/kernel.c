@@ -226,6 +226,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
         }
     }
     paging_init();       slog_ok("Paging");
+    pmm_apply_map(mbi_addr);
     syscall_init();      slog_ok("Syscalls");
 
     /* Stage 3: devices, persistence, userland services */
@@ -311,6 +312,8 @@ void kernel_main(u64 magic, u64 mbi_addr){
     carepkg_init();      slog_ok("CarePackage manager");
     serial_write("[boot] Initializing scheduler...\n");
     scheduler_init();    slog_ok("Scheduler");
+    extern void web_selftest(u64 mbi);
+    web_selftest(mbi_addr);
 
 #if !defined(CAREOS_SKIP_SMOKE_TESTS)
     /* ── Ring-3 smoke tests: must run after scheduler_init(), which resets
@@ -487,7 +490,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
                         fb_h     = got_h;
                         fb_bpp   = 32;
                         fb_pitch = (u32)got_w * 4u;
-                        paging_map_mmio(bar0, (u32)got_h * fb_pitch + 0x400000u);
+                        paging_map_framebuffer(bar0, (u32)got_h * fb_pitch);
                         serial_write("  [FB] VBE fallback selected\n");
                         slog_u32("  FB width   = ", fb_w);
                         slog_u32("  FB height  = ", fb_h);
@@ -507,7 +510,7 @@ void kernel_main(u64 magic, u64 mbi_addr){
     }
 
     if ((u32)fb_addr >= 0x100000u)
-        paging_map_mmio((u32)fb_addr, fb_h * fb_pitch + 0x400000u);
+        paging_map_framebuffer((u32)fb_addr, fb_h * fb_pitch);
 
     slog_u32("  FB ready: bpp=", fb_bpp);
 

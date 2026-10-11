@@ -42,7 +42,7 @@ static void tss_set_kernel_stack(u64 rsp0) {
 }
 
 /* ── Task control blocks ────────────────────────────────────────────────────── */
-#define TIMESLICE_DEFAULT 5
+#define TIMESLICE_DEFAULT (50 * PIT_HZ / 1000)   /* 50 ms, whatever PIT_HZ is */
 
 typedef struct tcb {
     u32          id;
@@ -145,12 +145,12 @@ void signal_send(u32 task_id, u32 sig) {
     }
 }
 
-void scheduler_tick(registers_t *r) {
-    timer_tick_advance();
+static void scheduler_run(registers_t *r, bool hardware_tick) {
+    (void)r;
     if (!sched_ready || task_count == 0) return;
 
     tcb_t *cur = &tasks[current_task];
-    cur->total_ticks++;
+    if (hardware_tick) cur->total_ticks++;
 
     /* Deliver pending signals */
     if (cur->pending_signals & (1u << SIGKILL)) {
@@ -163,9 +163,12 @@ void scheduler_tick(registers_t *r) {
         kb_push_char(0x03);  /* ETX → shell sees Ctrl+C */
     }
 
-    if (cur->ticks_remaining > 0) {
-        cur->ticks_remaining--;
-        return;
+    if (hardware_tick && cur->state == TASK_RUNNING) {
+        if (cur->ticks_remaining > 1) {
+            cur->ticks_remaining--;
+            return;
+        }
+        cur->ticks_remaining = 0;
     }
 
     u32 next = current_task;
@@ -182,7 +185,7 @@ void scheduler_tick(registers_t *r) {
         return;
     }
 
-    cur->state = TASK_READY;
+    if (cur->state == TASK_RUNNING) cur->state = TASK_READY;
     tcb_t *nxt = &tasks[next];
     nxt->state = TASK_RUNNING;
     nxt->ticks_remaining = nxt->timeslice;
@@ -191,6 +194,16 @@ void scheduler_tick(registers_t *r) {
 
     current_task = next;
     switch_context(&cur->rsp, nxt->rsp, nxt->cr3, cur->sse_state, nxt->sse_state);
+}
+
+void scheduler_tick(registers_t *r) {
+    timer_tick_advance();
+    scheduler_run(r, true);
+}
+
+/* A voluntary yield schedules immediately without manufacturing elapsed time. */
+static void scheduler_yield(registers_t *r) {
+    scheduler_run(r, false);
 }
 
 static void __attribute__((noinline)) task_trampoline(void) {
@@ -313,6 +326,41 @@ void task_yield(void) {
     __asm__ volatile ("int $0x30");
 }
 
+/* Block the calling task until task_wake(), unless *flag is already set.
+ * The check and the state change happen with interrupts off, so a wake that
+ * races with this call is never lost. */
+void task_block_unless(volatile bool *flag) {
+    u64 f;
+    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    if (!*flag) tasks[current_task].state = TASK_BLOCKED;
+    if (f & 0x200) __asm__ volatile ("sti" ::: "memory");
+    task_yield();
+}
+
+/* Make a blocked task (by task_create index) runnable again. */
+void task_wake(int idx) {
+    if (idx < 0 || (u32)idx >= task_count) return;
+    u64 f;
+    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    if (tasks[idx].state == TASK_BLOCKED) tasks[idx].state = TASK_READY;
+    if (f & 0x200) __asm__ volatile ("sti" ::: "memory");
+}
+
+/* Is any task other than the caller ready to run? The GUI loop yields
+ * instead of halting when one is, so background work gets the idle time. */
+bool sched_other_ready(void) {
+    for (u32 i = 0; i < task_count; i++)
+        if (i != current_task && tasks[i].state == TASK_READY) return true;
+    return false;
+}
+
+/* Time slice in PIT ticks for a task (by task_create index). */
+void task_set_timeslice(int idx, u32 ticks) {
+    if (idx < 0 || (u32)idx >= task_count || ticks == 0) return;
+    tasks[idx].timeslice = ticks;
+    if (tasks[idx].ticks_remaining > ticks) tasks[idx].ticks_remaining = ticks;
+}
+
 __attribute__((noreturn)) void task_exit(void) {
     /* Reclaim the process's private address space now. Note: we do NOT
      * free tasks[current_task].kstack here — task_exit() is running on
@@ -347,7 +395,7 @@ void scheduler_init(void) {
     register_interrupt_handler(IRQ0, (isr_handler_t)scheduler_tick);
 
     idt_set_gate(0x30, (u32)(uintptr_t)task_yield_stub, GDT_CODE_SEG, 0x8E);
-    register_interrupt_handler(0x30, (isr_handler_t)scheduler_tick);
+    register_interrupt_handler(0x30, (isr_handler_t)scheduler_yield);
 
     sched_ready = true;
 }

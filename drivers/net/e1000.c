@@ -173,6 +173,8 @@ static void e1000_init_tx(void) {
 /* ── Public: send a raw Ethernet frame ──────────────────────────────────────── */
 void net_send_frame(const u8 *frame, u32 len) {
     if (!e1000_up || !frame || len > 2048) return;
+    extern void net_count_tx(u32 len);
+    net_count_tx(len);
 
     tx_desc_t *d = &tx_descs[tx_tail];
     /* Wait for previous transmit to finish */
@@ -217,6 +219,15 @@ void e1000_poll(void) {
 /* ── Public: get MAC ────────────────────────────────────────────────────────── */
 const u8 *e1000_get_mac(void) { return e1000_mac; }
 bool      e1000_is_up(void)   { return e1000_up; }
+/* Negotiated link speed from the STATUS register (LU bit 1, SPEED bits
+ * 7:6 = 10 / 100 / 1000 Mb/s); 0 when the NIC is absent or the link is down. */
+u32 e1000_link_mbps(void) {
+    if (!e1000_up) return 0;
+    u32 st = e1000_rd(E1000_STATUS);
+    if (!(st & 2u)) return 0;
+    u32 sp = (st >> 6) & 3u;
+    return sp == 0 ? 10u : sp == 1 ? 100u : 1000u;
+}
 
 /* ── Initialise ─────────────────────────────────────────────────────────────── */
 void e1000_init(void) {

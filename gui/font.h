@@ -45,4 +45,9 @@ u32                font_active_index(void);
 const font_face_t *font_face_at(u32 size_index);
 const font_face_t *font_bold_face_at(u32 size_index);
 
+/* Draw / measure with an explicit face (gui/gfx.c); the role API in
+ * gui/font_roles.c is built on these. (x,y) is the top-left of the line. */
+void gfx_str_face(i32 x, i32 y, const char *s, u32 fg, const font_face_t *f);
+i32  gfx_str_face_width_n(const char *s, u32 n, const font_face_t *f);
+
 #endif /* CAREOS_FONT_H */

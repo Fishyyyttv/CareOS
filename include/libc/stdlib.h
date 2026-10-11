@@ -13,9 +13,13 @@ int abs(int j);
 int system(const char *command);
 double atof(const char *nptr);
 void exit(int status);
+__attribute__((noreturn)) void abort(void);
 char *getenv(const char *name);
 int atoi(const char *nptr);
 long atol(const char *nptr);
+long strtol(const char *nptr, char **endptr, int base);
+unsigned long strtoul(const char *nptr, char **endptr, int base);
+float strtof(const char *nptr, char **endptr);
 
 void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
 

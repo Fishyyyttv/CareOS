@@ -8,11 +8,29 @@
 extern rect_t wm_client_rect(window_t *w);
 
 /* -- Shared helpers ------------------------------------------------------- */
+/* Grow the window's text buffer to hold `need` bytes (including the NUL). */
+static inline bool win_reserve(window_t *w, u32 need){
+    return tb_reserve(&w->text_buf, &w->text_cap, need, WIN_TEXT_MAX);
+}
+/* Append s, growing the buffer (up to WIN_TEXT_MAX; beyond that, truncate). */
 static inline void win_append(window_t *w,const char *s){
-    while(*s&&w->text_len<WIN_TEXT_BUF-1) w->text_buf[w->text_len++]=*s++;
+    if(!w->text_buf) return;
+    u32 n=(u32)kstrlen(s);
+    if(!win_reserve(w,w->text_len+n+1))
+        n=(w->text_cap>w->text_len+1)?w->text_cap-w->text_len-1:0;
+    kmemcpy(w->text_buf+w->text_len,s,n);
+    w->text_len+=n;
     w->text_buf[w->text_len]='\0';
 }
-static inline void win_clear(window_t *w){w->text_len=0;w->text_buf[0]='\0';w->scroll=0;}
+static inline void win_clear(window_t *w){w->text_len=0;w->scroll=0;if(w->text_buf)w->text_buf[0]='\0';}
+
+/* Logged-in user's home directory path: "/root" for uid 0, else
+ * "/home/<name>". out must hold at least 64 bytes. */
+static inline void app_home_path(char *out){
+    if(user_current_uid()==0){ kstrcpy(out,"/root"); return; }
+    kstrcpy(out,"/home/");
+    kstrncpy(out+6,user_current_name(),57); out[63]='\0';
+}
 
 static inline void draw_scrollable_text(window_t *w,rect_t cr){
     u32 line_h=(u32)(FONT_H * GFX_FONT_SCALE)+2;

@@ -7,6 +7,9 @@
  * ============================================================================= */
 
 #include "kernel.h"
+#include "window_chrome.h"
+
+typedef struct web_page web_page_t;
 
 /* -- Screen dimensions (set at runtime from multiboot) -------------------- */
 extern u32 SCREEN_W;
@@ -84,6 +87,15 @@ typedef struct {
     u32 taskbar, winbar, shadow;
     u32 input_bg, cursor, glass_tint;
     u8  glass_alpha, shadow_alpha;
+    /* v10 design tokens (docs/superpowers/specs/2026-10-03-careos-visual-system-shell-design.md §1) */
+    u32 ground, surface_alt, raised, raised2, track;
+    u32 ink, ink2, care, on_care, care_soft, calm;
+    u32 hairline;         u8 hairline_alpha;
+    u32 menubar_tint;     u8 menubar_alpha;
+    u32 dock_tint;        u8 dock_alpha;
+    u32 panel_tint;       u8 panel_alpha;
+    u32 window_body;      u8 window_alpha;
+    u32 term_green;
     bool is_dark;
 } theme_t;
 
@@ -133,9 +145,9 @@ extern u32 g_last_activity_tick;
  * the desktop loop honours it by running the login/lock flow. */
 extern volatile bool g_lock_request;
 
-#define TASKBAR_H       72
-#define TOPBAR_H        34
-#define SIDEBAR_W       182
+#define TASKBAR_H       88     /* dock: 80 px pill + 8 px edge gap */
+#define TOPBAR_H        40
+#define SIDEBAR_W       0      /* v10: no app sidebar; apps live in the launcher */
 #define TITLEBAR_H      48
 
 #define kabs(x) ((x) < 0 ? -(x) : (x))
@@ -150,12 +162,12 @@ extern volatile bool g_lock_request;
  * One source of truth for radii, shadows, glass, and animation timing so every
  * built-in surface reads as one intentional system. Change it here, not in the
  * individual widgets. Radii are the values from the CDL spec:
- *   buttons/inputs 10, menus 12, windows/cards 14, dock 24.                   */
+ *   buttons/inputs 10, menus 12, windows 22, cards 14, dock 24.               */
 #define CDL_SP            8       /* base spacing grid unit */
 #define CDL_R_BUTTON      10
 #define CDL_R_INPUT       10
 #define CDL_R_MENU        12
-#define CDL_R_WINDOW      14
+#define CDL_R_WINDOW      WM_CHROME_RADIUS
 #define CDL_R_CARD        14
 #define CDL_R_DOCK        24
 
@@ -172,7 +184,11 @@ extern volatile bool g_lock_request;
 
 /* Animation: one duration + one easing family for opens/closes/minimise.
  * Kept short so windows feel snappy rather than floaty. */
-#define CDL_ANIM_MS       95
+#define CDL_ANIM_MS       160
+#define NOTIFY_LIFE_MS      5000u               /* toast on screen */
+#define GUI_SCREENSAVER_MS  (5u * 60u * 1000u)  /* matches the old observed 5 min */
+#define GUI_AUTOLOCK_MS     (10u * 60u * 1000u) /* was really 100 min before */
+#define GUI_FRAME_MIN_MS    16u                  /* approximately 60 presents/s */
 
 /* Pointer shapes. wm_handle_mouse sets g_cursor_shape from what is under the
  * cursor (resize edge / corner / move) and mouse_draw_cursor renders it. */
@@ -192,7 +208,8 @@ typedef enum {
     APP_NONE=0, APP_TERMINAL, APP_NOTES, APP_FILES,
     APP_SYSMON, APP_CALC, APP_ABOUT, APP_HELP,
     APP_BROWSER, APP_SETTINGS, APP_PKGMGR,
-    APP_EDITOR, APP_PAINT, APP_CLOCK, APP_NETMON, APP_USERS, APP_MAZE, APP_3D, APP_DOOM
+    APP_EDITOR, APP_PAINT, APP_CLOCK, APP_NETMON, APP_USERS, APP_MAZE, APP_3D, APP_DOOM,
+    APP_PIP
 } app_id_t;
 
 
@@ -204,6 +221,28 @@ typedef enum {
     FONT_H2,      /* 20px */
     FONT_H1       /* 28px */
 } font_size_t;
+
+/* v10 type roles (gui/font_roles.c). Size slots 0..4 per role, in px:
+ *   UI (Figtree) 11 13 15 17 20 · DISPLAY (Bricolage) 17 22 28 52 64 · MONO 11 13 14 16 20
+ * Weight: UI regular/bold = Figtree 400/700; DISPLAY = Bricolage 700/800. */
+typedef enum { FONT_ROLE_UI = 0, FONT_ROLE_DISPLAY, FONT_ROLE_MONO, FONT_ROLE_COUNT } font_role_t;
+typedef enum { FONT_W_REGULAR = 0, FONT_W_BOLD } font_weight_t;
+void gfx_str_role(i32 x, i32 y, const char *s, u32 fg, font_role_t role, u32 slot, font_weight_t w);
+i32  gfx_str_role_width(const char *s, font_role_t role, u32 slot, font_weight_t w);
+i32  gfx_str_role_width_n(const char *s, u32 n, font_role_t role, u32 slot, font_weight_t w);
+i32  gfx_role_line_h(font_role_t role, u32 slot);
+void gfx_str_role_fit(i32 x, i32 y, i32 maxw, const char *s, u32 fg,
+                      font_role_t role, u32 slot, font_weight_t w);
+/* Clock digits (Bricolage Bold, digits/':'/AM PM only): slots 0..4 = 72 96 120 144 168 px. */
+void gfx_str_clock(i32 x, i32 y, const char *s, u32 fg, u32 slot);
+i32  gfx_str_clock_width(const char *s, u32 slot);
+i32  gfx_clock_cap_top(u32 slot);       /* digit top below the line top */
+i32  gfx_clock_cap_h(u32 slot);         /* digit height */
+void gfx_str_huge(i32 x, i32 y, const char *s, u32 fg);   /* 120 px */
+i32  gfx_str_huge_width(const char *s);
+/* Word-wrapped role text; returns the height used (fg COL_TRANSPARENT = measure only). */
+i32  gfx_str_role_wrap(i32 x, i32 y, i32 maxw, const char *s, u32 fg,
+                       font_role_t role, u32 slot, font_weight_t w, i32 gap);
 
 /* Active font metrics. Variables, not constants -- font_set_family() updates
  * them. No call site uses these in a constant expression, so every existing
@@ -247,12 +286,16 @@ void gfx_draw_icon(app_id_t app, i32 x, i32 y, i32 size, u32 color);
 #define MIN_WIN_W   280
 #define MIN_WIN_H   220
 
+#include "wcache.h"
+#include "textbuf.h"
+
 /* -- Window --------------------------------------------------------------- */
 #define MAX_WINDOWS  24
 
 
 typedef struct window {
     bool      active, focused, minimized, dragging;
+    u32       instance_id; /* monotonic identity; slot addresses are reused */
     bool      resizing;
     u32       resize_edge;
     app_id_t  app;
@@ -260,7 +303,8 @@ typedef struct window {
     rect_t    rect;
     i32       drag_ox, drag_oy;
 
-    char      text_buf[4096];
+    char     *text_buf;        /* heap; grows via win_reserve() up to WIN_TEXT_MAX */
+    u32       text_cap;
     u32       text_len;
     char      input_buf[256];
     u32       input_len;
@@ -270,12 +314,10 @@ typedef struct window {
     struct fs_node *fm_dir;
     u32             fm_sel;
 
-    char  calc_display[32];
-    char  calc_expr[128];
-    i32   calc_val, calc_prev;
-    char  calc_op;
-    bool  calc_new_num;
-    bool  calc_error;
+    /* Calculator: opaque storage for a calc_t (apps/calc_engine.h). It holds
+     * doubles, which kernel-flag (-mno-sse) code must never touch, so only
+     * FP-built apps/ code interprets it. */
+    u64   calc_state[16];
 
     u32   sysmon_tick;
     u32   z_order;
@@ -298,6 +340,25 @@ typedef struct window {
     char  browser_content[65536];
     char  browser_title[128];
     bool  browser_loading;
+    u8    browser_redirects;     /* redirect hops in the current load */
+    bool  browser_push_history;  /* record the URL once this load finishes */
+    bool  browser_autohttps;     /* https:// was assumed; retry http:// on failure */
+    u32   browser_content_ver;   /* bumped whenever the shown page changes */
+    web_page_t *browser_page;    /* native renderer page, when a document is loaded */
+    /* This window's link hit-boxes (blink_t[], apps/app_browser.c) as drawn,
+     * plus the window position they were drawn at. */
+    void *browser_links;
+    u32   browser_nlinks;
+    i32   browser_links_wx, browser_links_wy;
+    /* Rendered page-area cache: skip HTML re-layout while nothing changed. */
+    u32  *bview_px;
+    i32   bview_w, bview_h, bview_scroll;
+    u32   bview_ver, bview_theme, bview_font;
+    bool  bview_valid;
+    /* Each tab keeps its loaded page, so switching tabs does not re-fetch. */
+    char *browser_tab_content[4];
+    u32   browser_tab_len[4];
+    bool  browser_tab_loaded[4];
     bool  browser_url_active;
     i32   browser_scroll;
     u32   browser_history_pos;
@@ -335,6 +396,7 @@ typedef struct window {
 
     /* Clock / NetMon */
     u32   clock_tick;
+    u32   netmon_rx, netmon_tx, netmon_ms;   /* last counter sample (NetMon) */
 
     /* Users app */
     u32   users_sel;
@@ -372,6 +434,12 @@ typedef struct window {
 
     widget_t *root;
     gfx_buffer_t win_buffer;
+
+    /* Pixel cache for unfocused, settled windows (gui/wcache.h). */
+    void          *term_state;   /* Terminal wrap/scroll state (apps/app_terminal.c) */
+    void          *app_state;    /* per-app state (Files, ...); kfree'd when the window closes */
+    wcache_state_t wcache;
+    u32           *wcache_px;
 } window_t;
 
 /* Window transition kinds (window_t.anim_kind) */
@@ -394,7 +462,8 @@ typedef struct window {
 #define SNAP_FULL       9
 
 /* Window text buffer size */
-#define WIN_TEXT_BUF  4096
+#define WIN_TEXT_BUF  4096                 /* initial text_buf capacity */
+#define WIN_TEXT_MAX  (1024u * 1024u)      /* hard ceiling per window */
 
 /* -- Desktop icon --------------------------------------------------------- */
 typedef struct {
@@ -463,6 +532,8 @@ void textinput_handle_mouse(textinput_t *t, const mouse_t *m);
 
 /* -- GFX API -------------------------------------------------------------- */
 void theme_switch(bool dark);
+void theme_set_glass(u32 pct, bool reduce);   /* Settings > Appearance */
+void gui_set_brightness_live(u32 pct);         /* software dim, not saved */
 void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gfx_set_pixel_format(u8 r_shift, u8 g_shift, u8 b_shift); /* B-01 */
 void gfx_dirty(i32 x, i32 y, i32 w, i32 h);                   /* P-02 */
@@ -539,7 +610,12 @@ bool        wallpaper_dominant_color(u32 *out_rgb);
 /* ── Desktop widgets (gui/widgets.c) ─────────────────────────────────────── */
 void widgets_init(void);
 void widgets_draw(mouse_t *m);          /* desktop layer, behind windows */
+u32  widgets_layer_key(void);           /* changes when the widgets would look different */
+bool widgets_dragging(void);
+u32  desktop_layer_key(void);           /* shortcut hover + hero visibility */
 bool widgets_handle_mouse(mouse_t *m);  /* true if a widget consumed the click/drag */
+void clock_read_local(rtc_time_t *out); /* RTC + desktop timezone, date-normalised */
+i32  clock_day_of_week(i32 y, i32 m, i32 d);  /* 0 = Sunday */
 
 void gfx_char(i32 x, i32 y, char c, u32 fg, u32 bg);
 void gfx_str(i32 x, i32 y, const char *s, u32 fg, u32 bg);
@@ -565,24 +641,51 @@ void      wm_minimize_all(void);
 void      wm_minimize(window_t *w);
 void      wm_close_all(void);
 window_t *wm_get_window(int i);
+bool      wm_fullscreen_active(void);      /* a maximized window is showing */
 
 void desktop_draw(void);
 void desktop_handle_mouse(mouse_t *m);
 void taskbar_draw(void);
 void taskbar_handle_mouse(mouse_t *m);
+bool taskbar_contains(i32 x, i32 y);
+bool taskbar_animate(const mouse_t *m);    /* dock auto-hide step; true while moving */
+bool wm_busy(void);                        /* a window drag / resize / snap flyout is live */
+bool wm_pointer_owner(i32 x, i32 y);       /* busy, or a visible window is under (x,y) */
+void desktop_clear_hover(void);
 
 /* -- App API -------------------------------------------------------------- */
 void app_terminal_init(window_t *w);
 void app_terminal_draw(window_t *w);
 void app_terminal_key(window_t *w, char c);
+void app_terminal_click(window_t *w, i32 x, i32 y);
+
+/* Title-bar toolbar hook (Phase 3): an app may draw controls in the title
+ * bar right of the traffic lights. app_toolbar_draw returns true when the app
+ * drew a toolbar (the title is then not drawn); app_toolbar_click returns
+ * true when the app consumed the click (no window drag starts). */
+bool app_toolbar_draw(window_t *w, rect_t bar);
+bool app_toolbar_click(window_t *w, i32 x, i32 y);
+bool app_terminal_toolbar(window_t *w, rect_t bar);
+bool app_terminal_toolbar_click(window_t *w, i32 x, i32 y);
 
 void app_notes_init(window_t *w);
 void app_notes_draw(window_t *w);
 void app_notes_key(window_t *w, char c);
+void app_notes_click(window_t *w, i32 x, i32 y);
 
 void app_files_init(window_t *w);
 void app_files_draw(window_t *w);
 void app_files_key(window_t *w, char c);
+void app_files_close(window_t *w);
+void app_notes_close(window_t *w);
+void app_editor_close(window_t *w);
+bool app_editor_toolbar(window_t *w, rect_t bar);
+bool app_editor_toolbar_click(window_t *w, i32 x, i32 y);
+bool app_browser_toolbar(window_t *w, rect_t bar);
+bool app_browser_toolbar_click(window_t *w, i32 x, i32 y);
+bool app_files_toolbar(window_t *w, rect_t bar);
+bool app_files_toolbar_click(window_t *w, i32 x, i32 y);
+void app_terminal_run(window_t *w, const char *cmd);   /* type + run a command */
 
 void app_sysmon_draw(window_t *w);
 void app_sysmon_tick(window_t *w);
@@ -599,6 +702,8 @@ void app_settings_init(window_t *w);
 void app_settings_draw(window_t *w);
 void app_settings_key(window_t *w, char c);
 void app_settings_click(window_t *w, i32 x, i32 y, mouse_t *m);
+void app_settings_drag(window_t *w, i32 x, i32 y);     /* slider drag (button held) */
+void app_settings_release(window_t *w);              /* commit a slider drag */
 
 void app_browser_init(window_t *w);
 void app_browser_draw(window_t *w);
@@ -611,6 +716,12 @@ void app_pkgmgr_key(window_t *w, char c);
 void app_doom_init(window_t *w);
 void app_doom_draw(window_t *w);
 void app_doom_key(window_t *w, char c);
+bool app_doom_new_frame(void);   /* DOOM published a frame since last asked */
+void app_pip_init(window_t *w);
+void app_settings_apply_theme(u32 mode);   /* 0 dark, 1 light, 2 auto: the Settings switch, for Pip too */
+void app_pip_draw(window_t *w);
+void app_pip_click(window_t *w, i32 x, i32 y);
+void app_pip_key(window_t *w, char c);
 
 void app_editor_init(window_t *w);
 void app_editor_draw(window_t *w);
@@ -643,12 +754,29 @@ void notify_draw(void);
 void notify_tick(void);
 bool notify_active(void);
 bool notify_handle_mouse(mouse_t *m);
+/* gui/notify.c: one store for toasts and the Notification Center. Actions
+ * may be NULL; on_action(which) gets 0 or 1 when a button is pressed. */
+void notify_push_ex(app_id_t app, const char *title, const char *body,
+                    const char *action0, const char *action1, void (*on_action)(u32 which));
+void notify_set_dnd(bool on);          /* Do Not Disturb: history only, no toasts */
+bool notify_dnd(void);
+u32  notify_count(void);
+void notify_clear_all(void);
+void notify_center_set_visible(bool on);
+void notify_center_draw(i32 x, const mouse_t *m);   /* 360 px column at x */
+bool notify_center_click(i32 x, mouse_t *m);
+typedef struct { app_id_t app; char app_name[16]; char title[48]; char when[16]; } notify_preview_t;
+u32  notify_previews(notify_preview_t *out, u32 max);   /* newest first, no bodies */
 
 /* -- Additional GFX helpers ----------------------------------------------- */
 void gfx_gradient_rect(i32 x, i32 y, i32 w, i32 h, u32 c1, u32 c2);
 void gfx_str_clipped(i32 x, i32 y, i32 max_w, const char *s, u32 fg, u32 bg);
 void gfx_set_clip(i32 x, i32 y, i32 w, i32 h);
 void gfx_clear_clip(void);
+/* Window-level clip: app gfx_set_clip() calls intersect with it, and
+ * gfx_clear_clip() restores it rather than disabling clipping. */
+void gfx_set_clip_base(i32 x, i32 y, i32 w, i32 h);
+void gfx_clear_clip_base(void);
 bool gfx_get_clip(rect_t *out);   /* false when unclipped; see gfx.c */
 i32  gfx_str_width(const char *s);
 void gfx_str_right(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg);
@@ -668,6 +796,7 @@ void mouse_draw_cursor(i32 x, i32 y);
 /* -- Widget System -------------------------------------------------------- */
 widget_t *widget_create(widget_type_t type, i32 x, i32 y, i32 w, i32 h);
 void widget_add_child(widget_t *parent, widget_t *child);
+void widget_destroy(widget_t *wi);   /* frees wi and its whole subtree */
 void widget_update_abs_rect(widget_t *wi, i32 px, i32 py);
 void widget_draw_recursive(widget_t *wi, gfx_buffer_t *target);
 void layout_vbox(widget_t *parent, i32 padding, i32 gap);
@@ -677,12 +806,45 @@ void layout_hbox(widget_t *parent, i32 padding, i32 gap);
 void gfx_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gfx_set_target(gfx_buffer_t *target);
 void gfx_blit(gfx_buffer_t *src, i32 dx, i32 dy);
+/* Row-copy an ARGB image into the target, clipped to (clip_*) and the gfx clip. */
+void gfx_blit_argb(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh,
+                   i32 clip_x, i32 clip_y, i32 clip_w, i32 clip_h);
+/* Copy target pixels (x,y,w,h) into dst; off-target pixels become 0. */
+void gfx_snapshot_rect(i32 x, i32 y, i32 w, i32 h, u32 *dst);
+/* gfx_shadow_soft_ex look, minus the pixels an opaque rounded body at
+ * (x,y,w,h,r) covers -- use only when that body is drawn right after. */
+void gfx_shadow_soft_hollow(i32 x, i32 y, i32 w, i32 h, i32 r, i32 blur, u8 alpha, i32 dy);
+/* Blit an ARGB image, skipping its rounded corners (radius r). */
+void gfx_blit_argb_rounded(i32 dx, i32 dy, const u32 *src, i32 sw, i32 sh, i32 r);
+void gfx_blend_mask(i32 x, i32 y, const u8 *mask, i32 w, i32 h, u32 color);
+void gfx_blend_argb(i32 x, i32 y, const u32 *src, i32 w, i32 h);
+void gfx_blend_image(i32 x, i32 y, const u32 *src, i32 w, i32 h, u8 alpha);
+void gfx_blit_argb_scaled(i32 cx, i32 cy, const u32 *src, i32 w, i32 h, u32 scale_q16, u8 alpha);
 void gui_init(u32 *fb, u32 w, u32 h, u32 pitch);
 void gui_run(void);
+
+/* -- Navigation keys ------------------------------------------------------
+ * The keyboard driver emits ANSI sequences (ESC [ A ...) for these keys; the
+ * GUI loop collapses each sequence into one of these single-byte codes before
+ * dispatch, so app key handlers never see a stray ESC. All are >= 0x80, i.e.
+ * negative as a (signed) char, so "c >= 32 && c < 127" printable filters
+ * ignore them automatically. Compare with (u8)c. */
+#define KEY_NAV_UP     0x80
+#define KEY_NAV_DOWN   0x81
+#define KEY_NAV_RIGHT  0x82
+#define KEY_NAV_LEFT   0x83
+#define KEY_NAV_HOME   0x84
+#define KEY_NAV_END    0x85
+#define KEY_NAV_DELETE 0x7F   /* driver sends a bare DEL byte */
+#define KEY_NAV_PGUP   0x86
+#define KEY_NAV_PGDN   0x87
+char gui_read_key(void);      /* keyboard_getchar() + sequence collapsing */
 
 /* -- Launcher ------------------------------------------------------------- */
 extern bool launcher_open;
 void launcher_draw(mouse_t *m);
+bool launcher_visible(void);     /* open, or still animating closed */
+bool launcher_animating(void);
 void launcher_handle_key(char c);
 void launcher_handle_mouse(mouse_t *m);
 
@@ -704,6 +866,15 @@ void app_calc_click(window_t *w, i32 x, i32 y);
 void app_sysmon_click(window_t *w, i32 x, i32 y);
 void app_browser_click(window_t *w, i32 x, i32 y);
 void app_browser_scroll(window_t *w, i32 delta);
+void app_browser_tick(window_t *w);                  /* apply a finished background fetch */
+void app_browser_close(window_t *w);                 /* release native page resources */
+void app_browser_open_url(window_t *w, const char *url);
+void browser_fetch_cancel(u32 owner);   /* apps/browser_fetch.c */
+void app_terminal_scroll(window_t *w, i32 delta);   /* + = back in history */
+void app_terminal_close(window_t *w);
+void app_min_size(app_id_t app, i32 *w, i32 *h);   /* smallest usable window */
+bool wm_on_current_desktop(const window_t *w);
+void wm_switch_desktop(u32 d);          /* 0..3 */
 void app_pkgmgr_click(window_t *w, i32 x, i32 y);
 void app_paint_click(window_t *w, i32 x, i32 y, mouse_t *m);
 void app_users_click(window_t *w, i32 x, i32 y);
@@ -714,6 +885,8 @@ void speaker_stop(void);
 void speaker_beep(u32 freq, u32 ms);
 void speaker_startup(void);
 void speaker_error(void);
+void speaker_set_muted(bool muted);
+bool speaker_muted(void);
 
 extern gfx_buffer_t g_screen_buf;
 extern gfx_buffer_t *g_target;

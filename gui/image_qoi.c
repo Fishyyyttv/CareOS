@@ -16,8 +16,8 @@ typedef unsigned char u8; typedef unsigned int u32; typedef unsigned long long u
 
 static u32 rd32(const u8 *p){ return ((u32)p[0]<<24)|((u32)p[1]<<16)|((u32)p[2]<<8)|p[3]; }
 
-int qoi_decode(const u8 *in, u32 in_len, u32 *out_px, u32 out_cap,
-               u32 *out_w, u32 *out_h){
+static int qoi_decode_impl(const u8 *in, u32 in_len, u32 *out_px, u32 out_cap,
+                           u32 *out_w, u32 *out_h, int keep_alpha){
     if(!in || in_len < 22) return -1;
     if(in[0]!='q'||in[1]!='o'||in[2]!='i'||in[3]!='f') return -1;
     u32 w = rd32(in+4), h = rd32(in+8);
@@ -41,8 +41,20 @@ int qoi_decode(const u8 *in, u32 in_len, u32 *out_px, u32 out_cap,
             else if((op&QOI_MASK2)==QOI_OP_RUN){ run=(op&63); }
             int hh=((r*3+g*5+b*7+a*11)&63)*4; idx[hh]=r; idx[hh+1]=g; idx[hh+2]=b; idx[hh+3]=a;
         } else return -1;
-        out_px[out_i++] = ((u32)r<<16)|((u32)g<<8)|b;   /* 0x00RRGGBB */
+        out_px[out_i++] = (keep_alpha ? ((u32)a<<24) : 0u) | ((u32)r<<16)|((u32)g<<8)|b;
     }
     *out_w = w; *out_h = h;
     return 0;
+}
+
+/* 0x00RRGGBB per pixel (alpha dropped). */
+int qoi_decode(const u8 *in, u32 in_len, u32 *out_px, u32 out_cap,
+               u32 *out_w, u32 *out_h){
+    return qoi_decode_impl(in, in_len, out_px, out_cap, out_w, out_h, 0);
+}
+
+/* 0xAARRGGBB per pixel: for images with transparency (icons). */
+int qoi_decode_argb(const u8 *in, u32 in_len, u32 *out_px, u32 out_cap,
+                    u32 *out_w, u32 *out_h){
+    return qoi_decode_impl(in, in_len, out_px, out_cap, out_w, out_h, 1);
 }

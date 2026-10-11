@@ -1,4 +1,4 @@
-﻿/* CareOS v9 - net/net.c - TCP/IP networking stack */
+/* CareOS v9 - net/net.c - TCP/IP networking stack */
 #include "kernel.h"
 
 /* Protocol numbers */
@@ -132,6 +132,8 @@ void net_set_ip(u32 ip, u32 nm, u32 gw){
     nic_gateway = gw;
 }
 
+u32 net_get_gateway(void) { return nic_gateway; }
+
 void net_configure(u32 ip, u32 netmask, u32 gateway, const u8 *mac){
     nic_ip = ip;
     nic_netmask = netmask;
@@ -201,6 +203,14 @@ void net_init(void){
 
 void net_get_mac(u8 mac[6]){ kmemcpy(mac, nic_mac, 6); }
 void net_poll(void){ if (nic_up) e1000_poll(); }
+
+/* One network user at a time. The browser fetch worker holds this for a
+ * whole request; GUI-thread callers use net_trylock() and back off rather
+ * than block the desktop. */
+static volatile int s_net_lock = 0;
+bool net_trylock(void) { return __sync_lock_test_and_set(&s_net_lock, 1) == 0; }
+void net_lock(void)    { while (__sync_lock_test_and_set(&s_net_lock, 1)) task_yield(); }
+void net_unlock(void)  { __sync_lock_release(&s_net_lock); }
 
 /* ARP */
 u8 *arp_lookup(u32 ip){
@@ -424,12 +434,12 @@ int sock_connect(int fd, u32 dip, u16 dp){
      * SYN, so restore syn_seq before each resend or the retransmit carries the
      * wrong sequence number. Budget ~5 s. */
     tcp_flags(s, 0x02, NULL, 0);
-    u32 start = timer_get_ticks();
+    u32 start = timer_ms();
     u32 last  = start;
-    while (timer_get_ticks() - start < 5000) {
+    while (timer_ms() - start < 5000) {
         net_poll();
         if (s->state == SOCK_ESTABLISHED) return 0;
-        u32 now = timer_get_ticks();
+        u32 now = timer_ms();
         if (now - last >= 600 && s->state == SOCK_SYN_SENT) {
             s->seq = syn_seq;
             tcp_flags(s, 0x02, NULL, 0);
@@ -469,8 +479,8 @@ int sock_recv(int fd, u8 *buf, u32 maxlen){
     /* Poll the NIC continuously (no hlt-sleep) so the RX descriptor ring is
      * drained as fast as frames arrive. Sleeping between polls lets a burst of
      * server frames overflow the ring and drop a segment, which stalls TLS. */
-    u32 deadline = timer_get_ticks() + 2000;
-    while (timer_get_ticks() < deadline) {
+    u32 deadline = timer_ms() + 2000;
+    while (timer_ms() < deadline) {
         net_poll();
         if (s->rx_len > 0) {
             u32 n = s->rx_len < maxlen ? s->rx_len : maxlen;
@@ -496,8 +506,14 @@ void sock_close(int fd){
     kmemset(s, 0, sizeof(socket_t));
 }
 
+/* Byte counters for the Network Monitor (free-running; readers diff them). */
+static volatile u32 s_rx_bytes, s_tx_bytes;
+void net_count_tx(u32 len) { s_tx_bytes += len; }
+void net_get_counters(u32 *rx, u32 *tx) { *rx = s_rx_bytes; *tx = s_tx_bytes; }
+
 /* Incoming frame dispatch */
 void net_handle_frame(const u8 *frame, u32 len){
+    s_rx_bytes += len;
     if (len < 14) return;
     u16 et = (u16)((frame[12] << 8) | frame[13]);
 
@@ -658,8 +674,8 @@ static int dns_query_a(const char *host, u32 *out){
     int n = -1;
     for (int attempt = 0; attempt < 5; attempt++) {
         if (attempt > 0 && sock_send(fd, req, qoff + 4) <= 0) break;
-        u32 deadline = timer_get_ticks() + 700;
-        while (timer_get_ticks() < deadline) {
+        u32 deadline = timer_ms() + 700;
+        while (timer_ms() < deadline) {
             net_poll();
             if (s->rx_len > 0) { n = sock_recv(fd, resp, sizeof(resp)); break; }
             timer_wait(5);

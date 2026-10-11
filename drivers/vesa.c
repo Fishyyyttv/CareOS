@@ -92,6 +92,10 @@ int vesa_set_mode(u16 w, u16 h) {
     SCREEN_W     = (u32)w;
     SCREEN_H     = (u32)h;
     SCREEN_PITCH = (u32)w * 4u;
+    /* The larger mode extends the framebuffer past the range mapped at boot
+     * (VirtualBox boots at GRUB's 640x480, too small for any write-combined
+     * 2 MiB page); map the new extent so flips get write-combining. */
+    paging_map_framebuffer((u32)(uintptr_t)FRAMEBUFFER, (u32)h * SCREEN_PITCH);
     gfx_init(FRAMEBUFFER, (u32)w, (u32)h, SCREEN_PITCH);
 
     serial_write("[VESA] mode set: ");

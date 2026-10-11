@@ -19,3 +19,27 @@
  *   app_users.c     - User manager
  *   app_help.c      - Help viewer
  */
+#include "apps_common.h"
+
+/* Title-bar toolbar dispatch (see gui.h). Apps without a toolbar keep the
+ * plain window title. */
+bool app_toolbar_draw(window_t *w, rect_t bar) {
+    if (bar.w < 60) return false;
+    switch (w->app) {
+    case APP_TERMINAL: return app_terminal_toolbar(w, bar);
+    case APP_FILES:    return app_files_toolbar(w, bar);
+    case APP_EDITOR:   return app_editor_toolbar(w, bar);
+    case APP_BROWSER:  return app_browser_toolbar(w, bar);
+    default:           return false;
+    }
+}
+
+bool app_toolbar_click(window_t *w, i32 x, i32 y) {
+    switch (w->app) {
+    case APP_TERMINAL: return app_terminal_toolbar_click(w, x, y);
+    case APP_FILES:    return app_files_toolbar_click(w, x, y);
+    case APP_EDITOR:   return app_editor_toolbar_click(w, x, y);
+    case APP_BROWSER:  return app_browser_toolbar_click(w, x, y);
+    default:           return false;
+    }
+}

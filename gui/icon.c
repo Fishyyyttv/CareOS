@@ -24,6 +24,7 @@
 #include "image.h"
 #include "resource_cache.h"
 #include "icon.h"
+#include "care_wallpaper.h"
 
 /* Ascending, and it must stay that way -- size_candidates() walks it in both
  * directions from the snap point. */
@@ -219,6 +220,7 @@ const char *icon_name_for_app(app_id_t app) {
     case APP_MAZE:     return "maze";
     case APP_3D:       return "3d";
     case APP_DOOM:     return "doom";
+    case APP_PIP:      return "pip";
     case APP_NONE:
     default:           return NULL;
     }
@@ -284,8 +286,58 @@ static image_t *wallpaper_load(u32 slot) {
     return NULL;
 }
 
+/* -- Care background ----------------------------------------------------------
+ * Rendering it is a few hundred ms under emulation, so keep one full-size copy
+ * (the login and lock screens redraw their backdrop every frame) and one small
+ * copy for the Settings swatch. Each is keyed by size and theme. */
+_Static_assert(WALLPAPER_CARE == WALLPAPER_SLOTS, "Care background follows the photo slots");
+typedef struct { u32 *px; i32 w, h; bool dark; } care_cache_t;
+static care_cache_t care_full, care_small;
+
+bool wallpaper_is_care(void) {
+    const careos_settings_t *cfg = settings_get();
+    return cfg && cfg->wallpaper == WALLPAPER_CARE;
+}
+
+static const u32 *care_render_cached(care_cache_t *c, i32 w, i32 h) {
+    bool dark = g_theme->is_dark;
+    if (w <= 0 || h <= 0) return NULL;
+    if (c->px && c->w == w && c->h == h && c->dark == dark) return c->px;
+    if (!c->px || c->w * c->h < w * h) {
+        if (c->px) kfree(c->px);
+        c->px = (u32 *)kmalloc((size_t)w * (size_t)h * 4u);
+        if (!c->px) { c->w = c->h = 0; return NULL; }
+    }
+    care_wallpaper_render(c->px, (u32)w, (u32)h, (u32)w, dark);
+    c->w = w; c->h = h; c->dark = dark;
+    return c->px;
+}
+
+static bool care_draw(care_cache_t *c, i32 x, i32 y, i32 w, i32 h) {
+    const u32 *px = care_render_cached(c, w, h);
+    if (!px) return false;
+    gfx_blit_argb(x, y, px, w, h, x, y, w, h);
+    return true;
+}
+
+void wallpaper_care_draw(i32 x, i32 y, i32 w, i32 h) {
+    if (!care_draw(&care_full, x, y, w, h))
+        gfx_rect(x, y, w, h, g_theme->ground);
+}
+
+void wallpaper_care_preview(i32 x, i32 y, i32 w, i32 h) {
+    if (!care_draw(&care_small, x, y, w, h))
+        gfx_rect(x, y, w, h, g_theme->ground);
+}
+
 bool wallpaper_draw(i32 x, i32 y, i32 w, i32 h) {
     const careos_settings_t *cfg = settings_get();
+    if (cfg && cfg->wallpaper == WALLPAPER_CARE) {
+        /* Drop the pinned photo; the Care render replaces it. */
+        if (wallpaper_img) { res_release(wallpaper_img); wallpaper_img = NULL; }
+        wallpaper_slot = -1;
+        return care_draw(&care_full, x, y, w, h);
+    }
     i32 slot = cfg ? (i32)cfg->wallpaper : 0;
     if (slot < 0 || slot >= WALLPAPER_SLOTS) slot = 0;
 
@@ -312,6 +364,8 @@ bool wallpaper_draw(i32 x, i32 y, i32 w, i32 h) {
 bool wallpaper_dominant_color(u32 *out_rgb) {
     if (!out_rgb) return false;
     const careos_settings_t *cfg = settings_get();
+    /* The Care background is built from the Care accent; "Auto" lands there. */
+    if (cfg && cfg->wallpaper == WALLPAPER_CARE) return false;
     i32 slot = cfg ? (i32)cfg->wallpaper : 0;
     if (slot < 0 || slot >= WALLPAPER_SLOTS) slot = 0;
 
