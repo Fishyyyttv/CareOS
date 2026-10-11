@@ -1,25 +1,83 @@
-# CareOS
+<p align="center">
+  <img src="media/banner.svg" alt="CareOS" width="100%">
+</p>
 
-A 64-bit operating system written from scratch in C and assembly: its own kernel, window manager, desktop shell, apps, web browser engine, and a friendly desktop assistant called **Pip**.
+<p align="center">
+  <img alt="x86_64" src="https://img.shields.io/badge/arch-x86__64-2A1B4E?style=flat-square&labelColor=0A0D20">
+  <img alt="Language" src="https://img.shields.io/badge/written%20in-C%20%2B%20assembly-FF7A59?style=flat-square&labelColor=0A0D20">
+  <img alt="Boot" src="https://img.shields.io/badge/boot-GRUB%20Multiboot2-7C6CFF?style=flat-square&labelColor=0A0D20">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Fishyyyttv/CareOS?style=flat-square&labelColor=0A0D20"></a>
+</p>
 
-CareOS boots with GRUB (Multiboot2), draws everything itself on a linear framebuffer, and runs in QEMU or VirtualBox.
+<p align="center">
+  A 64-bit operating system written from scratch in C and assembly: its own kernel, window manager,
+  desktop shell, apps, web browser engine, and a friendly desktop assistant called <b>Pip</b>.<br>
+  It boots with GRUB, draws everything itself on a linear framebuffer, and runs in QEMU or VirtualBox.
+</p>
+
+<p align="center">
+  <img src="media/desktop.webp" alt="The CareOS desktop with the dock, widgets and Pip" width="100%">
+</p>
 
 ---
 
-## Highlights
+## Meet Pip
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="media/pip-chat.gif" alt="Asking Pip to open Notes" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <img src="media/pip-chat.webp" alt="Pip's Home with the chat panel" width="100%">
+    </td>
+  </tr>
+</table>
+
+Pip lives by the dock: he idles, wanders, naps and reacts to what you do. Click him to open his Home and chat.
+
+- Does real things: opens apps, jumps to a Settings page, finds files, switches dark/light mode, locks the screen, and reports the time, memory, network and open windows
+- Explains how CareOS works: packages, Terminal commands, the Care language, shortcuts, workspaces
+- Asks before anything risky, never deletes files, and says so when something is not supported yet
+- Turn him on or off, hide him, reduce animations or silence his tips in **Settings > Pip**; choices are saved per user
+
+<table>
+  <tr>
+    <td width="50%"><img src="media/pip-settings.webp" alt="Settings > Pip" width="100%"></td>
+    <td width="50%"><img src="media/light-chat.webp" alt="Light theme" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Settings > Pip</sub></td>
+    <td align="center"><sub>The light theme</sub></td>
+  </tr>
+</table>
+
+---
+
+## The desktop and apps
+
+<table>
+  <tr>
+    <td width="50%"><img src="media/files.webp" alt="Files" width="100%"></td>
+    <td width="50%"><img src="media/browser.webp" alt="Browser" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Files</sub></td>
+    <td align="center"><sub>Browser, on the native Weave engine</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="media/terminal.webp" alt="Terminal" width="100%"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub>Terminal</sub></td>
+  </tr>
+</table>
 
 **Desktop**
 - Glass-style shell with a menu bar, dock, launcher (tap `Super`), Control Center, notifications and widgets
 - Dark, light and auto themes, accent colours, wallpapers, real blurred glass
 - Window manager with snapping, four workspaces (`Ctrl+1`..`Ctrl+4`), animations and a lock screen
 - Accounts with sign-in, guest sessions and per-user settings
-
-**Pip, your desktop companion**
-- An animated character who lives by the dock: idles, wanders, naps, reacts to what you do
-- Click Pip to open his Home: chat with him, check his mood, dress him up
-- Pip can really do things: open apps, jump to a Settings page, find files, switch dark/light mode, lock the screen, report time, memory, network and open windows, and explain how CareOS features work
-- He asks before anything risky, never deletes files, and tells you when something is not supported yet
-- Turn him on or off, hide him, reduce animations or silence his tips in **Settings > Pip**; choices are saved per user
 
 **Apps**
 
