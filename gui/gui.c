@@ -1,6 +1,8 @@
 /* =============================================================================
  * CareOS gui/gui.c -- main GUI entry point with splash, login, and desktop
  * ============================================================================= */
+#include "pip/pip.h"
+#include "pip/pip.h"
 #include "kernel.h"
 #include "gui.h"
 #include "ui.h"
@@ -763,6 +765,36 @@ static void enter_desktop(mouse_t *mouse) {
         notify_set_dnd(cfg->dnd != 0);
         theme_set_glass(cfg->glass_alpha_pct, cfg->reduce_transparency != 0);
     }
+    pip_session_start();
+#ifdef CAREOS_QA_PIP_SHEET
+    {   /* QA: all nine moods on the PetMoods background, then stop. */
+        gfx_rect(0, 0, (i32)SCREEN_W, (i32)SCREEN_H, rgb(0xF3, 0xF0, 0xFF));
+        for (u32 i = 0; i < PM_COUNT; i++) {
+            i32 x = 120 + (i32)(i % 3) * 400, y = 80 + (i32)(i / 3) * 300;
+            gfx_rect_rounded(x - 20, y - 30, 320, 250, 26, rgb(0xFF, 0xFF, 0xFF));
+            pip_draw(x + 60, y, 160, i, true);
+            gfx_str_role(x + 10, y + 185, pip_mood_label(i), rgb(0x1A, 0x16, 0x30), FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+        }
+        gfx_flip();
+        serial_write("[pip] sheet ready\n");
+        for (;;) __asm__ volatile ("hlt");
+    }
+#endif
+    pip_session_start();
+#ifdef CAREOS_QA_PIP_SHEET
+    {   /* QA: all nine moods on the PetMoods background, then stop. */
+        gfx_rect(0, 0, (i32)SCREEN_W, (i32)SCREEN_H, rgb(0xF3, 0xF0, 0xFF));
+        for (u32 i = 0; i < PM_COUNT; i++) {
+            i32 x = 120 + (i32)(i % 3) * 400, y = 80 + (i32)(i / 3) * 300;
+            gfx_rect_rounded(x - 20, y - 30, 320, 250, 26, rgb(0xFF, 0xFF, 0xFF));
+            pip_draw(x + 60, y, 160, i, true);
+            gfx_str_role(x + 10, y + 185, pip_mood_label(i), rgb(0x1A, 0x16, 0x30), FONT_ROLE_DISPLAY, 1, FONT_W_BOLD);
+        }
+        gfx_flip();
+        serial_write("[pip] sheet ready\n");
+        for (;;) __asm__ volatile ("hlt");
+    }
+#endif
 
     i32 sw = (i32)SCREEN_W;
     i32 sh = (i32)SCREEN_H;
@@ -828,6 +860,8 @@ void gui_run(void) {
                 } else {
                     /* LOGOUT / Switch User: drop the session entirely and show
                        the full greeter so a different account can sign in. */
+                    pip_session_end();   /* save before the next user */
+                    pip_session_end();   /* save before the next user */
                     wm_close_all();      /* clean desktop for the next user */
                     session_end();
                     bool made = false;
@@ -1062,6 +1096,9 @@ void gui_run(void) {
                     taskbar_handle_mouse(&mouse);       /* tracks the pointer; acts only inside the dock */
                     if (wm_busy()) {
                         wm_handle_mouse(&mouse);
+                    } else if (pip_desktop_mouse(&mouse)) {
+                        desktop_clear_hover();             /* Pip is above the dock and windows */
+                        needs_redraw = true;
                     } else if (taskbar_contains(mouse.x, mouse.y)) {
                         desktop_clear_hover();
                     } else if (wm_pointer_owner(mouse.x, mouse.y)) {
@@ -1076,6 +1113,12 @@ void gui_run(void) {
                 }
             }
             if (activity) needs_redraw = true;
+            pip_tick(mouse.x, mouse.y, (u32)(timer_ms() - g_last_activity_tick));
+            {   /* Pip animates at 12 fps */
+                static u32 s_pip_frame;
+                u32 fm = pip_desktop_frame_ms();
+                if (fm && !pip_desktop_hidden() && timer_ms() - s_pip_frame >= fm) { s_pip_frame = timer_ms(); needs_redraw = true; }
+            }
 
             static u32 s_last_frame_start = 0;
             u32 frame_now = timer_ms();
@@ -1119,6 +1162,7 @@ void gui_run(void) {
 
                 wm_draw_all();
                 taskbar_draw();
+                pip_desktop_draw();
                 draw_top_bar(&mouse);
                 launcher_draw(&mouse);              /* also plays the close animation */
                 if (launcher_visible()) taskbar_draw();   /* the dock stays crisp above it */

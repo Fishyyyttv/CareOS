@@ -24,6 +24,7 @@
 #include "icon.h"
 #include "font.h"
 #include "window_chrome.h"
+#include "pip/pip.h"
 #include "shadow.h"
 
 static window_t windows[MAX_WINDOWS];
@@ -65,7 +66,7 @@ static u32 wm_theme_id(void) {
 static bool wm_app_always_live(const window_t *w) {
     switch (w->app) {
     case APP_CLOCK: case APP_SYSMON: case APP_NETMON:
-    case APP_DOOM: case APP_MAZE: case APP_3D:
+    case APP_DOOM: case APP_MAZE: case APP_3D: case APP_PIP:
         return true;
     case APP_BROWSER:
         return w->browser_loading;
@@ -278,6 +279,7 @@ void app_default_size(app_id_t app, i32 sw, i32 sh, i32 *w, i32 *h) {
     }
     case APP_PAINT:    *w = sw*75/100; *h = sh*75/100; return;
     case APP_DOOM:     *w = 640; *h = 400 + TITLEBAR_H; return; /* 640x400 client + titlebar */
+    case APP_PIP:      *w = 1180; *h = 760; return;
     default:           *w = sw*65/100; *h = sh*70/100; return;
     }
 }
@@ -298,6 +300,7 @@ void app_min_size(app_id_t app, i32 *w, i32 *h) {
     case APP_PKGMGR:   mw = 440 * sc;                         mh = 320 * sc; break;
     case APP_CALC:     mw = 260 * sc;                         mh = 380 * sc; break;
     case APP_DOOM:     mw = 640;                              mh = 400 + TITLEBAR_H; break;
+    case APP_PIP:      mw = 900;                              mh = 600; break;
     case APP_ABOUT:    mw = 460 * sc;                         mh = 420 * sc; break;
     case APP_NETMON:   mw = 360 * sc;                         mh = 280 * sc; break;
     case APP_SYSMON:   mw = 360 * sc;                         mh = 300 * sc; break;
@@ -496,11 +499,13 @@ window_t *wm_open(app_id_t app, const char *title,
         case APP_MAZE:     app_maze_init(win);     break;
         case APP_3D:       app_3d_init(win);       break;
         case APP_DOOM:     app_doom_init(win);     break;
+        case APP_PIP:      app_pip_init(win);      break;
         case APP_ABOUT:    app_about_init(win);    break;
         case APP_HELP:     app_help_init(win);     break;
         default: break;
         }
 
+        if (app != APP_PIP) pip_event(PE_LOADING);   /* Pip thinks while it opens */
         return win;
     }
 
@@ -512,6 +517,7 @@ window_t *wm_open(app_id_t app, const char *title,
 void wm_close(window_t *w) {
     if (!w) return;
     if (w->anim_kind == WM_ANIM_CLOSE) return;  /* already closing */
+    if (w->app == APP_PIP) { pip_event(PE_CLOSE_HOME); pip_say("See you soon!", 1800); }   /* he waves goodbye */
 
     /* Start the close transition: shrink to ~95% about centre + fade out. The
      * window stays active/drawn until the animation finishes; the real teardown
@@ -975,6 +981,7 @@ static void draw_window(window_t *w) {
     case APP_MAZE:     app_maze_draw(w);     break;
     case APP_3D:       app_3d_draw(w);       break;
     case APP_DOOM:     app_doom_draw(w);     break;
+    case APP_PIP:      app_pip_draw(w);      break;
     case APP_HELP:     app_help_draw(w);     break;
     default: break;
     }
@@ -1297,6 +1304,7 @@ void wm_handle_mouse(mouse_t *m) {
         case APP_PAINT:    app_paint_click(hit, m->x, m->y, m);    break;
         case APP_USERS:    app_users_click(hit, m->x, m->y);       break;
         case APP_NOTES:    app_notes_click(hit, m->x, m->y);       break;
+        case APP_PIP:      app_pip_click(hit, m->x, m->y);         break;
         default: break;
         }
     }
@@ -1320,6 +1328,7 @@ void wm_handle_key(char c, window_t *w) {
     case APP_MAZE:     app_maze_key(w, c);     break;
     case APP_3D:       app_3d_key(w, c);       break;
     case APP_DOOM:     app_doom_key(w, c);     break;
+    case APP_PIP:      app_pip_key(w, c);      break;
     default: break;
     }
 }

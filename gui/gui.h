@@ -208,7 +208,8 @@ typedef enum {
     APP_NONE=0, APP_TERMINAL, APP_NOTES, APP_FILES,
     APP_SYSMON, APP_CALC, APP_ABOUT, APP_HELP,
     APP_BROWSER, APP_SETTINGS, APP_PKGMGR,
-    APP_EDITOR, APP_PAINT, APP_CLOCK, APP_NETMON, APP_USERS, APP_MAZE, APP_3D, APP_DOOM
+    APP_EDITOR, APP_PAINT, APP_CLOCK, APP_NETMON, APP_USERS, APP_MAZE, APP_3D, APP_DOOM,
+    APP_PIP
 } app_id_t;
 
 
@@ -716,6 +717,11 @@ void app_doom_init(window_t *w);
 void app_doom_draw(window_t *w);
 void app_doom_key(window_t *w, char c);
 bool app_doom_new_frame(void);   /* DOOM published a frame since last asked */
+void app_pip_init(window_t *w);
+void app_settings_apply_theme(u32 mode);   /* 0 dark, 1 light, 2 auto: the Settings switch, for Pip too */
+void app_pip_draw(window_t *w);
+void app_pip_click(window_t *w, i32 x, i32 y);
+void app_pip_key(window_t *w, char c);
 
 void app_editor_init(window_t *w);
 void app_editor_draw(window_t *w);

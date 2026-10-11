@@ -5,6 +5,7 @@
 #include "font.h"
 #include "ui.h"
 #include "../web/engine/web.h"
+#include "pip/pip.h"
 
 /* ── Layout ──────────────────────────────────────────────────────── */
 #define BROW_BAR_H    56
@@ -625,6 +626,7 @@ static void app_browser_navigate(window_t *w, const char *url) {
     i32 vw, vh; browser_viewport(w, &vw, &vh);
     browser_fetch_set_viewport(vw, vh);
     browser_fetch_submit(w->instance_id, w->browser_tab_sel, url);
+    pip_event(PE_LOADING);
 }
 
 /* smart dispatch: detect domain vs search query */

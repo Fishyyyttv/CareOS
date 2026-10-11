@@ -26,18 +26,22 @@ endif
 ifeq ($(PERF_BENCH),1)
 BUILD_DEFS += -DCAREOS_PERF_BENCH_AT_BOOT
 endif
+QA_PIP_SHEET ?= 0
+ifeq ($(QA_PIP_SHEET),1)
+BUILD_DEFS += -DCAREOS_QA_PIP_SHEET
+endif
 ifeq ($(QA_LAYOUT),1)
 BUILD_DEFS += -DCAREOS_QA_LAYOUT
 endif
 
 KERN_CFLAGS := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 -g \
-               -Iinclude -Iinclude/libc -Igui -Iweb/engine -Iweb/third_party -fno-builtin \
+               -Iinclude -Iinclude/libc -Igui -Igui/pip -Iweb/engine -Iweb/third_party -fno-builtin \
                -mno-red-zone -mno-mmx -mno-sse -mno-sse2 $(BUILD_DEFS)
 
 APP_CFLAGS  := -MMD -MP -m64 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INC) -O2 \
-               -Iinclude -Iinclude/libc -Igui -fno-builtin \
+               -Iinclude -Iinclude/libc -Igui -Igui/pip -fno-builtin \
                -mno-red-zone
 
 CFLAGS      := $(KERN_CFLAGS)
@@ -181,6 +185,14 @@ C_SRC     := kernel/kernel.c       \
              gui/notify.c          \
              gui/glass.c           \
              gui/spring.c          \
+             gui/pip/pip_raster.c  \
+             gui/pip/pip_art.c     \
+             gui/pip/pip_brain.c   \
+             gui/pip/pip_sprite.c  \
+             gui/pip/pip.c         \
+             gui/pip/pip_desktop.c \
+             gui/pip/pip_assist.c  \
+             gui/pip/pip_chat.c    \
              gui/session/common.c \
              gui/session/boot.c \
              gui/session/login.c \
@@ -225,6 +237,7 @@ C_SRC     := kernel/kernel.c       \
              apps/app_maze.c       \
              apps/app_3d.c         \
              apps/app_doom.c       \
+             apps/app_pip.c        \
              kernel/libc_shim.c
 
 ASM_OBJ   := $(ASM_SRC:.asm=.o)
@@ -474,7 +487,7 @@ test-elfs: tests/ring3_exit tests/ring3_fault tests/ring3_isolate_a tests/ring3_
 # adding HT_SRC_<name> := <sources under test> and appending <name> to
 # HOST_TESTS; the test file is tests/host/test_<name>.c.
 HOST_TEST_DIR := build/host
-HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Iapps -Ikernel -DHOST_TEST \
+HOST_CFLAGS   := -O1 -g -Wall -Wextra -Iinclude -Igui -Igui/pip -Iapps -Ikernel -DHOST_TEST \
                  -fsanitize=address,undefined -fno-sanitize-recover=undefined \
                  -fno-omit-frame-pointer
 HT_SRC_qoi    := gui/image_qoi.c
@@ -496,6 +509,15 @@ HOST_TESTS    += window_chrome care_wallpaper font_roles ui_icons ui_glyph glass
 HOST_TESTS    += term_cmds settings_index care_syntax notes_md store_model kfmt
 HT_SRC_kfmt := kernel/kfmt.c
 $(HOST_TEST_DIR)/test_kfmt: kernel/kfmt.h
+HOST_TESTS    += pip_raster pip_art pip_brain pip_assist
+HT_SRC_pip_assist := gui/pip/pip_assist.c apps/settings_index.c
+$(HOST_TEST_DIR)/test_pip_assist: gui/pip/pip_assist.h apps/settings_index.h
+HT_SRC_pip_brain := gui/pip/pip_brain.c
+$(HOST_TEST_DIR)/test_pip_brain: gui/pip/pip_brain.h gui/pip/pip_art.h
+HT_SRC_pip_art := gui/pip/pip_art.c gui/pip/pip_raster.c
+$(HOST_TEST_DIR)/test_pip_art: gui/pip/pip_art.h gui/pip/pip_raster.h
+HT_SRC_pip_raster := gui/pip/pip_raster.c
+$(HOST_TEST_DIR)/test_pip_raster: gui/pip/pip_raster.h
 HT_SRC_store_model := apps/store_model.c
 $(HOST_TEST_DIR)/test_store_model: apps/store_model.h
 HT_SRC_notes_md := apps/notes_md.c

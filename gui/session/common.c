@@ -1,6 +1,8 @@
 /* gui/session/common.c -- pieces shared by the start screens. */
 #include "kernel.h"
 #include "session/session.h"
+#include "pip/pip.h"
+#include "pip/pip.h"
 
 /* The avatar gradients (Signup artboard: Sunset, Ocean, Mint, Honey, plus two
  * more so the six profile colours all have one). 150deg, light to dark. */
@@ -65,7 +67,8 @@ void session_avatar(i32 cx, i32 cy, i32 r, u32 color_idx, const char *name, bool
     gfx_str_role(cx - tw / 2, cy - th / 2, ini, guest ? 0x062A26u : 0xFFFFFFu, role, slot, FONT_W_BOLD);
 }
 
-void session_pet_slot(rect_t r, u32 mood) { (void)r; (void)mood; }
+/* Pip's cameo: 0 lock (asleep), 1 power menu (worried). Phase 4. */
+void session_pet_slot(rect_t r, u32 mood) { pip_cameo(r, mood); }
 
 void session_frame_end(const mouse_t *m) {
     if (m) mouse_draw_cursor(m->x, m->y);

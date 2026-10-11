@@ -220,6 +220,7 @@ const char *icon_name_for_app(app_id_t app) {
     case APP_MAZE:     return "maze";
     case APP_3D:       return "3d";
     case APP_DOOM:     return "doom";
+    case APP_PIP:      return "pip";
     case APP_NONE:
     default:           return NULL;
     }

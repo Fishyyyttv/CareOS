@@ -15,6 +15,8 @@
 #include "ui.h"
 #include "settings_index.h"
 #include "session/session.h"
+#include "../gui/pip/pip.h"
+#include "../gui/pip/pip_chat.h"
 #include "../kernel/ext2.h"
 #include "../kernel/account_rules.h"
 
@@ -25,7 +27,7 @@ enum {
     A_NONE = 0, A_SECTION, A_SEARCH, A_THEME, A_WALL, A_ACCENT, A_GLASS, A_REDUCE,
     A_FONT, A_RES, A_BRIGHT, A_POINTER, A_SOUND, A_DND, A_CLEAR_NOTES, A_24H,
     A_TZ, A_FIELD, A_PW_APPLY, A_NAME_SAVE, A_AVATAR, A_DIAG, A_DHCP, A_FASTBOOT,
-    A_ACCOUNT
+    A_ACCOUNT, A_PIP_ON, A_PIP_SHOW, A_PIP_ANIM, A_PIP_TIPS, A_PIP_RESET, A_PIP_HOME
 };
 typedef struct { rect_t r; u8 act; i16 arg; bool content; } shit_t;
 #define SHIT_MAX 128
@@ -75,11 +77,11 @@ static spal_t spal(void) {
 static const u32 SECTION_TILE[SET_COUNT] = {
     rgb(0x12,0x90,0xc2), rgb(0xf2,0x78,0x2e), rgb(0xe5,0x53,0x2e), rgb(0xe2,0x50,0x8f),
     rgb(0xeb,0x49,0x50), rgb(0x7f,0x6c,0xc2), rgb(0x2f,0x86,0xeb), rgb(0x1f,0xa5,0x62),
-    rgb(0x8e,0x4d,0xf0)
+    rgb(0xff,0x8e,0x5a), rgb(0x8e,0x4d,0xf0)
 };
 static const ui_glyph_t SECTION_GLYPH[SET_COUNT] = {
     UI_GLYPH_WIRED, UI_GLYPH_SUN, UI_GLYPH_EYE, UI_GLYPH_SOUND, UI_GLYPH_BELL,
-    UI_GLYPH_CLOCK, UI_GLYPH_USER, UI_GLYPH_FOLDER, UI_GLYPH_HEART
+    UI_GLYPH_CLOCK, UI_GLYPH_USER, UI_GLYPH_FOLDER, UI_GLYPH_PLUS, UI_GLYPH_HEART
 };
 
 /* -- Small drawing helpers ------------------------------------------------- */
@@ -597,10 +599,49 @@ static i32 sec_about(window_t *w, const spal_t *p, i32 x, i32 y, i32 cw) {
     return y - y0;
 }
 
+/* Pip (the desktop assistant). Saved per user in ~/.pip, so each account keeps its own. */
+static u32 s_pip_reset_ms;
+static i32 sec_pip(window_t *w, const spal_t *p, i32 x, i32 y, i32 cw) {
+    (void)w;
+    pip_brain_t *b = pip_brain();
+    i32 y0 = y;
+    char who[80];
+    kstrcpy(who, b->name);
+    kstrcat(who, " is your desktop helper. ");
+    kstrcat(who, pip_saved() ? "These choices are saved for your account." : "This is a guest session, so these choices won't be saved.");
+    y += gfx_str_role_wrap(x, y, cw, who, p->muted, FONT_ROLE_UI, 1, FONT_W_REGULAR, 2) + 14;
+    card(p, x, y, cw, 240);
+    struct { const char *t, *sub; bool on; u8 act; bool dim; } rows[4] = {
+        { "Enable Pip", "Turn the assistant on or off. Off hides him and stops his help, chat and tips.", b->enabled, A_PIP_ON, false },
+        { "Show on Desktop", "His animated character stays by the dock. Off keeps him in his Home only.", b->show, A_PIP_SHOW, !b->enabled },
+        { "Animations", "Walking, blinking and bouncing. Off shows a calm still pose and no wandering.", b->anim, A_PIP_ANIM, !b->enabled },
+        { "Tips and Suggestions", "A short tip now and then, only when you've been idle. Never while you're busy.", b->tips, A_PIP_TIPS, !b->enabled },
+    };
+    for (u32 i = 0; i < 4; i++) {
+        i32 ry = y + (i32)i * 60;
+        row_label(p, x + 18, ry, cw - 120, rows[i].t, rows[i].sub);
+        i32 tx = x + cw - 18 - UI_TOGGLE_W, ty = ry + (60 - UI_TOGGLE_H) / 2;
+        if (rows[i].dim) ui_toggle(tx, ty, rows[i].on, UI_DISABLED);
+        else toggle(tx, ty, rows[i].on, rows[i].act, true);
+        if (i < 3) row_sep(p, x + 1, ry + 59, cw - 2);
+    }
+    y += 240 + 18;
+    card(p, x, y, cw, 120);
+    row_label(p, x + 18, y, cw - 200, "Pip's Home", "Chat, stats and dress-up.");
+    sbutton(p, x + cw - 18 - (txt_w("Open Home", 2, true) + 28), y + 10, "Open Home", false, A_PIP_HOME, 0, true);
+    row_sep(p, x + 1, y + 60, cw - 2);
+    row_label(p, x + 18, y + 60, cw - 200, "Reset Pip", "Back to the defaults above and his roaming habits. Keeps his name, outfit and memories.");
+    bool armed = s_pip_reset_ms && timer_ms() - s_pip_reset_ms < 3000;
+    const char *rl = armed ? "Sure?" : "Reset";
+    sbutton(p, x + cw - 18 - (txt_w(rl, 2, true) + 28), y + 60 + 10, rl, armed, A_PIP_RESET, 0, true);
+    y += 120;
+    return y - y0 + 6;
+}
+
 typedef i32 (*sec_fn)(window_t *, const spal_t *, i32, i32, i32);
 static const sec_fn SECTION_FN[SET_COUNT] = {
     sec_network, sec_display, sec_appearance, sec_sound, sec_notify,
-    sec_datetime, sec_accounts, sec_storage, sec_about
+    sec_datetime, sec_accounts, sec_storage, sec_pip, sec_about
 };
 
 /* -- App entry points ------------------------------------------------------ */
@@ -850,6 +891,25 @@ static void do_action(window_t *w, const shit_t *h, i32 x) {
         }
         break;
     case A_FASTBOOT: settings_set_boot_fast(!cfg->boot_fast); break;
+    case A_PIP_ON: {
+        pip_brain_t *pb = pip_brain();
+        pb->enabled = !pb->enabled;
+        if (pb->enabled) { pb->show = true; pip_event(PE_GREET); pip_say("I'm back!", 2500); }
+        pip_mark_dirty(); pip_save_now();
+        break;
+    }
+    case A_PIP_SHOW: pip_brain()->show = !pip_brain()->show; pip_mark_dirty(); pip_save_now(); break;
+    case A_PIP_ANIM: pip_brain()->anim = !pip_brain()->anim; pip_mark_dirty(); pip_save_now(); gfx_dirty(0, 0, (i32)SCREEN_W, (i32)SCREEN_H); break;
+    case A_PIP_TIPS: pip_brain()->tips = !pip_brain()->tips; pip_mark_dirty(); pip_save_now(); break;
+    case A_PIP_HOME: pip_open_home(); break;
+    case A_PIP_RESET:
+        if (s_pip_reset_ms && timer_ms() - s_pip_reset_ms < 3000) {
+            pip_brain_defaults(pip_brain());
+            s_pip_reset_ms = 0;
+            pip_mark_dirty(); pip_save_now();
+            pip_event(PE_GREET); pip_say("All reset!", 2500);
+        } else s_pip_reset_ms = timer_ms();
+        break;
     default: break;
     }
 }
@@ -921,3 +981,5 @@ void app_settings_key(window_t *w, char c) {
         return;
     }
 }
+
+void app_settings_apply_theme(u32 mode) { apply_theme_mode(mode); }

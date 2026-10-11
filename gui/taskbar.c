@@ -75,6 +75,7 @@ static const char *taskbar_app_name(app_id_t app) {
         case APP_MAZE:     return "Maze";
         case APP_3D:       return "3D";
         case APP_DOOM:     return "Doom";
+        case APP_PIP:      return "Pip";
         default:           return "App";
     }
 }
