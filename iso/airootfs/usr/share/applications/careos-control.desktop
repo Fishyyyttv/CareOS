@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=CareOS Control
-Comment=CareOS settings and system control
-Exec=careos-control
-Icon=careos-control
-Terminal=false
-Categories=System;Settings;
